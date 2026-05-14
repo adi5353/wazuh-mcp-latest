@@ -1,0 +1,23 @@
+# For STDIO transport, this compose file builds the image but does NOT
+# start a long-running container — Claude Desktop / Claude Code launches the
+# container itself, attaches to its stdio, and exits it when done.
+#
+# Usage:
+#   1. cp .env.example .env  and edit values
+#   2. docker compose build
+#   3. Point your MCP client at the image (see claude_desktop_config.example.json)
+#
+# To run a one-off connectivity check:
+#   docker compose run --rm wazuh-mcp python -c \
+#     "from wazuh_mcp.config import Config; print(Config.from_env())"
+
+services:
+  wazuh-mcp:
+    build: .
+    image: wazuh-mcp:latest
+    container_name: wazuh-mcp
+    env_file: .env
+    # No ports — STDIO transport. Add a port mapping if you swap to HTTP transport.
+    stdin_open: true
+    tty: false
+    restart: "no"

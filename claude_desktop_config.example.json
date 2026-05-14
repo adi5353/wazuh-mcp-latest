@@ -1,0 +1,30 @@
+{
+  "_comment_local_python": "Use this block if you've installed via 'pip install -e .' on the host",
+  "mcpServers_local_python": {
+    "wazuh": {
+      "command": "/absolute/path/to/.venv/bin/python",
+      "args": ["-m", "wazuh_mcp"],
+      "env": {
+        "WAZUH_HOST": "https://192.168.56.50:55000",
+        "WAZUH_USER": "wazuh-mcp",
+        "WAZUH_PASS": "Mcp@12345",
+        "WAZUH_INDEXER_HOST": "https://192.168.56.50:9200",
+        "WAZUH_INDEXER_USER": "wazuhmcp",
+        "WAZUH_INDEXER_PASS": "Vedansh@201095",
+        "WAZUH_VERIFY_SSL": "false",
+        "WAZUH_ALLOW_WRITES": "false"
+      }
+    }
+  },
+  "_comment_docker": "Use this block to launch via the Docker image",
+  "mcpServers": {
+    "wazuh": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "--env-file", "/absolute/path/to/wazuh-mcp/.env",
+        "wazuh-mcp:latest"
+      ]
+    }
+  }
+}
