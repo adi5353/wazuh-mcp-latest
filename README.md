@@ -88,7 +88,7 @@ On the **Wazuh server**:
 
 ```bash
 cd /home/vagrant   # or any directory you prefer
-git clone https://github.com/your-org/Claude-AI-MCP-Wazuh-Integration.git
+git clone https://github.com/your-org/wazuh-mcp.git
 cd wazuh-mcp
 ```
 
