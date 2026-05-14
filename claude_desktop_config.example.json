@@ -1,30 +1,73 @@
 {
-  "_comment_local_python": "Use this block if you've installed via 'pip install -e .' on the host",
-  "mcpServers_local_python": {
-    "wazuh": {
-      "command": "/absolute/path/to/.venv/bin/python",
-      "args": ["-m", "wazuh_mcp"],
-      "env": {
-        "WAZUH_HOST": "https://127.0.0.1:55000",
-        "WAZUH_USER": "wazuh-mcp",
-        "WAZUH_PASS": "Mcp@12345",
-        "WAZUH_INDEXER_HOST": "https://127.0.0.1:9200",
-        "WAZUH_INDEXER_USER": "wazuhmcp",
-        "WAZUH_INDEXER_PASS": "test-password-not-real",
-        "WAZUH_VERIFY_SSL": "false",
-        "WAZUH_ALLOW_WRITES": "false"
+  "_readme": [
+    "Choose ONE of the three mcpServers blocks below based on your setup.",
+    "Delete the other two blocks and rename your chosen one to 'mcpServers'.",
+    "Never commit real passwords — keep this file as a template only.",
+    "",
+    "Option A: mcp-remote (recommended) — server runs on a remote/VM host.",
+    "Option B: Local Python — server runs on the same machine as Claude Desktop.",
+    "Option C: Docker — server runs via Docker on the same machine."
+  ],
+
+  "_OPTION_A_mcp_remote": {
+    "_comment": [
+      "Use this when the MCP server runs on a separate Linux host (e.g. your Wazuh server or Vagrant VM).",
+      "Prerequisites: npm install -g mcp-remote",
+      "The server must be running as a systemd service on the remote host (see README).",
+      "Replace WAZUH_SERVER_IP with the IP of your Wazuh host."
+    ],
+    "mcpServers": {
+      "wazuh": {
+        "command": "mcp-remote",
+        "args": [
+          "http://WAZUH_SERVER_IP:8000/sse",
+          "--allow-http"
+        ]
       }
     }
   },
-  "_comment_docker": "Use this block to launch via the Docker image",
-  "mcpServers": {
-    "wazuh": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "--env-file", "/absolute/path/to/wazuh-mcp/.env",
-        "wazuh-mcp:latest"
-      ]
+
+  "_OPTION_B_local_python": {
+    "_comment": [
+      "Use this when Claude Desktop and the MCP server run on the same machine.",
+      "Prerequisites: pip install -e . inside the wazuh-mcp directory.",
+      "Replace all <PLACEHOLDER> values with your actual values."
+    ],
+    "mcpServers": {
+      "wazuh": {
+        "command": "/absolute/path/to/wazuh-mcp/.venv/bin/python",
+        "args": ["-m", "wazuh_mcp"],
+        "env": {
+          "WAZUH_HOST": "https://<WAZUH_SERVER_IP>:55000",
+          "WAZUH_USER": "<WAZUH_API_USER>",
+          "WAZUH_PASS": "<WAZUH_API_PASSWORD>",
+          "WAZUH_INDEXER_HOST": "https://<WAZUH_SERVER_IP>:9200",
+          "WAZUH_INDEXER_USER": "<WAZUH_INDEXER_USER>",
+          "WAZUH_INDEXER_PASS": "<WAZUH_INDEXER_PASSWORD>",
+          "WAZUH_MCP_TRANSPORT": "stdio",
+          "WAZUH_VERIFY_SSL": "false",
+          "WAZUH_ALLOW_WRITES": "false"
+        }
+      }
+    }
+  },
+
+  "_OPTION_C_docker": {
+    "_comment": [
+      "Use this when running the MCP server via Docker on the same machine as Claude Desktop.",
+      "Prerequisites: docker compose build inside the wazuh-mcp directory.",
+      "The .env file must exist at the path specified in --env-file.",
+      "Replace /absolute/path/to/wazuh-mcp with the actual path on your machine."
+    ],
+    "mcpServers": {
+      "wazuh": {
+        "command": "docker",
+        "args": [
+          "run", "--rm", "-i",
+          "--env-file", "/absolute/path/to/wazuh-mcp/.env",
+          "wazuh-mcp:latest"
+        ]
+      }
     }
   }
 }
