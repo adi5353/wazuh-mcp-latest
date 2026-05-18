@@ -170,12 +170,12 @@ Minimum required values:
 
 ```dotenv
 # ── Wazuh Manager API ─────────────────────────────────────────────────────────
-WAZUH_HOST=https://127.0.0.1:55000
+WAZUH_HOST=https://Wazuh_Manager_IP/DNS:55000
 WAZUH_USER=wazuh-mcp
 WAZUH_PASS=YourStrongPassword
 
 # ── Wazuh Indexer (OpenSearch) ────────────────────────────────────────────────
-WAZUH_INDEXER_HOST=https://127.0.0.1:9200
+WAZUH_INDEXER_HOST=https://Wazuh_Indexer_IP/DNS:9200
 WAZUH_INDEXER_USER=wazuh-readonly
 WAZUH_INDEXER_PASS=YourStrongPassword
 
