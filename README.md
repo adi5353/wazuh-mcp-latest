@@ -414,11 +414,13 @@ Claude calls `alert_summary` and returns aggregated counts by level, top rules, 
 
 **Alert timeline — Wazuh Indexer (1,303 hits, last 24 hours):**
 
-![Alert timeline showing 1,303 hits with spike around 12:00](images/alert-timeline-24h.png)
+<img width="1919" height="400" alt="image" src="https://github.com/user-attachments/assets/ce358362-b9bc-4fb7-9518-ea2e7b6c47df" />
+
 
 **Top agents returned by Claude:**
 
-![Top Agents: Server1 751 alerts 57.7%, windows-test 551 alerts 42.3%](images/alert-summary-top-agents.png)
+<img width="1032" height="706" alt="image" src="https://github.com/user-attachments/assets/ff78121c-19be-4eed-8177-4ed9f9984b50" />
+
 
 Claude correctly identified **Server1** as the noisiest agent (751 alerts, 57.7%) and **windows-test** as second (551 alerts, 42.3%), matching the Wazuh dashboard exactly. This output came from a single `alert_summary` aggregation call — no raw alerts were fetched, keeping the response compact enough for follow-up questions in the same conversation.
 
@@ -435,7 +437,8 @@ Claude calls `get_agent_vulnerabilities_detailed` and returns all unpatched CVEs
 
 **Claude's output — 26 findings across 6 packages, with CISA KEV triage:**
 
-![CVE list for windows-test showing URGENT CISA KEV section with WinRAR CVE-2025-8088 CVSS 8.8, CVE-2025-6218 CVSS 7.8, and Notepad++ CVE-2025-15556 CVSS 7.5](images/cve-list-windows-test.png)
+<img width="1035" height="691" alt="image" src="https://github.com/user-attachments/assets/e4d241f3-b063-4041-b893-0ac42a633242" />
+
 
 Claude surfaced three **CISA KEV** findings that require immediate attention before treating any other CVE:
 
@@ -447,7 +450,8 @@ Claude surfaced three **CISA KEV** findings that require immediate attention bef
 
 **Wazuh dashboard cross-check — same 3 CVEs confirmed on windows-test:**
 
-![Wazuh dashboard showing windows-test agent with 3 High severity findings: CVE-2025-8088, CVE-2025-6218, CVE-2025-15556 on WinRAR and Notepad++](images/wazuh-dashboard-cve-filter.png)
+<img width="1014" height="407" alt="image" src="https://github.com/user-attachments/assets/c7b474fa-ce69-492e-84c5-c49ae445920e" />
+
 
 The Wazuh Vulnerability Dashboard filtered to these three CVEs confirms the findings: **3 High severity** vulnerabilities on `windows-test` (agent 001), affecting `WinRAR 6.23 (64-bit)` and `Notepad++ (64-bit x64)` on Windows 11 Home 10.0.26200.8457. Claude's output matches the dashboard data exactly.
 
