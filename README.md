@@ -289,16 +289,15 @@ The command should hang silently — this means it connected successfully. Press
 Add the `mcpServers` block. If the file already has content (preferences, etc.), add `mcpServers` as a sibling key — do not replace existing content.
 
 ```json
-{
-  "mcpServers": {
-    "wazuh": {
-      "command": "mcp-remote",
-      "args": [
-        "http://WAZUH_SERVER_IP:8000/sse",
-        "--allow-http"
-      ]
-    }
+ "mcpServers": {
+  "wazuh": {
+    "command": "supergateway",
+    "args": [
+      "--sse",
+      "http://WAZUH_SERVER_IP:8000/sse"
+    ]
   }
+}
 }
 ```
 
@@ -501,11 +500,13 @@ Claude calls `alert_summary` and returns aggregated counts by level, top rules, 
 
 **Alert timeline — Wazuh Indexer (1,303 hits, last 24 hours):**
 
-![Alert timeline showing 1,303 hits with spike around 12:00](images/alert-timeline-24h.png)
+<img width="953" height="547" alt="image" src="https://github.com/user-attachments/assets/41729741-7e5c-48bc-97af-46cd06a8b304" />
+
 
 **Top agents returned by Claude:**
 
-![Top Agents: Server1 751 alerts 57.7%, windows-test 551 alerts 42.3%](images/alert-summary-top-agents.png)
+<img width="969" height="481" alt="image" src="https://github.com/user-attachments/assets/ae920e80-3408-4732-80e5-5f9c03810b1e" />
+
 
 Claude correctly identified **Server1** as the noisiest agent (751 alerts, 57.7%) and **windows-test** as second (551 alerts, 42.3%), matching the Wazuh dashboard exactly. This output came from a single `alert_summary` aggregation call — no raw alerts were fetched, keeping the response compact enough for follow-up questions in the same conversation.
 
@@ -522,7 +523,8 @@ Claude calls `get_agent_vulnerabilities_detailed` and returns all unpatched CVEs
 
 **Claude's output — 26 findings across 6 packages, with CISA KEV triage:**
 
-![CVE list for windows-test showing URGENT CISA KEV section with WinRAR CVE-2025-8088 CVSS 8.8, CVE-2025-6218 CVSS 7.8, and Notepad++ CVE-2025-15556 CVSS 7.5](images/cve-list-windows-test.png)
+<img width="959" height="504" alt="image" src="https://github.com/user-attachments/assets/5bf3914a-8677-4e3f-9949-3d9f858d828d" />
+
 
 Claude surfaced three **CISA KEV** findings that require immediate attention before treating any other CVE:
 
@@ -534,7 +536,8 @@ Claude surfaced three **CISA KEV** findings that require immediate attention bef
 
 **Wazuh dashboard cross-check — same 3 CVEs confirmed on windows-test:**
 
-![Wazuh dashboard showing windows-test agent with 3 High severity findings: CVE-2025-8088, CVE-2025-6218, CVE-2025-15556 on WinRAR and Notepad++](images/wazuh-dashboard-cve-filter.png)
+<img width="938" height="369" alt="image" src="https://github.com/user-attachments/assets/25c104e7-89f8-46f6-8b6f-70c59cc61618" />
+
 
 The Wazuh Vulnerability Dashboard filtered to these three CVEs confirms the findings: **3 High severity** vulnerabilities on `windows-test` (agent 001), affecting `WinRAR 6.23 (64-bit)` and `Notepad++ (64-bit x64)` on Windows 11 Home 10.0.26200.8457. Claude's output matches the dashboard data exactly.
 
@@ -552,7 +555,7 @@ curl -si -H "Accept: text/event-stream" http://127.0.0.1:8000/sse | head -3
 From the Claude Desktop machine:
 
 ```bash
-mcp-remote http://WAZUH_SERVER_IP:8000/sse --allow-http
+supergateway --sse http://Wazuh_SERVER_IP:8000/sse
 # Expected: hangs silently (connected). Ctrl+C to exit.
 ```
 
