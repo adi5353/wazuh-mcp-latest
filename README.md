@@ -289,16 +289,16 @@ The command should hang silently — this means it connected successfully. Press
 Add the `mcpServers` block. If the file already has content (preferences, etc.), add `mcpServers` as a sibling key — do not replace existing content.
 
 ```json
- "mcpServers": {
-  "wazuh": {
-    "command": "supergateway",
-    "args": [
-      "--sse",
-      "http://WAZUH_SERVER_IP:8000/sse"
-    ]
+ {
+  "mcpServers": {
+    "wazuh": {
+      "command": "mcp-remote",
+      "args": [
+        "http://WAZUH_Server_IP:8000/sse",
+        "--allow-http"
+      ]
+    }
   }
-}
-}
 ```
 
 Fully quit Claude Desktop (tray icon → **Quit**, not just close the window), then relaunch. Open a new chat — you should see a tools icon at the bottom of the input box. Clicking it shows `wazuh` with all 61 tools listed.
@@ -803,7 +803,7 @@ ss -tlnp | grep 8000   # must show 0.0.0.0:8000
 
 ### 14. HTTP 421 `Invalid Host header` — remote clients rejected
 
-**Cause:** The MCP Python SDK (`mcp` package ≥ 1.x) ships with a `TransportSecuritySettings` class that enables DNS-rebinding protection by default. When `sse_app()` is called it passes these settings to `SseServerTransport`, which validates every incoming `Host` header against an allowlist of `["127.0.0.1:*", "localhost:*", "[::1]:*"]`. Any request arriving with a non-localhost `Host` — such as a VirtualBox host-only IP (`192.168.56.50`), a LAN IP, or a hostname — receives:
+**Cause:** The MCP Python SDK (`mcp` package ≥ 1.x) ships with a `TransportSecuritySettings` class that enables DNS-rebinding protection by default. When `sse_app()` is called it passes these settings to `SseServerTransport`, which validates every incoming `Host` header against an allowlist of `["127.0.0.1:*", "localhost:*", "[::1]:*"]`. Any request arriving with a non-localhost `Host` — such as a VirtualBox host-only IP (`HOST_IP`), a LAN IP, or a hostname — receives:
 
 ```
 HTTP/1.1 421 Misdirected Request
