@@ -17,7 +17,8 @@ services:
     image: wazuh-mcp:latest
     container_name: wazuh-mcp
     env_file: .env
-    # No ports — STDIO transport. Add a port mapping if you swap to HTTP transport.
+    ports:
+      - "8000:8000"
     stdin_open: true
     tty: false
-    restart: "no"
+    restart: unless-stopped
