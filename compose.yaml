@@ -7,8 +7,10 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+    stdin_open: true
+    tty: false
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen("http://localhost:8000/health")"]
       interval: 30s
       timeout: 5s
       start_period: 15s

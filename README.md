@@ -1,217 +1,112 @@
-# Claude AI (MCP) — Wazuh Integration
+# Wazuh MCP — AI-Powered Security Operations
 
 > **Connect Wazuh to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop.**
+
+**87 tools** across 21 domain modules — alerts, vulnerabilities, FIM, compliance, MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel, incidents, reporting, notifications, onboarding, cluster health, archive search, and alert suppression.
 
 ---
 
 ## Table of Contents
 
-- [Introduction](#introduction)
+- [Quick Start — Docker](#quick-start--docker)
+- [Quick Start — Local (systemd)](#quick-start--local-systemd)
+- [Connect Claude Desktop](#connect-claude-desktop)
+- [Environment Variables](#environment-variables)
+- [Tool Reference](#tool-reference)
+- [MCP Prompts](#mcp-prompts)
 - [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Installation and Configuration](#installation-and-configuration)
-  - [Step 1 — Clone the Repository](#step-1--clone-the-repository)
-  - [Step 2 — Create a Python Virtual Environment](#step-2--create-a-python-virtual-environment)
-  - [Step 3 — Install Dependencies](#step-3--install-dependencies)
-  - [Step 4 — Create Wazuh API Accounts](#step-4--create-wazuh-api-accounts)
-  - [Step 5 — Configure the Environment File](#step-5--configure-the-environment-file)
-  - [Step 6 — Run the Server as a Systemd Service](#step-6--run-the-server-as-a-systemd-service)
-  - [Step 7 — Connect Claude Desktop](#step-7--connect-claude-desktop)
-- [Available Tools](#available-tools)
-- [Integration Testing](#integration-testing)
-- [Common Mistakes and Fixes](#common-mistakes-and-fixes)
+- [Optional Integrations](#optional-integrations)
 - [Security Considerations](#security-considerations)
-- [Sources](#sources)
+- [Common Issues](#common-issues)
 
 ---
 
-## Introduction
+## Quick Start — Docker
 
-This integration exposes the Wazuh security platform to Claude AI through the **Model Context Protocol (MCP)** — an open standard that allows AI assistants to call external tools and data sources. Once connected, Claude Desktop can query your Wazuh deployment using plain English.
+This is the recommended deployment method. The container bundles all dependencies and exposes the MCP server on port 8000.
 
-Instead of navigating dashboards or writing manual API calls, you can ask questions like:
-
-- *"Give me an alert summary for the last 24 hours."*
-- *"Which agents are affected by CVE-2024-3094?"*
-- *"What should I patch first this week?"*
-- *"Are we being brute-forced right now?"*
-- *"How effective have our automated blocks been this week?"*
-
-The integration connects Claude to both the **Wazuh Manager REST API** (port 55000) and the **Wazuh Indexer / OpenSearch** (port 9200), giving it access to live agent state, alerts, vulnerability data, FIM events, compliance findings, and active response history.
-
-**61 tools** are registered across 9 functional areas covering the full daily workflow of a SOC team.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────┐        ┌──────────────────────────────────────┐
-│      Windows Workstation    │        │           Wazuh Server (Linux)       │
-│                             │        │                                      │
-│  ┌───────────────────────┐  │  HTTP  │  ┌────────────────────────────────┐  │
-│  │    Claude Desktop     │◄─┼────────┼─►│    wazuh-mcp (Python, SSE)    │  │
-│  │                       │  │  /sse  │  │    systemd service, port 8000  │  │
-│  │  mcp-remote (Node.js) │  │        │  └────────────┬───────────────────┘  │
-│  └───────────────────────┘  │        │               │                      │
-└─────────────────────────────┘        │     ┌─────────┴──────────┐          │
-                                       │     │                    │          │
-                                       │  :55000             :9200           │
-                                       │  Wazuh Manager    Wazuh Indexer     │
-                                       │  REST API         (OpenSearch)      │
-                                       └────────────────────────────────────┘
-```
-
-Claude Desktop launches `mcp-remote` locally on Windows. `mcp-remote` connects over HTTP to the MCP server running as a persistent `systemd` service on the Wazuh host. The MCP server bridges Claude's requests to both the Wazuh Manager API and the Wazuh Indexer.
-
----
-
-## Prerequisites
-
-| Component | Requirement |
-|---|---|
-| Wazuh | 4.8 or later (4.10+ required for fleet inventory tools) |
-| Python | 3.10 or later on the Wazuh server |
-| Node.js | 18 or later on the machine running Claude Desktop |
-| Claude Desktop | Latest version (Windows, macOS, or Linux) |
-| Network | Claude Desktop machine must reach the Wazuh server on port 8000 |
-| Wazuh API user | Read-only user on the Manager API (port 55000) |
-| Indexer user | Read-only user on the Wazuh Indexer (port 9200) |
-
----
-
-## Installation and Configuration
-
-### Step 1 — Clone the Repository
-
-On the **Wazuh server**:
+### 1. Clone the repository
 
 ```bash
-cd /home/vagrant   # or any directory you prefer
-git clone https://github.com/your-org/wazuh-mcp.git
+git clone https://github.com/adi5353/wazuh-mcp.git
 cd wazuh-mcp
 ```
 
-If you are not using git, extract the downloaded tarball:
+### 2. Create your environment file
 
 ```bash
-tar -xzf wazuh-mcp.tar.gz
-cd wazuh-mcp
-```
-
-### Step 2 — Create a Python Virtual Environment
-
-Always install into a virtual environment — never into the system Python on a Wazuh server.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Verify the venv is active:
-
-```bash
-which python   # should show /path/to/wazuh-mcp/.venv/bin/python
-```
-
-### Step 3 — Install Dependencies
-
-```bash
-pip install -e .
-```
-
-This installs `mcp`, `httpx`, and `python-dotenv` as declared in `pyproject.toml`. Verify:
-
-```bash
-pip list | grep -E "mcp|httpx|dotenv"
-```
-
-Expected output:
-
-```
-httpx          0.28.x
-mcp            1.x.x
-python-dotenv  1.x.x
-```
-
-### Step 4 — Create Wazuh API Accounts
-
-Two dedicated accounts are required. Never use the `admin` account.
-
-#### Wazuh Manager API user
-
-1. Log into the Wazuh Dashboard.
-2. Navigate to **Server Management → API → Users**.
-3. Create a user (e.g., `wazuh-mcp`) with a strong password.
-4. Assign a role with read permissions on agents, rules, SCA, and syscollector.
-5. If you want to enable write operations (restart agents, trigger active response), also grant `active-response` write permissions — but keep `WAZUH_ALLOW_WRITES=false` by default.
-
-#### Wazuh Indexer (OpenSearch) user
-
-1. In the Wazuh Dashboard, navigate to **Security → Internal users → Create internal user**.
-2. Create a user (e.g., `wazuh-readonly`) with a strong password.
-3. Create a role with these minimum permissions:
-
-```
-Cluster permissions : cluster:monitor/*
-Index permissions   : indices:data/read/* on wazuh-alerts-* and wazuh-states-*
-```
-
-4. Map the user to the role.
-
-### Step 5 — Configure the Environment File
-
-```bash
-cp .env.example .env
+cp env.example .env
 nano .env
 ```
 
-Minimum required values:
+Fill in at minimum:
 
 ```dotenv
-# ── Wazuh Manager API ─────────────────────────────────────────────────────────
-WAZUH_HOST=https://Wazuh_Manager_IP/DNS:55000
+WAZUH_HOST=https://your-wazuh-manager:55000
 WAZUH_USER=wazuh-mcp
-WAZUH_PASS=YourStrongPassword
+WAZUH_PASS=YourPassword
 
-# ── Wazuh Indexer (OpenSearch) ────────────────────────────────────────────────
-WAZUH_INDEXER_HOST=https://Wazuh_Indexer_IP/DNS:9200
+WAZUH_INDEXER_HOST=https://your-wazuh-indexer:9200
 WAZUH_INDEXER_USER=wazuh-readonly
-WAZUH_INDEXER_PASS=YourStrongPassword
+WAZUH_INDEXER_PASS=YourPassword
 
-# ── MCP Server Transport ──────────────────────────────────────────────────────
+WAZUH_VERIFY_SSL=false
 WAZUH_MCP_TRANSPORT=http
 WAZUH_MCP_HOST=0.0.0.0
 WAZUH_MCP_PORT=8000
-
-# ── Optional ──────────────────────────────────────────────────────────────────
-WAZUH_VERIFY_SSL=false         # set true in production with a valid CA chain
-WAZUH_ALLOW_WRITES=false       # set true only to enable restart/AR tools
-WAZUH_REQUEST_TIMEOUT=30
-
-# ── Archives (search_archive_logs tool) ───────────────────────────────────────
-WAZUH_ARCHIVES_INDEX=wazuh-archives-*
-
-# ── Threat Intelligence enrichment (enrich_ip, enrich_file_hash tools) ────────
-# Free at virustotal.com (500 lookups/day) and abuseipdb.com (1000/day)
-# Both are optional — tools return a clear message if keys are absent
-VIRUSTOTAL_API_KEY=<YOUR_VIRUSTOTAL_KEY>
-ABUSEIPDB_API_KEY=<YOUR_ABUSEIPDB_KEY>
 ```
 
-Verify the config loads cleanly:
+### 3. Start the container
 
 ```bash
-source .venv/bin/activate
-source .env
-python -c "from wazuh_mcp.config import Config; print(Config.from_env())"
+docker compose up -d
 ```
 
-You should see a `Config(...)` object with all your values. If you see `Missing required env var: WAZUH_HOST`, the `.env` file was not sourced — re-run `source .env` first.
+### 4. Verify it's running
 
-### Step 6 — Run the Server as a Systemd Service
+```bash
+docker compose ps
+curl -si http://localhost:8000/sse | head -3
+# Expected: HTTP/1.1 200 OK
+```
 
-Running the server as a `systemd` service ensures it starts on boot, auto-restarts on crash, and is always available for Claude Desktop to connect to.
+View logs:
+
+```bash
+docker compose logs -f wazuh-mcp
+```
+
+Stop and restart:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+---
+
+## Quick Start — Local (systemd)
+
+Use this if you want to run directly on the Wazuh server without Docker.
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/adi5353/wazuh-mcp.git
+cd wazuh-mcp
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### 2. Configure
+
+```bash
+cp env.example .env
+nano .env   # fill in WAZUH_HOST, WAZUH_USER, WAZUH_PASS, indexer credentials
+```
+
+### 3. Run as a systemd service
 
 ```bash
 sudo tee /etc/systemd/system/wazuh-mcp.service << 'EOF'
@@ -235,166 +130,216 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable wazuh-mcp
-sudo systemctl start wazuh-mcp
+sudo systemctl enable --now wazuh-mcp
 sudo systemctl status wazuh-mcp
 ```
 
-Expected status output:
-
-```
-● wazuh-mcp.service - Wazuh MCP Server
-   Active: active (running) since ...
-```
-
-Verify the server is listening on the correct interface:
+Verify:
 
 ```bash
-ss -tlnp | grep 8000
-# Expected: LISTEN 0.0.0.0:8000
+ss -tlnp | grep 8000   # must show 0.0.0.0:8000
+curl -si http://localhost:8000/sse | head -3
 ```
 
-Check live logs at any time:
+---
 
-```bash
-sudo journalctl -u wazuh-mcp -f
-```
+## Connect Claude Desktop
 
-### Step 7 — Connect Claude Desktop
+### Option A — HTTP/SSE (Docker or remote server)
 
-#### Install mcp-remote on the machine running Claude Desktop
-
-`mcp-remote` is a small Node.js bridge that runs locally and proxies Claude Desktop's STDIO connection to the remote HTTP/SSE server.
+Install `mcp-remote` on the machine running Claude Desktop (requires Node.js 18+):
 
 ```bash
 npm install -g mcp-remote
 ```
 
-Test the connection before configuring Claude Desktop:
+Edit `claude_desktop_config.json`:
 
-```bash
-mcp-remote http://WAZUH_SERVER_IP:8000/sse --allow-http
-```
-
-The command should hang silently — this means it connected successfully. Press `Ctrl+C` to stop.
-
-#### Edit `claude_desktop_config.json`
-
-| OS | Config file location |
+| OS | Path |
 |---|---|
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Linux | `~/.config/Claude/claude_desktop_config.json` |
 
-Add the `mcpServers` block. If the file already has content (preferences, etc.), add `mcpServers` as a sibling key — do not replace existing content.
-
 ```json
- {
+{
   "mcpServers": {
     "wazuh": {
       "command": "mcp-remote",
       "args": [
-        "http://WAZUH_Server_IP:8000/sse",
+        "http://YOUR_SERVER_IP:8000/sse",
         "--allow-http"
       ]
     }
   }
+}
 ```
 
-Fully quit Claude Desktop (tray icon → **Quit**, not just close the window), then relaunch. Open a new chat — you should see a tools icon at the bottom of the input box. Clicking it shows `wazuh` with all 61 tools listed.
+Fully quit Claude Desktop (tray icon → **Quit**) and relaunch. You should see the tools icon in the chat input.
+
+### Option B — stdio (local, same machine)
+
+If Claude Desktop and the MCP server run on the same machine, use stdio transport:
+
+```json
+{
+  "mcpServers": {
+    "wazuh": {
+      "command": "/absolute/path/to/.venv/bin/python",
+      "args": ["-m", "wazuh_mcp"],
+      "env": {
+        "WAZUH_HOST": "https://your-wazuh:55000",
+        "WAZUH_USER": "wazuh-mcp",
+        "WAZUH_PASS": "YourPassword",
+        "WAZUH_INDEXER_HOST": "https://your-indexer:9200",
+        "WAZUH_INDEXER_USER": "wazuh-readonly",
+        "WAZUH_INDEXER_PASS": "YourPassword",
+        "WAZUH_VERIFY_SSL": "false",
+        "WAZUH_MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}
+```
 
 ---
 
-## Available Tools
+## Environment Variables
 
-### Agent Operations (Manager API)
+### Required
+
+| Variable | Description |
+|---|---|
+| `WAZUH_HOST` | Wazuh Manager API URL, e.g. `https://192.168.1.10:55000` |
+| `WAZUH_USER` | Wazuh Manager API username |
+| `WAZUH_PASS` | Wazuh Manager API password |
+| `WAZUH_INDEXER_HOST` | Wazuh Indexer (OpenSearch) URL, e.g. `https://192.168.1.10:9200` |
+| `WAZUH_INDEXER_USER` | Indexer username |
+| `WAZUH_INDEXER_PASS` | Indexer password |
+
+### Transport
+
+| Variable | Default | Description |
+|---|---|---|
+| `WAZUH_MCP_TRANSPORT` | `http` | `http` for Docker/remote, `stdio` for local Claude Desktop |
+| `WAZUH_MCP_HOST` | `0.0.0.0` | Bind address for HTTP mode |
+| `WAZUH_MCP_PORT` | `8000` | Port for HTTP mode |
+
+### Security
+
+| Variable | Default | Description |
+|---|---|---|
+| `WAZUH_VERIFY_SSL` | `false` | Set `true` in production with valid CA chain |
+| `WAZUH_ALLOW_WRITES` | `false` | Enable write tools (restart agents, active response, CDB edits) |
+| `WAZUH_REQUEST_TIMEOUT` | `30` | API request timeout in seconds |
+
+### Index Patterns
+
+| Variable | Default | Description |
+|---|---|---|
+| `WAZUH_ALERTS_INDEX` | `wazuh-alerts-4.x-*` | Alert index pattern |
+| `WAZUH_VULN_INDEX` | `wazuh-states-vulnerabilities-4.x-*` | Vulnerability state index |
+| `WAZUH_ARCHIVES_INDEX` | `wazuh-archives-*` | Archive index (all ingested logs) |
+
+### Optional Integrations
+
+| Variable | Description |
+|---|---|
+| `VIRUSTOTAL_API_KEY` | VirusTotal enrichment (500 lookups/day free) |
+| `ABUSEIPDB_API_KEY` | AbuseIPDB enrichment (1000/day free) |
+| `JIRA_URL` | Jira base URL for ticket creation |
+| `JIRA_USER` | Jira username (email) |
+| `JIRA_TOKEN` | Jira API token |
+| `JIRA_PROJECT_KEY` | Jira project key, e.g. `SOC` |
+| `THEHIVE_URL` | TheHive base URL |
+| `THEHIVE_API_KEY` | TheHive API key |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook for notifications |
+| `SLACK_BOT_TOKEN` | Slack bot token (alternative to webhook) |
+| `SLACK_DEFAULT_CHANNEL` | Default Slack channel, e.g. `#soc-alerts` |
+| `SMTP_HOST` | SMTP server for email reports |
+| `SMTP_PORT` | SMTP port (default `587`) |
+| `SMTP_USER` | SMTP username |
+| `SMTP_PASS` | SMTP password |
+| `SMTP_FROM` | Sender email address |
+
+---
+
+## Tool Reference
+
+### Agents (6 tools)
 
 | Tool | Description |
 |---|---|
 | `list_agents` | List agents by status (active, disconnected, pending) |
 | `get_agent` | Detailed info for one agent by ID |
-| `get_rule_details` | Full metadata for a rule ID — description, level, MITRE, compliance mappings |
-| `restart_agent` | Restart an agent *(write — requires `WAZUH_ALLOW_WRITES=true`)* |
-| `run_active_response` | Trigger an AR command on an agent *(write)* |
-
-### Group Management
-
-| Tool | Description |
-|---|---|
+| `restart_agent` | Restart an agent *(requires `WAZUH_ALLOW_WRITES=true`)* |
 | `list_groups` | All groups with member counts |
 | `get_group_agents` | Agents belonging to a group |
-| `add_agent_to_group` | Assign agent to a group *(write)* |
+| `add_agent_to_group` | Assign an agent to a group *(write)* |
 
-### Alert Intelligence (Indexer)
+### Alerts (9 tools)
 
 | Tool | Description |
 |---|---|
-| `alert_summary` | Aggregated overview — use this first for broad questions |
+| `alert_summary` | Aggregated overview — top rules, agents, MITRE, groups |
 | `search_alerts` | Filtered alert search with trimmed payloads |
 | `search_by_mitre` | Alerts mapped to a specific ATT&CK technique |
 | `search_by_source_ip` | All alerts from a given IP — IoC pivoting |
 | `search_authentication_failures` | Brute-force candidate sources |
 | `alert_timeline` | Date histogram — spot spikes and quiet periods |
 | `get_alert_by_id` | Full alert detail by document ID |
+| `compare_alert_volume` | This period vs last period — volume deltas |
+| `detect_rule_anomalies` | NEW, SPIKE, DROP, GONE rules vs baseline |
 
-### File Integrity Monitoring
-
-| Tool | Description |
-|---|---|
-| `get_recent_fim_changes` | Recent FIM events on a single agent (Manager API) |
-| `search_fim_alerts` | Indexer-side FIM alerts with optional path filter |
-| `fim_summary` | Aggregated FIM activity by agent, event type, and path |
-| `critical_file_changes` | FIM events on sensitive paths only (passwd, sudoers, ssh keys, system binaries) |
-
-### Compliance
-
-| Tool | Description |
-|---|---|
-| `compliance_summary` | Alerts by control for PCI-DSS, HIPAA, GDPR, NIST 800-53, TSC |
-| `compliance_control_details` | Drill into alerts for one specific control |
-
-### Vulnerability Detection
+### Vulnerabilities (4 tools)
 
 | Tool | Description |
 |---|---|
 | `vulnerability_summary` | Fleet-wide unpatched CVE overview |
 | `get_agent_vulnerabilities_detailed` | Per-agent CVE list, worst CVSS first |
 | `search_cve` | Every agent affected by a specific CVE |
-| `prioritize_patches` | Patch queue ranked by `agents × CVSS` |
+| `prioritize_patches` | Patch queue ranked by agents × CVSS |
 
-### Active Response Correlation
+### Active Response (3 tools)
 
 | Tool | Description |
 |---|---|
 | `get_active_responses` | Recent AR actions with triggering alert context |
 | `correlate_alert_with_response` | Did Wazuh act on this attack? |
-| `active_response_effectiveness` | Audit: did blocks actually stop traffic? |
+| `active_response_effectiveness` | Did automated blocks stop traffic? |
+| `run_active_response` | Trigger an AR command on an agent *(write)* |
 
-### Anomaly Comparison
-
-| Tool | Description |
-|---|---|
-| `compare_alert_volume` | This period vs last period — total and per-level deltas |
-| `detect_rule_anomalies` | NEW, SPIKE, DROP, GONE rules vs baseline |
-
-### Inventory — Per-Agent (Manager API, all 4.x)
+### File Integrity Monitoring (4 tools)
 
 | Tool | Description |
 |---|---|
-| `get_agent_packages` | Installed packages with substring search |
-| `get_agent_processes` | Currently-tracked processes |
-| `get_agent_open_ports` | Listening ports and bound processes |
+| `get_recent_fim_changes` | Recent FIM events for an agent (Manager API) |
+| `search_fim_alerts` | Indexer-side FIM alerts with optional path filter |
+| `fim_summary` | Aggregated FIM activity by agent, event type, path |
+| `critical_file_changes` | FIM events on sensitive paths only |
+
+### Compliance (4 tools)
+
+| Tool | Description |
+|---|---|
+| `compliance_summary` | Alerts by control for PCI-DSS, HIPAA, GDPR, NIST 800-53, TSC |
+| `compliance_control_details` | Drill into alerts for one specific control |
+| `generate_compliance_report` | Full compliance report for a framework |
+| `email_compliance_report` | Email the compliance report *(requires SMTP config)* |
+
+### Fleet Inventory (7 tools)
+
+| Tool | Description |
+|---|---|
+| `get_agent_packages` | Installed packages per agent |
+| `get_agent_processes` | Currently-tracked processes per agent |
+| `get_agent_open_ports` | Listening ports per agent |
 | `get_agent_hardware_os` | Hardware + OS info in one call |
-
-### Inventory — Fleet-Wide (Indexer, requires Wazuh 4.10+)
-
-| Tool | Description |
-|---|---|
-| `fleet_find_package` | Every agent with a given package — the CVE-response query |
+| `fleet_find_package` | Every agent with a given package |
 | `fleet_find_process` | Every agent running a given process |
 | `fleet_find_listening_port` | Every agent with a given port open |
 
-### Security Configuration Assessment
+### SCA (4 tools)
 
 | Tool | Description |
 |---|---|
@@ -403,467 +348,285 @@ Fully quit Claude Desktop (tray icon → **Quit**, not just close the window), t
 | `sca_alerts_summary` | Fleet-wide SCA aggregation from Indexer |
 | `fleet_sca_weakest_agents` | Agents ranked by failing check count |
 
-### CDB List Management
+### CDB Lists (5 tools)
 
 | Tool | Description |
 |---|---|
-| `list_cdb_lists` | All configured CDB lists (IP blocklists, domain lists, hash lists) |
-| `get_cdb_list_contents` | Raw key:value contents of a specific list |
-| `add_to_cdb_list` | Add an IP, domain, or hash — takes effect immediately *(write)* |
-| `remove_from_cdb_list` | Remove an entry (unblock) *(write)* |
+| `list_cdb_lists` | All configured CDB lists |
+| `get_cdb_list_contents` | Raw key:value contents of a list |
+| `preview_cdb_list_impact` | Preview how many alerts a list entry would match |
+| `add_to_cdb_list` | Add an IP, domain, or hash *(write)* |
+| `remove_from_cdb_list` | Remove an entry *(write)* |
+| `bulk_suppress_rule` | Tag multiple alerts for a rule as false_positive *(write)* |
 
-### Detection Engineering (Logtest)
-
-| Tool | Description |
-|---|---|
-| `test_log_against_rules` | Test a raw log line against Wazuh's decoder + rule engine |
-| `test_rule_coverage` | Test up to 20 log samples and report detection coverage % |
-
-### MITRE ATT&CK Analysis
+### Rules & Decoders (6 tools)
 
 | Tool | Description |
 |---|---|
-| `mitre_coverage_analysis` | Technique coverage across the ruleset — tactic breakdown + weak spots |
-| `get_mitre_gaps` | Techniques firing in live alerts but covered by only 1 rule |
-
-### Incident Response
-
-| Tool | Description |
-|---|---|
-| `incident_timeline` | Chronological event timeline for a given window — kill-chain reconstruction |
-| `blast_radius_analysis` | Everything a compromised IP or agent touched — lateral movement detection |
-
-### Threat Intelligence Enrichment
-
-Requires `VIRUSTOTAL_API_KEY` and/or `ABUSEIPDB_API_KEY` in `.env`. Tools degrade gracefully if keys are absent.
-
-| Tool | Description |
-|---|---|
-| `enrich_ip` | VirusTotal + AbuseIPDB verdict for any source IP |
-| `enrich_file_hash` | VirusTotal lookup for MD5/SHA1/SHA256 — use after FIM alerts |
-
-### Archive Log Search
-
-| Tool | Description |
-|---|---|
-| `search_archive_logs` | Search all ingested logs (not just alerts) — forensic reconstruction |
-
-### Cluster Health
-
-| Tool | Description |
-|---|---|
-| `get_cluster_health` | Wazuh cluster node status + Indexer cluster health |
-| `check_event_queue_health` | Detect silent event loss due to queue pressure |
-
-### Rule & Decoder Management
-
-| Tool | Description |
-|---|---|
-| `search_rules` | Search enabled rules by description, group, level, or MITRE technique |
+| `search_rules` | Search rules by description, group, level, or MITRE |
 | `list_rule_files` | All rule files — built-in and custom |
-| `get_custom_rules` | Rules from custom files only (local_rules.xml etc.) |
-| `list_decoders` | All loaded decoders with source files |
+| `get_custom_rules` | Rules from custom files only |
+| `list_decoders` | All loaded decoders |
+| `get_rule_details` | Full metadata for a rule ID |
+| `test_log_against_rules` | Test a raw log line against the rule engine |
+| `test_rule_coverage` | Test up to 20 log samples, report detection % |
 
-### Shift Handover
+### Threat Intelligence (3 tools)
 
 | Tool | Description |
 |---|---|
-| `generate_shift_handover` | Parallel 6-tool pull synthesised into a structured handover report |
+| `enrich_ip` | VirusTotal + AbuseIPDB verdict for an IP |
+| `enrich_file_hash` | VirusTotal lookup for MD5/SHA1/SHA256 |
+| `enrich_ip_geo` | GeoIP lookup (ASN, country, city) |
 
-### MCP Prompts (one-click workflows)
+### Threat Hunting (4 tools)
+
+| Tool | Description |
+|---|---|
+| `hunt_lateral_movement` | Detect internal pivoting between agents |
+| `hunt_persistence_mechanisms` | Detect persistence (cron, registry, startup) |
+| `hunt_data_exfiltration` | Detect large outbound transfers and DNS exfil |
+| `get_agent_login_history` | Login audit log for a specific agent |
+
+### MITRE ATT&CK (2 tools)
+
+| Tool | Description |
+|---|---|
+| `mitre_coverage_analysis` | Technique coverage across the ruleset |
+| `get_mitre_gaps` | Techniques firing with only 1 rule (gap detection) |
+| `search_by_mitre` | Live alerts for a specific technique *(in Alerts)* |
+
+### Incidents (5 tools)
+
+| Tool | Description |
+|---|---|
+| `incident_timeline` | Chronological kill-chain reconstruction |
+| `blast_radius_analysis` | Everything a compromised IP/agent touched |
+| `create_incident_report` | Generate a structured incident report |
+| `tag_alert` | Tag an alert with analyst verdict and notes *(write)* |
+| `get_alert_by_id` | Full alert detail *(in Alerts)* |
+
+### Reporting (3 tools)
+
+| Tool | Description |
+|---|---|
+| `generate_shift_handover` | Structured SOC shift handover report |
+| `generate_weekly_summary` | Weekly executive summary |
+| `create_incident_report` | Incident report with MITRE mapping |
+
+### Integrations (3 tools)
+
+| Tool | Description |
+|---|---|
+| `create_jira_ticket` | Create a Jira issue from an alert |
+| `create_thehive_case` | Create a TheHive case |
+| `update_ticket_status` | Update Jira ticket status |
+
+### Notifications (3 tools)
+
+| Tool | Description |
+|---|---|
+| `send_alert_to_slack` | Send a formatted alert to Slack |
+| `send_shift_handover_to_slack` | Post shift handover report to Slack |
+| `send_weekly_summary_to_slack` | Post weekly summary to Slack |
+| `send_critical_alert_notify` | Immediate critical alert notification |
+
+### Agent Onboarding (3 tools)
+
+| Tool | Description |
+|---|---|
+| `generate_enrollment_command` | Generate install command for Ubuntu/Debian/CentOS/RHEL/Windows/macOS |
+| `list_never_connected_agents` | Agents that enrolled but never sent a heartbeat |
+| `agent_onboarding_checklist` | 6-point health check for a newly enrolled agent |
+
+### Cluster Health (2 tools)
+
+| Tool | Description |
+|---|---|
+| `get_cluster_health` | Wazuh cluster nodes + Indexer cluster health |
+| `check_event_queue_health` | Detect silent event loss from queue pressure |
+
+### Archive Search (2 tools)
+
+| Tool | Description |
+|---|---|
+| `search_archive_logs` | Search all ingested logs (not just alerts) — forensic |
+| `search_archive_logs_by_agent` | Chronological event timeline for a specific agent |
+
+### Alert Suppression (3 tools)
+
+| Tool | Description |
+|---|---|
+| `list_suppressed_rules` | Rules tagged as false_positive with FP rate and tuning advice |
+| `expire_suppression` | Remove false_positive tags older than N hours |
+| `noise_score_rule` | 0-100 noise score with CRITICAL/HIGH/MEDIUM/LOW tier |
+
+---
+
+## MCP Prompts
 
 Available as `/` commands in Claude Code and prompt-aware clients.
 
 | Prompt | What it does |
 |---|---|
-| `investigate_brute_force` | 5-step guided brute force investigation — auth failures → IP enrichment → blast radius |
-| `weekly_soc_briefing` | 7-tool executive briefing — volume trends, CVEs, patches, SCA, MITRE coverage |
-| `triage_alert` | Structured true/false positive triage for any alert document ID |
-| `cve_emergency_response` | Immediate CVE impact assessment — scope, exploitation evidence, patch priority |
+| `investigate_brute_force` | 5-step guided brute force investigation |
+| `weekly_soc_briefing` | Executive briefing — trends, CVEs, patches, SCA, MITRE |
+| `triage_alert` | True/false positive triage for any alert ID |
+| `cve_emergency_response` | CVE impact assessment — scope, evidence, patch priority |
+| `threat_hunt_session` | Guided lateral movement and persistence hunt |
+| `compliance_audit` | Full compliance posture for a framework |
+| `incident_response` | Structured IR workflow for a compromised host |
+| `shift_handover` | End-of-shift summary and hand-off |
 
 ---
 
-## Integration Testing
+## Architecture
 
-After completing the setup, run these test prompts in a new Claude Desktop chat to confirm each layer is working. The validated output examples below are from a live deployment.
-
----
-
-### Test 1 — Alert Summary (Last 24 Hours)
-
-**Prompt:**
 ```
-Give me an alert summary for the last 24 hours.
-```
-
-Claude calls `alert_summary` and returns aggregated counts by level, top rules, top agents, MITRE techniques, and rule groups — without fetching a single raw alert document. The Wazuh Indexer view below confirms the same dataset Claude queried: **1,303 alerts** over a 24-hour window with a spike around 12:00.
-
-**Alert timeline — Wazuh Indexer (1,303 hits, last 24 hours):**
-
-<img width="953" height="547" alt="image" src="https://github.com/user-attachments/assets/41729741-7e5c-48bc-97af-46cd06a8b304" />
-
-
-**Top agents returned by Claude:**
-
-<img width="969" height="481" alt="image" src="https://github.com/user-attachments/assets/ae920e80-3408-4732-80e5-5f9c03810b1e" />
-
-
-Claude correctly identified **Server1** as the noisiest agent (751 alerts, 57.7%) and **windows-test** as second (551 alerts, 42.3%), matching the Wazuh dashboard exactly. This output came from a single `alert_summary` aggregation call — no raw alerts were fetched, keeping the response compact enough for follow-up questions in the same conversation.
-
----
-
-### Test 2 — CVE List for a Specific Agent
-
-**Prompt:**
-```
-Pull the CVE list for windows-test.
+┌─────────────────────────────┐        ┌──────────────────────────────────────┐
+│      Claude Desktop         │        │       Wazuh Server / Docker Host     │
+│                             │        │                                      │
+│  ┌───────────────────────┐  │  HTTP  │  ┌────────────────────────────────┐  │
+│  │    Claude Desktop     │◄─┼────────┼─►│   wazuh-mcp container          │  │
+│  │  (mcp-remote bridge)  │  │  /sse  │  │   port 8000, HTTP/SSE          │  │
+│  └───────────────────────┘  │        │  └────────────┬───────────────────┘  │
+└─────────────────────────────┘        │               │                      │
+                                       │     ┌─────────┴──────────┐          │
+                                       │     │                    │          │
+                                       │  :55000             :9200           │
+                                       │  Wazuh Manager    Wazuh Indexer     │
+                                       │  REST API         (OpenSearch)      │
+                                       └────────────────────────────────────┘
 ```
 
-Claude calls `get_agent_vulnerabilities_detailed` and returns all unpatched CVEs for the agent, sorted worst CVSS first. It then enriches the output by cross-referencing against the CISA Known Exploited Vulnerabilities (KEV) catalog to flag actively exploited findings.
+### Project Layout
 
-**Claude's output — 26 findings across 6 packages, with CISA KEV triage:**
-
-<img width="959" height="504" alt="image" src="https://github.com/user-attachments/assets/5bf3914a-8677-4e3f-9949-3d9f858d828d" />
-
-
-Claude surfaced three **CISA KEV** findings that require immediate attention before treating any other CVE:
-
-| CVE | Package | CVSS | Status |
-|---|---|---|---|
-| CVE-2025-8088 | WinRAR 6.23 | 8.8 | CISA KEV — Zero-day, exploited by RomCom APT |
-| CVE-2025-6218 | WinRAR 6.23 | 7.8 | CISA KEV — Directory traversal, exploited by APT-C-08 |
-| CVE-2025-15556 | Notepad++ 8.7.8 | 7.5 | CISA KEV — Updater integrity bypass, supply-chain risk |
-
-**Wazuh dashboard cross-check — same 3 CVEs confirmed on windows-test:**
-
-<img width="938" height="369" alt="image" src="https://github.com/user-attachments/assets/25c104e7-89f8-46f6-8b6f-70c59cc61618" />
-
-
-The Wazuh Vulnerability Dashboard filtered to these three CVEs confirms the findings: **3 High severity** vulnerabilities on `windows-test` (agent 001), affecting `WinRAR 6.23 (64-bit)` and `Notepad++ (64-bit x64)` on Windows 11 Home 10.0.26200.8457. Claude's output matches the dashboard data exactly.
-
----
-
-### Verify the server from the command line
-
-On the Wazuh host:
-
-```bash
-curl -si -H "Accept: text/event-stream" http://127.0.0.1:8000/sse | head -3
-# Expected: HTTP/1.1 200 OK
 ```
-
-From the Claude Desktop machine:
-
-```bash
-supergateway --sse http://Wazuh_SERVER_IP:8000/sse
-# Expected: hangs silently (connected). Ctrl+C to exit.
-```
-
-
----
-
-## Common Mistakes and Fixes
-
-### 1. `RuntimeError: Missing required env var: WAZUH_HOST`
-
-**Cause:** Python launched without `.env` values in `os.environ`. Python does not automatically load `.env` files.
-
-**Quick fix:**
-```bash
-set -a && source .env && set +a
-python -c "from wazuh_mcp.config import Config; print(Config.from_env())"
-```
-
-**Permanent fix:** Install the full package so `python-dotenv` is available:
-```bash
-pip install -e .
+wazuh-mcp/
+├── wazuh_mcp/
+│   ├── __main__.py          # entry point — transport selection
+│   ├── server.py            # FastMCP app, shared helpers, MCP prompts
+│   ├── config.py            # Config dataclass, env loading
+│   ├── helpers.py           # trim_alert, time_window utilities
+│   └── tools/               # 21 domain modules
+│       ├── agents.py        # agent + group management
+│       ├── alerts.py        # alert search + anomaly detection
+│       ├── vulnerabilities.py
+│       ├── active_response.py
+│       ├── fim.py
+│       ├── compliance.py
+│       ├── fleet.py         # per-agent + fleet-wide inventory
+│       ├── sca.py
+│       ├── cdb.py
+│       ├── rules.py
+│       ├── threat_intel.py
+│       ├── threat_hunting.py
+│       ├── mitre.py
+│       ├── incidents.py
+│       ├── reporting.py
+│       ├── integrations.py  # Jira, TheHive
+│       ├── notifications.py # Slack, email
+│       ├── onboarding.py
+│       ├── cluster.py
+│       ├── archive.py
+│       └── suppression.py
+├── compose.yaml
+├── Dockerfile
+├── env.example
+├── pyproject.toml
+└── requirements.txt
 ```
 
 ---
 
-### 2. `ModuleNotFoundError: No module named 'mcp'`
+## Optional Integrations
 
-**Cause:** The server was launched using the system Python instead of the virtual environment. The `mcp` package is only inside `.venv`.
+All integrations are opt-in. Tools degrade gracefully if credentials are absent.
 
-**Fix:** Always use the full venv path:
-```bash
-# Wrong
-python3 -m wazuh_mcp
+### Threat Intelligence
 
-# Correct
-/home/vagrant/wazuh-mcp/.venv/bin/python -m wazuh_mcp
-```
+- **VirusTotal** — `VIRUSTOTAL_API_KEY` — free tier: 500 lookups/day at virustotal.com
+- **AbuseIPDB** — `ABUSEIPDB_API_KEY` — free tier: 1000/day at abuseipdb.com
 
-In the `systemd` service file, `ExecStart` must point to the venv Python:
-```ini
-ExecStart=/home/vagrant/wazuh-mcp/.venv/bin/python -m wazuh_mcp
-```
+### Ticketing
 
----
+- **Jira** — `JIRA_URL`, `JIRA_USER`, `JIRA_TOKEN`, `JIRA_PROJECT_KEY`
+- **TheHive** — `THEHIVE_URL`, `THEHIVE_API_KEY`
 
-### 3. `WARNING: UNPROTECTED PRIVATE KEY FILE!` (Windows SSH)
+### Notifications
 
-**Cause:** The Vagrant SSH private key has overly permissive Windows ACLs. OpenSSH refuses to use it and falls back to password auth.
-
-**Fix:** Run in PowerShell (not as Administrator):
-```powershell
-$keyPath = "C:\HashiCorp\.vagrant\machines\Server1\virtualbox\private_key"
-icacls $keyPath /inheritance:r
-icacls $keyPath /grant:r "$($env:USERNAME):(R)"
-```
-
----
-
-### 4. Claude Desktop disconnects in ~50ms (SSH STDIO approach)
-
-**Cause:** Python takes 300–500ms to start. Claude Desktop's STDIO handshake timeout is ~100ms. The process exits before Claude Desktop completes the handshake.
-
-**Fix:** Run the server as a persistent HTTP service so no startup delay is incurred per connection.
-
-```dotenv
-# .env
-WAZUH_MCP_TRANSPORT=http
-WAZUH_MCP_HOST=0.0.0.0
-WAZUH_MCP_PORT=8000
-```
-
-```bash
-sudo systemctl enable --now wazuh-mcp
-```
-
-Update `claude_desktop_config.json` to use `mcp-remote` over HTTP instead of SSH:
-```json
-{
-  "mcpServers": {
-    "wazuh": {
-      "command": "mcp-remote",
-      "args": ["http://SERVER_IP:8000/sse", "--allow-http"]
-    }
-  }
-}
-```
-
----
-
-### 5. `ECONNREFUSED` on port 8000
-
-**Cause:** The MCP server is not running, bound to `127.0.0.1` instead of `0.0.0.0`, or port 8000 is blocked by a firewall.
-
-**Diagnose:**
-```bash
-sudo systemctl status wazuh-mcp
-ss -tlnp | grep 8000     # must show 0.0.0.0:8000
-sudo ufw status
-```
-
-**Fix — service not running:**
-```bash
-sudo systemctl start wazuh-mcp
-```
-
-**Fix — bound to 127.0.0.1:**
-Confirm `WAZUH_MCP_HOST=0.0.0.0` is in `.env`, then:
-```bash
-sudo systemctl restart wazuh-mcp
-```
-
-**Fix — firewall blocking:**
-```bash
-sudo ufw allow 8000/tcp && sudo ufw reload
-```
-
----
-
-### 6. `RequestContentLengthMismatch` in mcp-remote
-
-**Cause:** `mcp-remote` used the `streamable-http` protocol (`/mcp` path). A bug in some versions of `mcp-remote`'s HTTP client causes a content-length mismatch on streaming responses.
-
-**Fix:** Use the `/sse` path instead of `/mcp`:
-```bash
-# Wrong
-mcp-remote http://SERVER_IP:8000/mcp --allow-http
-
-# Correct
-mcp-remote http://SERVER_IP:8000/sse --allow-http
-```
-
-In `claude_desktop_config.json`, ensure the URL ends with `/sse`.
-
----
-
-### 7. `Some MCP servers could not be loaded: wazuh` popup in Claude Desktop
-
-**Cause:** The config used the `"url": "http://..."` shorthand format, which is not supported by all Claude Desktop versions.
-
-**Fix:** Use `command` + `args` format with `mcp-remote`:
-```json
-{
-  "mcpServers": {
-    "wazuh": {
-      "command": "mcp-remote",
-      "args": ["http://SERVER_IP:8000/sse", "--allow-http"]
-    }
-  }
-}
-```
-
----
-
-### 8. `Non-HTTPS URLs are only allowed for localhost` (mcp-remote)
-
-**Cause:** `mcp-remote` blocks plain HTTP to non-localhost addresses by default.
-
-**Fix:** Add the `--allow-http` flag to the args list:
-```json
-"args": ["http://SERVER_IP:8000/sse", "--allow-http"]
-```
-
----
-
-### 9. `401 Unauthorized` from the Wazuh Manager API
-
-**Cause:** Wrong credentials or the API user lacks RBAC permissions.
-
-**Diagnose:**
-```bash
-curl -k -X POST -u "wazuh-mcp:YourPassword" \
-  https://SERVER_IP:55000/security/user/authenticate
-```
-
-If this returns `{"token": "..."}` then credentials are correct and the issue is RBAC. If it returns 401, the password is wrong.
-
-**Fix:** In the Wazuh Dashboard verify the API user exists and its role grants read permissions for `agents`, `rules`, `syscheck`, `sca`, and `syscollector`.
-
----
-
-### 10. Empty results from `search_alerts` or `vulnerability_summary`
-
-**Cause:** The configured index patterns do not match the actual index names in the deployment.
-
-**Diagnose:**
-```bash
-curl -sk -u wazuh-readonly:PASSWORD \
-  https://SERVER_IP:9200/_cat/indices?h=index | grep wazuh
-```
-
-**Fix:** Update `.env` to match your actual index names:
-```dotenv
-WAZUH_ALERTS_INDEX=wazuh-alerts-4.x-*
-WAZUH_VULN_INDEX=wazuh-states-vulnerabilities-4.x-*
-```
-
-Then restart the service:
-```bash
-sudo systemctl restart wazuh-mcp
-```
-
----
-
-### 11. `Permission denied` on SCP to the VM
-
-**Cause:** The target file on the VM is owned by `root` (from an earlier `sudo` edit), blocking the `vagrant` user SSH session from overwriting it.
-
-**Fix:** On the VM, restore ownership before running SCP:
-```bash
-sudo chown vagrant:vagrant /home/vagrant/wazuh-mcp/wazuh_mcp/server.py
-```
-
----
-
-### 12. `TypeError: FastMCP.run() got an unexpected keyword argument 'host'`
-
-**Cause:** The installed `mcp` package version does not support `host`/`port` arguments in `FastMCP.run()`.
-
-**Fix:** Ensure you are running the latest `server.py` from this repository. The correct implementation bypasses `run()` entirely and calls `mcp.sse_app()` with `uvicorn.run()` directly:
-
-```bash
-tail -10 /home/vagrant/wazuh-mcp/wazuh_mcp/server.py
-# Should show:
-#   asgi_app = mcp.sse_app()
-#   uvicorn.run(asgi_app, host=host, port=port, ...)
-```
-
-If it shows `mcp.run(transport="stdio")` the old file is still in place — replace it with the latest version.
-
----
-
-### 13. Server binds to `127.0.0.1` instead of `0.0.0.0`
-
-**Cause:** FastMCP's internal async runners (`run_sse_async`, `run_streamable_http_async`) read the host from `self.settings.host`, which defaults to `127.0.0.1` and ignores environment variables in some package versions.
-
-**Fix:** The correct `server.py` uses `mcp.sse_app() + uvicorn.run(host=host, ...)` directly, which always respects the `host` argument. After replacing `server.py`:
-
-```bash
-sudo systemctl restart wazuh-mcp
-ss -tlnp | grep 8000   # must show 0.0.0.0:8000
-```
-
----
-
-
-### 14. HTTP 421 `Invalid Host header` — remote clients rejected
-
-**Cause:** The MCP Python SDK (`mcp` package ≥ 1.x) ships with a `TransportSecuritySettings` class that enables DNS-rebinding protection by default. When `sse_app()` is called it passes these settings to `SseServerTransport`, which validates every incoming `Host` header against an allowlist of `["127.0.0.1:*", "localhost:*", "[::1]:*"]`. Any request arriving with a non-localhost `Host` — such as a VirtualBox host-only IP (`HOST_IP`), a LAN IP, or a hostname — receives:
-
-```
-HTTP/1.1 421 Misdirected Request
-Invalid Host header
-```
-
-This affects `mcp-remote`, `curl`, and any other client that is not running on the same machine as the server.
-
-**Symptoms:**
-- `curl -v http://<SERVER_IP>:8000/sse` → `421 Misdirected Request`
-- `mcp-remote` logs `SSE error: Non-200 status code (421)` then exits
-- `journalctl -u wazuh-mcp` shows `WARNING mcp.server.transport_security: Invalid Host header: <your-ip>`
-
-**Diagnose:**
-```bash
-# Confirm the log message
-sudo journalctl -u wazuh-mcp -n 50 --no-pager | grep "Invalid Host"
-
-# Confirm the SDK has the restrictive default
-grep -r "allowed_hosts" \
-  .venv/lib/*/site-packages/mcp/server/fastmcp/server.py
-```
-
-**Fix:** Before calling `mcp.sse_app()`, override `transport_security` to disable the host check:
-
-```python
-import uvicorn
-from mcp.server.transport_security import TransportSecuritySettings
-mcp.settings.transport_security = TransportSecuritySettings(
-    enable_dns_rebinding_protection=False
-)
-asgi_app = mcp.sse_app()
-uvicorn.run(asgi_app, host=host, port=port, log_level="warning")
-```
-
-This is already applied in the current `server.py`. If you are upgrading from an older version of this repo, pull the latest `server.py` and restart the service:
-
-```bash
-sudo systemctl restart wazuh-mcp
-curl -si http://<SERVER_IP>:8000/sse | head -3
-# Expected: HTTP/1.1 200 OK
-```
-
-**Security note:** `enable_dns_rebinding_protection=False` is safe for servers running on a trusted private or host-only network. For internet-facing deployments, place the server behind a TLS reverse proxy (nginx/Caddy) and restrict access at the network/firewall level rather than relying on Host-header validation.
+- **Slack webhook** — `SLACK_WEBHOOK_URL` (simpler, single channel)
+- **Slack bot token** — `SLACK_BOT_TOKEN` + `SLACK_DEFAULT_CHANNEL` (multi-channel)
+- **Email (SMTP)** — `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 
 ---
 
 ## Security Considerations
 
-**Use dedicated read-only accounts.** Create a separate Wazuh Manager API user and Indexer user with minimum required permissions. Never use `admin`.
+**Dedicated read-only accounts.** Create separate Wazuh Manager API and Indexer users with minimum permissions. Never use `admin`.
 
-**Keep `WAZUH_ALLOW_WRITES=false` in production.** `restart_agent`, `run_active_response`, `add_to_cdb_list`, and `remove_from_cdb_list` are disabled by default. Enable only when explicitly delegating remediation to the AI.
+**Write guard.** `WAZUH_ALLOW_WRITES=false` (default) disables `restart_agent`, `run_active_response`, `add_to_cdb_list`, `remove_from_cdb_list`, `tag_alert`, `expire_suppression`, and `bulk_suppress_rule`. Enable only when explicitly delegating remediation.
 
-**Threat intelligence API keys are optional but sensitive.** `VIRUSTOTAL_API_KEY` and `ABUSEIPDB_API_KEY` grant access to external services. Store them only in `.env` (which is in `.gitignore`) — never commit them to the repository.
+**Bind to trusted interfaces.** For Docker on a private network, `0.0.0.0` with a firewall rule on port 8000 is acceptable. Never expose port 8000 to the internet.
 
-**Bind to trusted interfaces only.** If Claude Desktop and the Wazuh server are on the same host, set `WAZUH_MCP_HOST=127.0.0.1`. For separate hosts on a trusted internal network, `0.0.0.0` is acceptable. Never expose port 8000 to the internet.
+**TLS for production.** `WAZUH_VERIFY_SSL=false` is lab-only. In production: valid CA chain, `WAZUH_VERIFY_SSL=true`, and an nginx/Caddy TLS reverse proxy in front of port 8000 (removes `--allow-http` requirement).
 
-**Enable TLS for production.** `WAZUH_VERIFY_SSL=false` is for lab environments only. In production, configure a valid CA chain, set `WAZUH_VERIFY_SSL=true`, and put the MCP HTTP endpoint behind an nginx reverse proxy with a valid TLS certificate — removing the need for `--allow-http` in `mcp-remote`.
+**API keys stay in `.env`.** The `.env` file is in `.gitignore`. Never commit `VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, Jira/TheHive tokens, or SMTP credentials.
 
-**Alert content reaches the AI.** Trimmed payloads still include hostnames, usernames, source IPs, and log snippets. Confirm your AI client's data handling policy is compatible with your data classification requirements before connecting to a production Wazuh deployment.
+---
+
+## Common Issues
+
+### `HTTP 421 Invalid Host header` from mcp-remote
+
+The MCP SDK's DNS-rebinding protection blocks non-localhost `Host` headers. This is already disabled in `server.py` via `TransportSecuritySettings(enable_dns_rebinding_protection=False)`. If you see this, ensure you are running the latest code.
+
+### `ECONNREFUSED` on port 8000
+
+```bash
+docker compose ps           # check container is Up
+docker compose logs wazuh-mcp | tail -30
+```
+
+Ensure `WAZUH_MCP_HOST=0.0.0.0` is set in `.env`, not `127.0.0.1`.
+
+### Empty results from alert/vulnerability tools
+
+```bash
+curl -sk -u USER:PASS https://INDEXER:9200/_cat/indices?h=index | grep wazuh
+```
+
+Update `WAZUH_ALERTS_INDEX` and `WAZUH_VULN_INDEX` in `.env` to match your actual index names.
+
+### `401 Unauthorized` from Wazuh Manager API
+
+```bash
+curl -k -X POST -u "wazuh-mcp:password" https://MANAGER:55000/security/user/authenticate
+```
+
+If this returns a token, credentials are correct but RBAC is missing. Add read permissions for agents, rules, sca, syscollector, syscheck.
+
+### Archive tools return no results
+
+Archive logging must be enabled in `ossec.conf`:
+
+```xml
+<ossec_config>
+  <global>
+    <logall>yes</logall>
+    <logall_json>yes</logall_json>
+  </global>
+</ossec_config>
+```
+
+Restart Wazuh manager after changing this.
+
+### Claude Desktop shows no tools
+
+1. Fully quit Claude Desktop (not just close the window).
+2. Verify `mcp-remote` connects: `mcp-remote http://SERVER:8000/sse --allow-http` (should hang silently).
+3. Check the config file uses `command`/`args` format, not the `url` shorthand.
+4. Relaunch Claude Desktop and look for the tools icon in the chat input bar.
 
 ---
 
@@ -874,5 +637,3 @@ curl -si http://<SERVER_IP>:8000/sse | head -3
 - [Model Context Protocol Specification](https://modelcontextprotocol.io/docs)
 - [FastMCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [mcp-remote](https://github.com/geelen/mcp-remote)
-- [Wazuh Integrations Repository](https://github.com/wazuh/integrations)
-- [Wazuh Integration Contributing Guide](https://github.com/wazuh/integrations/blob/main/CONTRIBUTING.md)
