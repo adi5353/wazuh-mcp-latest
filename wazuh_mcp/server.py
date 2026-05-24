@@ -141,6 +141,11 @@ from .tools import credential_mgmt as _cred_module  # noqa: E402
 from .tools import cve_watchlist as _cve_watchlist_module  # noqa: E402
 from .tools import rule_wizard as _rule_wizard_module  # noqa: E402
 from .tools import workspaces as _workspaces_module  # noqa: E402
+from .tools import geo_intel as _geo_intel_module  # noqa: E402
+from .tools import threat_feeds as _threat_feeds_module  # noqa: E402
+from .tools import playbooks as _playbooks_module  # noqa: E402
+from .tools import network_topology as _net_topology_module  # noqa: E402
+from .tools import autonomous_soc as _autonomous_soc_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -285,6 +290,11 @@ _cred_module.register(mcp, wz, cfg, _require_writes)
 _cve_watchlist_module.register(mcp, wz, idx, cfg)
 _rule_wizard_module.register(mcp, wz, cfg)
 _workspaces_module.register(mcp, cfg)
+_geo_intel_module.register(mcp, wz, idx, cfg)
+_threat_feeds_module.register(mcp, wz, idx, cfg, _require_writes)
+_playbooks_module.register(mcp, wz, idx, cfg)
+_net_topology_module.register(mcp, wz, idx, cfg, _cap)
+_autonomous_soc_module.register(mcp, wz, idx, cfg)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
