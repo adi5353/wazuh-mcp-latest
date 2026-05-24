@@ -1,29 +1,20 @@
 [project]
 name = "wazuh-mcp"
-version = "1.0.0"
-description = "Connect Wazuh SIEM to Claude AI via Model Context Protocol"
+version = "0.1.0"
+description = "MCP server exposing Wazuh manager and indexer to LLM clients"
 readme = "README.md"
-license = { text = "MIT" }
 requires-python = ">=3.10"
-keywords = ["wazuh", "mcp", "siem", "security", "claude", "ai"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: System Administrators",
-    "Topic :: Security",
-    "Programming Language :: Python :: 3",
-]
 dependencies = [
-    "mcp>=1.0.0",
-    "httpx>=0.28.0",
-    "python-dotenv>=1.0.0",
-    "uvicorn>=0.30.0",
-    "starlette>=0.40.0",
-    "structlog>=24.0.0",
+    "mcp>=1.2.0",
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]
-wazuh-mcp = "wazuh_mcp.__main__:main"
+wazuh-mcp = "wazuh_mcp.server:main"
 
-[project.urls]
-Homepage = "https://github.com/adi5353/wazuh-mcp"
-Issues = "https://github.com/adi5353/wazuh-mcp/issues"
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["wazuh_mcp*"]
