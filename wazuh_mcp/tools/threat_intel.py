@@ -7,6 +7,8 @@ import os
 
 import httpx
 
+from ..circuit_breaker import breaker
+
 log = logging.getLogger("wazuh-mcp")
 
 
@@ -14,21 +16,38 @@ async def _vt_get(path: str) -> dict | None:
     vt_key = os.getenv("VIRUSTOTAL_API_KEY")
     if not vt_key:
         return None
+    if not breaker.allow("virustotal"):
+        st = breaker.status("virustotal")
+        reason = "circuit open" if st["circuit_open"] else "daily quota exhausted"
+        log.warning("VirusTotal skipped — %s (%s/%s used today)",
+                    reason, st["requests_today"], st["daily_limit"])
+        return None
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.get(
                 f"https://www.virustotal.com/api/v3/{path}",
                 headers={"x-apikey": vt_key},
             )
-            return r.json() if r.status_code == 200 else None
+            if r.status_code == 200:
+                breaker.record_success("virustotal")
+                return r.json()
+            breaker.record_failure("virustotal")
+            return None
     except Exception as e:
         log.warning("VirusTotal error: %s", e)
+        breaker.record_failure("virustotal")
         return None
 
 
 async def _abuse_get(ip: str) -> dict | None:
     abuse_key = os.getenv("ABUSEIPDB_API_KEY")
     if not abuse_key:
+        return None
+    if not breaker.allow("abuseipdb"):
+        st = breaker.status("abuseipdb")
+        reason = "circuit open" if st["circuit_open"] else "daily quota exhausted"
+        log.warning("AbuseIPDB skipped — %s (%s/%s used today)",
+                    reason, st["requests_today"], st["daily_limit"])
         return None
     try:
         async with httpx.AsyncClient(timeout=15) as c:
@@ -37,9 +56,14 @@ async def _abuse_get(ip: str) -> dict | None:
                 params={"ipAddress": ip, "maxAgeInDays": 90},
                 headers={"Key": abuse_key, "Accept": "application/json"},
             )
-            return r.json().get("data") if r.status_code == 200 else None
+            if r.status_code == 200:
+                breaker.record_success("abuseipdb")
+                return r.json().get("data")
+            breaker.record_failure("abuseipdb")
+            return None
     except Exception as e:
         log.warning("AbuseIPDB error: %s", e)
+        breaker.record_failure("abuseipdb")
         return None
 
 
@@ -130,6 +154,23 @@ def register(mcp, wz, idx, cfg, _geoip_lookup):
             "first_submission": attrs.get("first_submission_date"),
             "threat_label": (attrs.get("popular_threat_classification") or {}).get("suggested_threat_label"),
             "verdict": "MALICIOUS" if malicious > 3 else "SUSPICIOUS" if malicious > 0 else "CLEAN",
+        }
+
+    @mcp.tool()
+    async def get_threat_intel_status() -> dict:
+        """Show daily quota usage and circuit breaker state for VirusTotal and AbuseIPDB.
+
+        Use this to check how many API calls remain before hitting free-tier limits,
+        or to diagnose why enrichment is returning 'unavailable'.
+        """
+        return {
+            "quota_and_circuit_status": breaker.status(),
+            "limits": {
+                "virustotal_daily_limit": int(os.getenv("VIRUSTOTAL_DAILY_LIMIT", "450")),
+                "abuseipdb_daily_limit":  int(os.getenv("ABUSEIPDB_DAILY_LIMIT",  "900")),
+                "circuit_fail_threshold": int(os.getenv("TI_CIRCUIT_FAIL_THRESHOLD", "5")),
+                "circuit_reset_seconds":  int(os.getenv("TI_CIRCUIT_RESET_SECONDS", "300")),
+            },
         }
 
     @mcp.tool()
