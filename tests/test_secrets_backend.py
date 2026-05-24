@@ -30,43 +30,69 @@ class TestEnvFallback:
             assert get_secret("ABSENT_KEY_2", default="fallback") == "fallback"
 
 
+def _inject_hvac(mock_client):
+    """Inject a fake hvac module into sys.modules so patch targets resolve."""
+    import sys
+    fake_hvac = MagicMock()
+    fake_hvac.Client.return_value = mock_client
+    sys.modules.setdefault("hvac", fake_hvac)
+    # Always update Client on the already-registered fake
+    sys.modules["hvac"].Client.return_value = mock_client
+    return fake_hvac
+
+
+def _inject_boto3(mock_client):
+    """Inject a fake boto3 module into sys.modules so patch targets resolve."""
+    import sys
+    fake_boto3 = MagicMock()
+    fake_boto3.client.return_value = mock_client
+    sys.modules.setdefault("boto3", fake_boto3)
+    sys.modules["boto3"].client.return_value = mock_client
+    return fake_boto3
+
+
 class TestVaultBackend:
     def test_vault_fetches_secret(self):
+        import importlib, sys
         mock_client = MagicMock()
         mock_client.secrets.kv.v2.read_secret_version.return_value = {
             "data": {"data": {"WAZUH_PASS": "vault_password"}}
         }
+        _inject_hvac(mock_client)
         with patch.dict(os.environ, {
             "WAZUH_SECRET_BACKEND": "vault",
             "VAULT_ADDR": "http://vault:8200",
             "VAULT_TOKEN": "test-token",
             "VAULT_SECRET_PATH": "secret/wazuh-mcp",
-        }), patch("hvac.Client", return_value=mock_client):
-            # Force reimport with fresh env
-            import importlib
+        }):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
-            assert result == "vault_password"
+        assert result == "vault_password"
 
     def test_vault_missing_key_returns_none(self):
+        import importlib
         mock_client = MagicMock()
         mock_client.secrets.kv.v2.read_secret_version.return_value = {
             "data": {"data": {"OTHER_KEY": "value"}}
         }
+        _inject_hvac(mock_client)
         with patch.dict(os.environ, {
             "WAZUH_SECRET_BACKEND": "vault",
             "VAULT_ADDR": "http://vault:8200",
             "VAULT_TOKEN": "test-token",
             "VAULT_SECRET_PATH": "secret/wazuh-mcp",
-        }), patch("hvac.Client", return_value=mock_client):
-            import importlib
+        }):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
-            assert result is None
+        assert result is None
 
     def test_vault_unavailable_falls_back_to_env(self):
+        import importlib
+        mock_client = MagicMock()
+        mock_client.secrets.kv.v2.read_secret_version.side_effect = Exception("connection refused")
+        _inject_hvac(mock_client)
         with patch.dict(os.environ, {
             "WAZUH_SECRET_BACKEND": "vault",
             "VAULT_ADDR": "http://vault:8200",
@@ -74,66 +100,63 @@ class TestVaultBackend:
             "VAULT_SECRET_PATH": "secret/wazuh-mcp",
             "WAZUH_PASS": "env_fallback_pass",
         }):
-            mock_client = MagicMock()
-            mock_client.secrets.kv.v2.read_secret_version.side_effect = Exception("connection refused")
-            with patch("hvac.Client", return_value=mock_client):
-                import importlib
-                import wazuh_mcp.secrets_backend as sb
-                importlib.reload(sb)
-                result = sb.get_secret("WAZUH_PASS")
-                # Falls back to env on Vault error
-                assert result == "env_fallback_pass"
+            import wazuh_mcp.secrets_backend as sb
+            importlib.reload(sb)
+            result = sb.get_secret("WAZUH_PASS")
+        # Falls back to env on Vault error
+        assert result == "env_fallback_pass"
 
 
 class TestAWSBackend:
     def test_aws_fetches_secret(self):
-        mock_boto = MagicMock()
+        import importlib
         mock_client = MagicMock()
-        mock_boto.client.return_value = mock_client
         mock_client.get_secret_value.return_value = {
             "SecretString": '{"WAZUH_PASS": "aws_password", "WAZUH_USER": "wazuh-mcp"}'
         }
+        _inject_boto3(mock_client)
         with patch.dict(os.environ, {
             "WAZUH_SECRET_BACKEND": "aws",
             "AWS_SECRET_NAME": "wazuh-mcp/secrets",
             "AWS_REGION": "us-east-1",
-        }), patch("boto3.client", return_value=mock_client):
-            import importlib
+        }):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
-            assert result == "aws_password"
+        assert result == "aws_password"
 
     def test_aws_missing_key_returns_none(self):
+        import importlib
         mock_client = MagicMock()
         mock_client.get_secret_value.return_value = {
             "SecretString": '{"OTHER": "value"}'
         }
+        _inject_boto3(mock_client)
         with patch.dict(os.environ, {
             "WAZUH_SECRET_BACKEND": "aws",
             "AWS_SECRET_NAME": "wazuh-mcp/secrets",
             "AWS_REGION": "us-east-1",
-        }), patch("boto3.client", return_value=mock_client):
-            import importlib
+        }):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
-            assert result is None
+        assert result is None
 
     def test_aws_unavailable_falls_back_to_env(self):
+        import importlib
         mock_client = MagicMock()
         mock_client.get_secret_value.side_effect = Exception("NoCredentials")
+        _inject_boto3(mock_client)
         with patch.dict(os.environ, {
             "WAZUH_SECRET_BACKEND": "aws",
             "AWS_SECRET_NAME": "wazuh-mcp/secrets",
             "AWS_REGION": "us-east-1",
             "WAZUH_PASS": "env_fallback",
-        }), patch("boto3.client", return_value=mock_client):
-            import importlib
+        }):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
-            assert result == "env_fallback"
+        assert result == "env_fallback"
 
 
 class TestUnknownBackend:

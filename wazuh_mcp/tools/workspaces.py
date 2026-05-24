@@ -208,4 +208,4 @@ def register(mcp, cfg):
 
 def _fmt_ts(ts: int) -> str:
     import datetime
-    return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC")
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
