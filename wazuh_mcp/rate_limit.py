@@ -19,13 +19,10 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import json
 import os
 import time
 from typing import Deque
-
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
 
 
 def _rpm() -> int:
@@ -42,9 +39,10 @@ _windows: dict[str, Deque[float]] = collections.defaultdict(collections.deque)
 _WINDOW_SECONDS = 60.0
 
 
-def _identity(request: Request) -> str:
-    """Derive a stable, opaque identity from the Authorization header."""
-    auth = request.headers.get("Authorization", "anonymous")
+def _identity_from_scope(scope: dict) -> str:
+    """Derive a stable, opaque identity from the Authorization header in ASGI scope."""
+    headers = dict(scope.get("headers", []))
+    auth = headers.get(b"authorization", b"anonymous").decode("utf-8", errors="replace")
     return hashlib.sha256(auth.encode()).hexdigest()[:16]
 
 
@@ -71,24 +69,43 @@ def _is_throttled(identity: str) -> tuple[bool, int]:
     return False, 0
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """/health is always exempt — only MCP tool paths are rate-limited."""
+class RateLimitMiddleware:
+    """/health is always exempt — only MCP tool paths are rate-limited.
 
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        if request.url.path == "/health":
-            return await call_next(request)
+    Implemented as a pure ASGI middleware (not BaseHTTPMiddleware) so it
+    never touches the request body stream — no interference with MCP tool calls.
+    """
 
-        identity = _identity(request)
+    def __init__(self, app) -> None:
+        self._app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path == "/health":
+            await self._app(scope, receive, send)
+            return
+
+        identity = _identity_from_scope(scope)
         throttled, retry_after = _is_throttled(identity)
         if throttled:
-            return Response(
-                content=(
-                    '{"error":"Rate limit exceeded. '
-                    f'Retry after {retry_after} seconds.",'
-                    f'"retry_after_seconds":{retry_after}}}'
-                ),
-                status_code=429,
-                media_type="application/json",
-                headers={"Retry-After": str(retry_after)},
-            )
-        return await call_next(request)
+            body = json.dumps({
+                "error": f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                "retry_after_seconds": retry_after,
+            }).encode()
+            await send({
+                "type": "http.response.start",
+                "status": 429,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"retry-after", str(retry_after).encode()),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body, "more_body": False})
+            return
+
+        await self._app(scope, receive, send)
