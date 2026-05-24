@@ -57,6 +57,34 @@ def severities_at_or_above(min_severity: str) -> list[str]:
     return order[: order.index(min_severity) + 1]
 
 
+def paginate_results(
+    items: list,
+    total: int,
+    offset: int,
+    limit: int,
+) -> dict:
+    """Wrap a list of results in a standard pagination envelope.
+
+    All list tools should return this structure so callers get consistent
+    paging across every tool.
+
+    Args:
+        items:  The current page of results.
+        total:  Total number of matching items (from the backing store).
+        offset: The offset used for this page.
+        limit:  The limit used for this page.
+    """
+    next_offset = offset + len(items)
+    return {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": next_offset < total,
+        "next_offset": next_offset if next_offset < total else None,
+    }
+
+
 def time_window(start: str, end: str | None = None) -> dict:
     """Build an @timestamp range filter from OpenSearch date-math strings.
 

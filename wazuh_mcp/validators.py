@@ -138,6 +138,63 @@ def validate_framework(value: str, field: str = "framework") -> str:
 
 # ── Convenience wrapper ───────────────────────────────────────────────────────
 
+def validate_offset(value: int, field: str = "offset") -> int:
+    """Validate a pagination offset (non-negative integer)."""
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"Invalid {field} '{value}'. Must be a non-negative integer.")
+    return value
+
+
+# ── Elasticsearch DSL field / value allow-lists ───────────────────────────────
+
+_ALLOWED_ES_FIELDS = {
+    # Alert fields
+    "@timestamp", "rule.id", "rule.level", "rule.description", "rule.groups",
+    "rule.mitre.id", "rule.mitre.tactic", "rule.pci_dss", "rule.hipaa",
+    "rule.gdpr", "rule.nist_800_53", "rule.tsc",
+    "agent.id", "agent.name", "agent.ip",
+    "data.srcip", "data.dstip", "data.srcuser", "data.dstuser",
+    "data.win.system.eventID", "location", "full_log", "decoder.name",
+    # Vulnerability fields
+    "vulnerability.id", "vulnerability.severity", "vulnerability.score.base",
+    "package.name", "package.version",
+    # FIM fields
+    "syscheck.path", "syscheck.event", "syscheck.md5_after", "syscheck.sha256_after",
+    # SCA fields
+    "data.sca.policy_id", "data.sca.check.result", "data.sca.check.id",
+}
+
+_ES_VALUE_MAX_LEN = 256
+
+
+def validate_es_field(field: str) -> str:
+    """Validate that an Elasticsearch field name is in the allow-list.
+
+    Prevents users from querying arbitrary internal or sensitive fields.
+    """
+    if field not in _ALLOWED_ES_FIELDS:
+        raise ValueError(
+            f"Field '{field}' is not permitted in queries. "
+            f"Allowed fields: {sorted(_ALLOWED_ES_FIELDS)}"
+        )
+    return field
+
+
+def validate_es_value(value: str, field: str = "value") -> str:
+    """Validate an Elasticsearch query value.
+
+    Strips dangerous regex / query-string metacharacters and enforces
+    a length cap to prevent query bloat.
+    """
+    if len(value) > _ES_VALUE_MAX_LEN:
+        raise ValueError(
+            f"Query value for '{field}' exceeds maximum length of {_ES_VALUE_MAX_LEN} chars."
+        )
+    # Strip characters that could manipulate query_string or regex queries
+    cleaned = re.sub(r'[/\\^${}()\[\]+?]', "", value)
+    return cleaned.strip()
+
+
 def validation_error(field: str, message: str) -> dict:
     """Return a standardised error dict for MCP tool responses."""
     return {"error": f"Validation error on '{field}': {message}"}
