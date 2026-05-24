@@ -503,26 +503,48 @@ def main() -> None:
             )
 
         # ── Audit middleware — log every MCP tool invocation ──────────────
+        # Only logs actual tool calls (POST /messages with method=tools/call).
+        # Skips /health, /sse, and non-tool requests to keep the log clean.
+        _AUDIT_SKIP_PATHS = {"/health", "/sse", "/"}
+
         class AuditMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request, call_next):  # type: ignore[override]
                 import hashlib
+                path = request.url.path
+
+                # Skip noise — health checks, SSE stream setup, GET requests
+                if path in _AUDIT_SKIP_PATHS or request.method == "GET":
+                    return await call_next(request)
+
                 auth_header = request.headers.get("Authorization", "")
-                # Identity = first 12 chars of SHA-256 of the API key, never the key itself.
                 identity = (
                     hashlib.sha256(auth_header.encode()).hexdigest()[:12]
                     if auth_header
                     else "anonymous"
                 )
-                path = request.url.path
+
                 body_bytes = await request.body()
-                params: dict = {}
+                payload: dict = {}
                 if body_bytes:
                     try:
-                        params = json.loads(body_bytes)
+                        payload = json.loads(body_bytes)
                     except Exception:
-                        params = {"raw_size": len(body_bytes)}
-                tool_name = params.get("method", path)
-                with audit_logger.record(tool_name, params, identity=identity) as ctx:
+                        payload = {"raw_size": len(body_bytes)}
+
+                # MCP JSON-RPC: method="tools/call", params={"name": "<tool>", "arguments": {...}}
+                method = payload.get("method", "")
+                if method == "tools/call":
+                    tool_params = payload.get("params", {})
+                    tool_name = tool_params.get("name", "unknown_tool")
+                    tool_args  = tool_params.get("arguments", {})
+                elif method:
+                    tool_name = method          # e.g. "initialize", "tools/list"
+                    tool_args  = payload.get("params", {})
+                else:
+                    tool_name = path
+                    tool_args  = payload
+
+                with audit_logger.record(tool_name, tool_args, identity=identity) as ctx:
                     response = await call_next(request)
                     ctx.set_result_code(str(response.status_code))
                 return response
