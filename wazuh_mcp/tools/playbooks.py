@@ -160,10 +160,15 @@ def register(mcp, wz, idx, cfg):
                     "required_params": pb["required_params"]}
 
         if dry_run:
-            return {
+            run_id = str(uuid.uuid4())[:8]
+            preview = {
+                "run_id": run_id,
                 "playbook": playbook_id,
                 "name": pb["name"],
+                "status": "dry_run_preview",
                 "dry_run": True,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "variables": variables,
                 "steps": [
                     {
                         "step": i + 1,
@@ -171,11 +176,14 @@ def register(mcp, wz, idx, cfg):
                         "tool": step["tool"],
                         "params": _resolve_params(step["params"], variables),
                         "approval_gate": (pb.get("approval_before_step") == i),
+                        "status": "preview",
                     }
                     for i, step in enumerate(pb["steps"])
                 ],
-                "message": "Dry run only. Set dry_run=False to execute.",
+                "message": "Dry run only — no actions taken. Use this run_id with get_playbook_status. Set dry_run=False to execute.",
             }
+            _RUN_HISTORY[run_id] = preview
+            return preview
 
         run_id = str(uuid.uuid4())[:8]
         run_record: dict[str, Any] = {
@@ -222,7 +230,8 @@ def register(mcp, wz, idx, cfg):
     async def get_playbook_status(run_id: str) -> dict:
         """Get current status and step results for a playbook run.
 
-        run_id: returned by run_playbook when dry_run=False
+        run_id: returned by run_playbook (both dry_run=True and dry_run=False).
+        Dry-run records have status='dry_run_preview'.
         """
         record = _RUN_HISTORY.get(run_id)
         if not record:
