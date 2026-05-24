@@ -458,7 +458,9 @@ class TestAutonomousSOC:
         async def run():
             fns, mod = self._register()
             mod._monitor_state["running"] = False
-            with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None):
+            with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None), \
+                 patch("wazuh_mcp.tools.autonomous_soc._monitor_loop",
+                       new=AsyncMock(return_value=None)):
                 mock_task = MagicMock()
                 mock_task.done.return_value = True
                 with patch("asyncio.get_event_loop") as mock_loop:
@@ -468,7 +470,6 @@ class TestAutonomousSOC:
             assert result["interval_seconds"] == 30
             mod._monitor_state["running"] = False
         asyncio.get_event_loop().run_until_complete(run())
-
     def test_start_monitor_already_running(self):
         async def run():
             fns, mod = self._register()
