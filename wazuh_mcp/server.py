@@ -36,7 +36,8 @@ from email.mime.text import MIMEText
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from .audit import audit_logger, sanitize_response
+from .audit import audit_logger, sanitize_response, cap_response_size, _sanitize_string
+from .input_sanitizer import sanitize_input_value
 from .config import Config
 from .rbac import _current_role, _ROLE_NAMES
 from .rate_limit import RateLimitMiddleware
@@ -94,7 +95,14 @@ _original_mcp_tool = mcp.tool
 
 
 def _sanitizing_tool_decorator(*args, **kwargs):
-    """Wrap mcp.tool() so every registered tool's return value is sanitized."""
+    """Wrap mcp.tool() to enforce input sanitization and output sanitization on every tool.
+
+    Input pass:  screens all string/list/dict kwargs for injection patterns,
+                 length limits, and dangerous characters before the tool runs.
+    Output pass: strips prompt injection tokens, executable code, plaintext
+                 secrets, and PII from the result; caps oversized responses.
+    Covers dict, str, and list return types (previously only dict was handled).
+    """
     import functools
 
     decorator = _original_mcp_tool(*args, **kwargs)
@@ -102,9 +110,30 @@ def _sanitizing_tool_decorator(*args, **kwargs):
     def wrapping_decorator(fn):
         @functools.wraps(fn)
         async def sanitized_fn(*fn_args, **fn_kwargs):
-            result = await fn(*fn_args, **fn_kwargs)
+            # ── INPUT sanitization ────────────────────────────────────────────
+            clean_kwargs: dict = {}
+            for field, value in fn_kwargs.items():
+                try:
+                    clean_kwargs[field] = sanitize_input_value(value, field)
+                except ValueError as exc:
+                    return {"error": f"Input rejected: {exc}"}
+
+            # ── Tool execution ────────────────────────────────────────────────
+            result = await fn(*fn_args, **clean_kwargs)
+
+            # ── OUTPUT sanitization ───────────────────────────────────────────
             if isinstance(result, dict):
                 result = sanitize_response(result)
+            elif isinstance(result, str):
+                result = _sanitize_string(result)
+            elif isinstance(result, list):
+                result = [
+                    sanitize_response(item) if isinstance(item, dict)
+                    else (_sanitize_string(item) if isinstance(item, str) else item)
+                    for item in result
+                ]
+
+            result = cap_response_size(result)
             return result
 
         return decorator(sanitized_fn)

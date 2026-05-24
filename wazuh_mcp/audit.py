@@ -18,25 +18,41 @@ import time
 from pathlib import Path
 from typing import Any
 
+_MAX_OUTPUT_CHARS: int = int(os.getenv("WAZUH_MCP_MAX_OUTPUT_CHARS", "20000"))
+
 _SENSITIVE_KEYS = re.compile(
     r"(password|passwd|token|api_key|apikey|secret|authorization|credential)",
     re.IGNORECASE,
 )
 
-# ── Prompt injection / adversarial AI patterns ─────────────────────────────────
-# These patterns neutralize known LLM boundary-crossing tokens that an attacker
-# could embed in log data (e.g. User-Agent strings stored in Wazuh alerts).
+# ── Prompt injection / adversarial AI patterns ────────────────────────────────
+# Neutralize LLM boundary-crossing tokens that an attacker could embed in
+# log data (e.g. User-Agent strings stored in Wazuh alerts).
 _PROMPT_INJECTION_PATTERNS = [
     # System prompt override tokens
-    re.compile(r"</?system[^>]*>", re.IGNORECASE),
-    re.compile(r"</?admin[^>]*>", re.IGNORECASE),
-    re.compile(r"\[/?INST\]", re.IGNORECASE),
-    re.compile(r"<</?SYS>>", re.IGNORECASE),
-    re.compile(r"</s>", re.IGNORECASE),
+    re.compile(r"</?system[^>]*>",  re.IGNORECASE),
+    re.compile(r"</?admin[^>]*>",   re.IGNORECASE),
+    re.compile(r"</?claude[^>]*>",  re.IGNORECASE),
+    re.compile(r"\[/?INST\]",       re.IGNORECASE),
+    re.compile(r"<</?SYS>>",        re.IGNORECASE),
+    re.compile(r"</s>",             re.IGNORECASE),
     # Common LLM meta-control sequences
     re.compile(r"###\s*(System|Instruction|Human|Assistant|User)\s*:", re.IGNORECASE),
     re.compile(r"(?i)ignore\s+(all\s+)?previous\s+instructions?"),
     re.compile(r"(?i)you\s+are\s+now\s+(a\s+)?(?:an?\s+)?(?:unrestricted|jailbreak|DAN)"),
+    # Claude / ChatML conversation delimiters
+    re.compile(r"Human:\s*\n|Assistant:\s*\n",                    re.IGNORECASE),
+    re.compile(r"<\|im_start\|>|<\|im_end\|>",                   re.IGNORECASE),
+    # Role-override and jailbreak phrases
+    re.compile(r"(?i)act\s+as\s+(if\s+you\s+are|an?\s+)?(?:unrestricted|evil|hacker)"),
+    re.compile(r"(?i)pretend\s+(you\s+are|to\s+be)\s+(?:a\s+)?(?:different|unrestricted)"),
+    re.compile(r"(?i)your\s+(new\s+)?instructions?\s+(are|is)\s*:"),
+    # Data-exfiltration via output reflection
+    re.compile(r"(?i)repeat\s+(everything|all|the)\s+(above|before|prior|previous)"),
+    re.compile(r"(?i)print\s+(your\s+)?(system\s+prompt|instructions|context)"),
+    # Indirect injection via embedded markup
+    re.compile(r"<!--.*?-->",    re.DOTALL),
+    re.compile(r"\{\{[^}]+\}\}"),
 ]
 
 # Executable code block patterns that could trick LLMs into running code
@@ -50,13 +66,29 @@ _SECRET_VALUE_RE = re.compile(
     r"(?i)(password|passwd|token|api_key|apikey|secret|bearer)\s*[=:]\s*\S+",
 )
 
+# ── PII patterns (scrub from tool outputs) ────────────────────────────────────
+_PII_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "[EMAIL]"),
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[SSN]"),
+    (re.compile(r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b"),
+     "[CC_NUMBER]"),
+]
+
+
+def _scrub_pii(value: str) -> str:
+    """Replace PII patterns (emails, SSNs, credit card numbers) with placeholders."""
+    for pattern, placeholder in _PII_PATTERNS:
+        value = pattern.sub(placeholder, value)
+    return value
+
 
 def _sanitize_string(value: str) -> str:
-    """Strip prompt injection tokens and secret values from a string."""
+    """Strip prompt injection tokens, executable code, secrets, and PII from a string."""
     for pat in _PROMPT_INJECTION_PATTERNS:
         value = pat.sub("[FILTERED]", value)
     value = _CODE_EXECUTION_PATTERNS.sub("[CODE_FILTERED]", value)
     value = _SECRET_VALUE_RE.sub(r"\1=[REDACTED]", value)
+    value = _scrub_pii(value)
     return value
 
 
@@ -80,6 +112,7 @@ def sanitize_response(result: dict) -> dict:
     - Prompt injection tokens (<system>, [INST], ###System:, etc.)
     - Executable code patterns (eval, exec, subprocess)
     - Plaintext secrets in values (password=xxx, token=xxx)
+    - PII (emails, SSNs, credit card numbers)
 
     Safe on tool error responses — returns them unchanged structurally,
     only scanning string content within them.
@@ -87,6 +120,32 @@ def sanitize_response(result: dict) -> dict:
     if not isinstance(result, dict):
         return result
     return _sanitize_value(result)
+
+
+def cap_response_size(result: Any) -> Any:
+    """Truncate oversized tool responses before they reach the LLM.
+
+    If the JSON-serialized response exceeds WAZUH_MCP_MAX_OUTPUT_CHARS
+    (default 20 000 chars ≈ 5 000 tokens), returns a structured warning
+    with a preview instead of the raw truncated payload.  This prevents
+    single tool calls from exhausting the LLM context window.
+    """
+    try:
+        serialized = json.dumps(result, default=str)
+    except Exception:
+        return result
+    if len(serialized) <= _MAX_OUTPUT_CHARS:
+        return result
+    try:
+        preview = json.loads(serialized[: _MAX_OUTPUT_CHARS])
+    except Exception:
+        preview = serialized[: _MAX_OUTPUT_CHARS]
+    return {
+        "warning": "Response truncated — use more specific filters to narrow results",
+        "total_chars": len(serialized),
+        "limit_chars": _MAX_OUTPUT_CHARS,
+        "preview": preview,
+    }
 
 _log = logging.getLogger("wazuh_mcp.audit")
 
