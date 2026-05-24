@@ -1,0 +1,112 @@
+"""Structured audit trail for every MCP tool invocation.
+
+Writes one JSONL record per tool call to the audit log file.
+The record intentionally omits raw result payloads and credential values.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any
+
+_SENSITIVE_KEYS = re.compile(
+    r"(password|passwd|token|api_key|apikey|secret|authorization|credential)",
+    re.IGNORECASE,
+)
+
+_log = logging.getLogger("wazuh_mcp.audit")
+
+# Audit log path — override with WAZUH_AUDIT_LOG env var.
+_AUDIT_LOG_PATH = Path(os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
+
+
+def _scrub_params(params: dict) -> dict:
+    """Return a copy of params with sensitive values replaced by [REDACTED]."""
+    scrubbed: dict = {}
+    for k, v in params.items():
+        if _SENSITIVE_KEYS.search(k):
+            scrubbed[k] = "[REDACTED]"
+        elif isinstance(v, str) and len(v) > 6:
+            scrubbed[k] = re.sub(
+                r"(Bearer|Basic)\s+[A-Za-z0-9+/=._\-]{8,}",
+                r"\1 [REDACTED]",
+                v,
+            )
+        else:
+            scrubbed[k] = v
+    return scrubbed
+
+
+def _params_fingerprint(params: dict) -> str:
+    """SHA-256 fingerprint of scrubbed params — for correlation without leaking values."""
+    canonical = json.dumps(_scrub_params(params), sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
+def _write_record(record: dict) -> None:
+    """Append a JSONL record to the audit log, creating the file/dir if needed."""
+    try:
+        _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _AUDIT_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        _log.error("audit_write_failed error=%s", exc)
+
+
+class AuditLogger:
+    """
+    Wraps a MCP tool call with audit logging.
+
+    Usage in server.py::
+
+        from .audit import AuditLogger
+        audit = AuditLogger()
+        ...
+        with audit.record("search_alerts", params, identity="api-key-hash"):
+            result = await original_tool(**params)
+    """
+
+    def record(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        identity: str = "unknown",
+    ):
+        return _AuditContext(tool_name, params, identity)
+
+
+class _AuditContext:
+    def __init__(self, tool_name: str, params: dict, identity: str) -> None:
+        self._tool_name = tool_name
+        self._params = params
+        self._identity = identity
+        self._start = time.time()
+
+    def __enter__(self):
+        return self
+
+    def set_result_code(self, code: str) -> None:
+        self._result_code = code
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        result_code = "error" if exc_type else getattr(self, "_result_code", "ok")
+        record = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "tool": self._tool_name,
+            "identity": self._identity,
+            "params_fp": _params_fingerprint(self._params),
+            "params_scrubbed": _scrub_params(self._params),
+            "result_code": result_code,
+            "duration_ms": round((time.time() - self._start) * 1000),
+        }
+        _write_record(record)
+        return False  # never suppress exceptions
+
+
+# Module-level singleton for import convenience.
+audit_logger = AuditLogger()

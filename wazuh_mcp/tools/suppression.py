@@ -7,6 +7,8 @@ import os
 
 import httpx
 
+from ..rbac import responder_only
+
 log = logging.getLogger("wazuh-mcp")
 
 
@@ -154,8 +156,11 @@ def register(mcp, wz, idx, cfg, _require_writes):
         Use after a tuning cycle to re-open a rule for fresh evaluation.
         dry_run=True (default): previews count without making changes.
         dry_run=False: removes analyst_tag and suppression_reason fields.
-        Requires WAZUH_ALLOW_WRITES=true.
+        Requires WAZUH_ALLOW_WRITES=true. Requires role: responder or above.
         """
+        err = responder_only()
+        if err:
+            return err
         if dry_run:
             count_body = {
                 "size": 0,
