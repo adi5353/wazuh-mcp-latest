@@ -502,52 +502,94 @@ def main() -> None:
                 status_code=200 if all_ok else 503,
             )
 
-        # ── Audit middleware — log every MCP tool invocation ──────────────
-        # Only logs actual tool calls (POST /messages with method=tools/call).
-        # Skips /health, /sse, and non-tool requests to keep the log clean.
+        # ── Audit middleware — pure ASGI (no BaseHTTPMiddleware) ─────────────
+        # BaseHTTPMiddleware consumes the request body stream, preventing the
+        # MCP SDK from reading it. A raw ASGI middleware reads the body once,
+        # then creates a replay receive() so downstream can still read it.
         _AUDIT_SKIP_PATHS = {"/health", "/sse", "/"}
 
-        class AuditMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):  # type: ignore[override]
-                import hashlib
-                path = request.url.path
+        class AuditMiddleware:
+            def __init__(self, app):
+                self._app = app
 
-                # Skip noise — health checks, SSE stream setup, GET requests
-                if path in _AUDIT_SKIP_PATHS or request.method == "GET":
-                    return await call_next(request)
+            async def __call__(self, scope, receive, send):
+                # Only intercept HTTP POST requests to MCP tool endpoints
+                if scope["type"] != "http":
+                    await self._app(scope, receive, send)
+                    return
 
-                auth_header = request.headers.get("Authorization", "")
-                identity = (
-                    hashlib.sha256(auth_header.encode()).hexdigest()[:12]
-                    if auth_header
-                    else "anonymous"
-                )
+                path    = scope.get("path", "")
+                method  = scope.get("method", "GET")
 
-                body_bytes = await request.body()
-                payload: dict = {}
-                if body_bytes:
-                    try:
-                        payload = json.loads(body_bytes)
-                    except Exception:
-                        payload = {"raw_size": len(body_bytes)}
+                if path in _AUDIT_SKIP_PATHS or method != "POST":
+                    await self._app(scope, receive, send)
+                    return
 
-                # MCP JSON-RPC: method="tools/call", params={"name": "<tool>", "arguments": {...}}
-                method = payload.get("method", "")
-                if method == "tools/call":
-                    tool_params = payload.get("params", {})
-                    tool_name = tool_params.get("name", "unknown_tool")
-                    tool_args  = tool_params.get("arguments", {})
-                elif method:
-                    tool_name = method          # e.g. "initialize", "tools/list"
-                    tool_args  = payload.get("params", {})
+                # ── Read body once, then create a replay receive ──────────
+                body_chunks: list[bytes] = []
+                more_body = True
+                while more_body:
+                    msg = await receive()
+                    body_chunks.append(msg.get("body", b""))
+                    more_body = msg.get("more_body", False)
+                body_bytes = b"".join(body_chunks)
+
+                replayed = False
+                async def replay_receive():
+                    nonlocal replayed
+                    if not replayed:
+                        replayed = True
+                        return {"type": "http.request", "body": body_bytes, "more_body": False}
+                    # After replaying body, forward real disconnect events
+                    return await receive()
+
+                # ── Parse MCP JSON-RPC envelope ───────────────────────────
+                try:
+                    payload = json.loads(body_bytes) if body_bytes else {}
+                except Exception:
+                    payload = {}
+
+                rpc_method = payload.get("method", "")
+                if rpc_method == "tools/call":
+                    p = payload.get("params", {})
+                    tool_name = p.get("name", "unknown_tool")
+                    tool_args = p.get("arguments", {})
+                elif rpc_method:
+                    tool_name = rpc_method
+                    tool_args = payload.get("params", {})
                 else:
                     tool_name = path
-                    tool_args  = payload
+                    tool_args = {}
 
-                with audit_logger.record(tool_name, tool_args, identity=identity) as ctx:
-                    response = await call_next(request)
-                    ctx.set_result_code(str(response.status_code))
-                return response
+                # ── Identity from Authorization header ────────────────────
+                import hashlib
+                headers_raw = dict(scope.get("headers", []))
+                auth_raw = headers_raw.get(b"authorization", b"").decode("utf-8", errors="replace")
+                identity = (
+                    hashlib.sha256(auth_raw.encode()).hexdigest()[:12]
+                    if auth_raw else "anonymous"
+                )
+
+                # ── Capture response status via wrapped send ───────────────
+                status_code: list[int] = [200]
+
+                async def capture_send(message):
+                    if message.get("type") == "http.response.start":
+                        status_code[0] = message.get("status", 200)
+                    await send(message)
+
+                # ── Run app and write audit record ─────────────────────────
+                exc_caught = None
+                try:
+                    await self._app(scope, replay_receive, capture_send)
+                except Exception as exc:
+                    exc_caught = exc
+                finally:
+                    with audit_logger.record(tool_name, tool_args, identity=identity) as ctx:
+                        ctx.set_result_code("error" if exc_caught else str(status_code[0]))
+
+                if exc_caught:
+                    raise exc_caught
 
         # ── Optional Bearer-token middleware ───────────────────────────────
         class APIKeyMiddleware(BaseHTTPMiddleware):
