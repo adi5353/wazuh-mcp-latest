@@ -43,7 +43,7 @@ def register(mcp, wz, idx, cfg, _cap):
         subnet_prefix: CIDR prefix length for grouping (default /24)
         """
         try:
-            raw = await wz.request("GET", "/agents?limit=500&select=id,name,ip,status,groups")
+            raw = await wz.request("GET", "/agents?limit=500")
         except Exception as exc:
             return {"error": "Failed to fetch agents: " + str(exc)}
 
@@ -103,7 +103,7 @@ def register(mcp, wz, idx, cfg, _cap):
         """
         try:
             ag_raw = await wz.request(
-                "GET", f"/agents?agents_list={agent_id}&select=id,name,ip"
+                "GET", f"/agents?agents_list={agent_id}"
             )
         except Exception as exc:
             return {"error": "Agent lookup failed: " + str(exc)}
@@ -148,7 +148,7 @@ def register(mcp, wz, idx, cfg, _cap):
         external_ips = list(peer_ips)[:30]
         if peer_ips:
             try:
-                all_raw = await wz.request("GET", "/agents?limit=500&select=id,name,ip,status")
+                all_raw = await wz.request("GET", "/agents?limit=500")
                 for ag in (all_raw.get("data") or {}).get("affected_items") or []:
                     if ag.get("ip") in peer_ips:
                         known_agents.append({
@@ -185,7 +185,7 @@ def register(mcp, wz, idx, cfg, _cap):
             return {"error": f"Invalid subnet '{subnet}': {exc}"}
 
         try:
-            raw = await wz.request("GET", "/agents?limit=500&select=id,name,ip,status,groups")
+            raw = await wz.request("GET", "/agents?limit=500")
         except Exception as exc:
             return {"error": "Failed to fetch agents: " + str(exc)}
 
