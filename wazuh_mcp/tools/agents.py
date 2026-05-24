@@ -7,12 +7,16 @@ from ..rbac import responder_only, admin_only
 def register(mcp, wz, idx, cfg, _cap, _require_writes):
 
     @mcp.tool()
-    async def list_agents(status: str = "active", limit: int = 50) -> dict:
+    async def list_agents(status: str = "active", limit: int = 50, group_filter: str = "") -> dict:
         """List Wazuh agents filtered by status.
 
         status: active | disconnected | pending | never_connected
+        group_filter: optional agent group for multi-tenant scoping (e.g. "linux-servers")
         """
-        return await wz.request("GET", f"/agents?status={status}&limit={_cap(limit)}")
+        url = f"/agents?status={status}&limit={_cap(limit)}"
+        if group_filter:
+            url += f"&group={group_filter}"
+        return await wz.request("GET", url)
 
     @mcp.tool()
     async def get_agent(agent_id: str) -> dict:

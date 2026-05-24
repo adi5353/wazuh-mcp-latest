@@ -146,6 +146,9 @@ from .tools import threat_feeds as _threat_feeds_module  # noqa: E402
 from .tools import playbooks as _playbooks_module  # noqa: E402
 from .tools import network_topology as _net_topology_module  # noqa: E402
 from .tools import autonomous_soc as _autonomous_soc_module  # noqa: E402
+from .tools import baseline as _baseline_module  # noqa: E402
+from .tools import ueba as _ueba_module  # noqa: E402
+from .tools import scheduler as _scheduler_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -295,6 +298,9 @@ _threat_feeds_module.register(mcp, wz, idx, cfg, _require_writes)
 _playbooks_module.register(mcp, wz, idx, cfg)
 _net_topology_module.register(mcp, wz, idx, cfg, _cap)
 _autonomous_soc_module.register(mcp, wz, idx, cfg)
+_baseline_module.register(mcp, wz, idx, cfg, _cap)
+_ueba_module.register(mcp, wz, idx, cfg, _cap)
+_scheduler_module.register(mcp, wz, idx, cfg)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py

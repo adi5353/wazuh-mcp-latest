@@ -1,0 +1,105 @@
+# Air-gapped / Offline LLM Setup — F10-doc
+#
+# Runs Ollama (local LLM inference) alongside wazuh-mcp in an isolated
+# network. No data leaves your environment. Suitable for finance, healthcare,
+# and defense sectors that prohibit cloud AI APIs.
+#
+# Usage:
+#   docker compose -f docker-compose.ollama.yaml up -d
+#   docker exec ollama ollama pull llama3.1:8b
+#
+# Then configure Claude Desktop (or Open WebUI) to use:
+#   OLLAMA_BASE_URL=http://ollama:11434
+#
+# Hardware requirements:
+#   llama3.1:8b  — 8 GB VRAM (GPU) or 16 GB RAM (CPU, slow)
+#   llama3.2:3b  — 4 GB VRAM or 8 GB RAM (faster, less accurate)
+
+services:
+  wazuh-mcp:
+    build: .
+    image: wazuh-mcp:latest
+    container_name: wazuh-mcp
+    env_file: .env
+    environment:
+      # Point at Ollama instead of Anthropic API
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # Disable cloud TI integrations in air-gapped mode
+      - VIRUSTOTAL_API_KEY=
+      - ABUSEIPDB_API_KEY=
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    stop_grace_period: 35s
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - airgapped
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    user: "1001:1001"
+    volumes:
+      - wazuh_mcp_logs:/app/logs
+      - wazuh_mcp_workspaces:/app/workspaces
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    networks:
+      - airgapped
+    volumes:
+      - ollama_models:/root/.ollama
+    # GPU support (requires nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    ports:
+      - "11434:11434"  # expose for local testing; remove in production
+
+  # Optional: Open WebUI for browser-based chat with local models
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    networks:
+      - airgapped
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # Connect to wazuh-mcp as an MCP tool server
+      - OPENAI_API_BASE_URL=http://wazuh-mcp:8000/openai
+      - WEBUI_SECRET_KEY=${OPEN_WEBUI_SECRET:-changeme}
+    volumes:
+      - open_webui_data:/app/backend/data
+    depends_on:
+      - ollama
+      - wazuh-mcp
+
+networks:
+  airgapped:
+    driver: bridge
+    internal: false  # set to true for fully air-gapped (no internet)
+
+volumes:
+  wazuh_mcp_logs:
+  wazuh_mcp_workspaces:
+  ollama_models:
+  open_webui_data:

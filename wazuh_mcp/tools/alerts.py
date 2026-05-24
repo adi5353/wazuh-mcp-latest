@@ -130,6 +130,7 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         min_level: int = 7,
         agent_id: str | None = None,
         rule_groups: list | None = None,
+        group_filter: str = "",
         limit: int = 50,
     ) -> dict:
         """Search Wazuh alerts in the Indexer.
@@ -161,6 +162,8 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
             filters.append({"term": {"agent.id": agent_id}})
         if rule_groups:
             filters.append({"terms": {"rule.groups": rule_groups}})
+        if group_filter:
+            filters.append({"term": {"agent.groups": group_filter}})
 
         body = {
             "size": _cap(limit),

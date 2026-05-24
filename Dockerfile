@@ -17,6 +17,8 @@ COPY wazuh_mcp/ ./wazuh_mcp/
 COPY pyproject.toml .
 COPY tests/ ./tests/
 COPY compose.yaml .
+COPY docker-compose.ollama.yaml .
+COPY docs/ ./docs/
 RUN pip install --no-cache-dir -e .
 
 # ── Test dependencies (baked in so tests can run inside the container) ────────
