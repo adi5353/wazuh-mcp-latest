@@ -8,7 +8,6 @@ import os
 import httpx
 
 from ..rbac import responder_only
-from ..validators import safe_validate, validate_time_range, validate_rule_id
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -26,11 +25,6 @@ def register(mcp, wz, idx, cfg, _require_writes):
         time_range: look-back window e.g. '24h', '7d', '30d'
         min_count: minimum FP-tagged alerts to include (filters noise from results)
         """
-        _, err = safe_validate(validate_time_range, time_range)
-        if err:
-            return err
-        if not isinstance(min_count, int) or min_count < 1:
-            return {"error": "min_count must be a positive integer."}
         fp_body = {
             "size": 0,
             "query": {
@@ -167,11 +161,6 @@ def register(mcp, wz, idx, cfg, _require_writes):
         err = responder_only()
         if err:
             return err
-        _, verr = safe_validate(validate_rule_id, rule_id)
-        if verr:
-            return verr
-        if not isinstance(older_than_hours, int) or older_than_hours < 1:
-            return {"error": "older_than_hours must be a positive integer."}
         if dry_run:
             count_body = {
                 "size": 0,

@@ -1,6 +1,5 @@
 """Threat hunting tools — lateral movement, persistence, and data exfiltration hunts."""
 from __future__ import annotations
-from ..validators import safe_validate, validate_time_range
 
 
 def register(mcp, wz, idx, cfg):
@@ -14,11 +13,6 @@ def register(mcp, wz, idx, cfg):
 
         Returns agents with lateral movement indicators ranked by unique source IP count.
         """
-        _, err = safe_validate(validate_time_range, time_range)
-        if err:
-            return err
-        if not isinstance(min_targets, int) or min_targets < 1:
-            return {"error": "min_targets must be a positive integer."}
         lateral_rule_ids = ["5710", "5711", "5712", "18107", "18108", "60106", "60107"]
         lateral_rule_groups = ["authentication_failed", "win_ms-wef", "pam"]
 
@@ -75,9 +69,6 @@ def register(mcp, wz, idx, cfg):
         """Hunt persistence: search for FIM changes to startup locations, cron,
         registry run keys, new services, and scheduled tasks across all agents.
         """
-        _, err = safe_validate(validate_time_range, time_range)
-        if err:
-            return err
         persistence_paths = [
             "/etc/cron", "/var/spool/cron", "/etc/rc", "/etc/init",
             "CurrentVersion\\\\Run", "CurrentControlSet\\\\Services",
@@ -146,11 +137,6 @@ def register(mcp, wz, idx, cfg):
         Looks for firewall/network/IDS alerts with high per-agent event volumes.
         min_event_count: flag agents above this threshold.
         """
-        _, err = safe_validate(validate_time_range, time_range)
-        if err:
-            return err
-        if not isinstance(min_event_count, int) or min_event_count < 1:
-            return {"error": "min_event_count must be a positive integer."}
         body = {
             "query": {
                 "bool": {

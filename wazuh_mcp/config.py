@@ -1,13 +1,7 @@
-"""Centralized configuration loaded from environment variables.
-
-Credentials are resolved via the pluggable secrets backend (H4).
-Set WAZUH_SECRET_BACKEND=vault or =aws to fetch from Vault/AWS Secrets Manager.
-Falls back to environment variables when no backend is configured.
-"""
+"""Centralized configuration loaded from environment variables."""
 from __future__ import annotations
 import os
 from dataclasses import dataclass
-from .secrets_backend import get_secret
 
 
 @dataclass(frozen=True)
@@ -36,8 +30,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         def required(name: str) -> str:
-            # get_secret() checks backend (Vault/AWS) first, then falls back to env
-            v = get_secret(name)
+            v = os.getenv(name)
             if not v:
                 raise RuntimeError(f"Missing required env var: {name}")
             return v
@@ -47,7 +40,7 @@ class Config:
             manager_user=required("WAZUH_USER"),
             manager_pass=required("WAZUH_PASS"),
             indexer_host=required("WAZUH_INDEXER_HOST"),
-            indexer_user=get_secret("WAZUH_INDEXER_USER", default="wazuh-readonly"),
+            indexer_user=os.getenv("WAZUH_INDEXER_USER", "wazuh-readonly"),
             indexer_pass=required("WAZUH_INDEXER_PASS"),
             alerts_index=os.getenv("WAZUH_ALERTS_INDEX", "wazuh-alerts-*"),
             vuln_index=os.getenv("WAZUH_VULN_INDEX", "wazuh-states-vulnerabilities-*"),

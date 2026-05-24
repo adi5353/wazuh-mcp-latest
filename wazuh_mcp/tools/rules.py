@@ -1,6 +1,5 @@
 """Rules and decoder tools — lookup, search, logtest, and coverage analysis."""
 from __future__ import annotations
-from ..rbac import analyst_only
 
 
 def register(mcp, wz, idx, cfg, _cap):
@@ -55,22 +54,13 @@ def register(mcp, wz, idx, cfg, _cap):
 
         Returns which decoder fired, which rule matched, alert level and groups.
         log_format: syslog | json | audit | eventchannel | apache | nginx
-        Requires role: analyst.
         """
-        err = analyst_only()
-        if err:
-            return err
         body = {"event": log_sample, "log_format": log_format, "location": "test"}
         return await wz.request("PUT", "/logtest", json=body)
 
     @mcp.tool()
     async def test_rule_coverage(log_samples: list) -> dict:
-        """Test up to 20 log samples and report what percentage your ruleset covers.
-        Requires role: analyst.
-        """
-        err = analyst_only()
-        if err:
-            return err
+        """Test up to 20 log samples and report what percentage your ruleset covers."""
         results = []
         for raw_log in log_samples[:20]:
             try:
