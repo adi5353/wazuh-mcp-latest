@@ -481,6 +481,8 @@ SUMMARY | OPEN INCIDENTS | PATCH QUEUE | CONFIG ISSUES | WATCH LIST"""
 # ============================================================================
 
 def main() -> None:
+    import signal
+
     transport = os.getenv("WAZUH_MCP_TRANSPORT", "stdio")
     host = os.getenv("WAZUH_MCP_HOST", "0.0.0.0")
     port = int(os.getenv("WAZUH_MCP_PORT", "8000"))
@@ -500,6 +502,60 @@ def main() -> None:
         from starlette.responses import JSONResponse, Response
         from starlette.routing import Mount, Route
         from mcp.server.transport_security import TransportSecuritySettings
+
+        # ── Gap 11: Prometheus metrics ─────────────────────────────────────
+        try:
+            from prometheus_client import (
+                Counter, Histogram, Gauge,
+                generate_latest, CONTENT_TYPE_LATEST,
+            )
+            _metrics_enabled = True
+            _req_total   = Counter(
+                "wazuh_mcp_requests_total",
+                "Total MCP tool invocations",
+                ["tool", "status"],
+            )
+            _req_duration = Histogram(
+                "wazuh_mcp_request_duration_seconds",
+                "MCP tool call duration in seconds",
+                ["tool"],
+                buckets=[.05, .1, .25, .5, 1, 2.5, 5, 10, 30],
+            )
+            _rate_limit_hits = Counter(
+                "wazuh_mcp_rate_limit_hits_total",
+                "Requests rejected by rate limiter",
+            )
+            _active_conns = Gauge(
+                "wazuh_mcp_active_connections",
+                "Current open HTTP connections",
+            )
+        except ImportError:
+            _metrics_enabled = False
+            log.info("prometheus_client not installed — /metrics disabled. "
+                     "Add prometheus-client to requirements.txt to enable.")
+
+        async def metrics_endpoint(request):  # type: ignore[no-untyped-def]
+            if not _metrics_enabled:
+                return Response(
+                    "# prometheus_client not installed\n",
+                    media_type="text/plain",
+                    status_code=501,
+                )
+            return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+        # ── Gap 10: Graceful SIGTERM shutdown ──────────────────────────────
+        _uvicorn_server: list = []  # populated after server starts
+
+        def _sigterm_handler(signum, frame):  # type: ignore[no-untyped-def]
+            log.info(
+                "SIGTERM received — initiating graceful shutdown "
+                "(compose stop_grace_period gives 35s before SIGKILL)"
+            )
+            # Tell uvicorn to stop accepting new connections and drain
+            if _uvicorn_server:
+                _uvicorn_server[0].should_exit = True
+
+        signal.signal(signal.SIGTERM, _sigterm_handler)
 
         # ── /health endpoint ───────────────────────────────────────────────
         async def health_check(request):  # type: ignore[no-untyped-def]
@@ -614,15 +670,22 @@ def main() -> None:
                         status_code[0] = message.get("status", 200)
                     await send(message)
 
-                # ── Run app and write audit record ─────────────────────────
+                # ── Run app, write audit record, record Prometheus metrics ──
                 exc_caught = None
+                t0 = time.time()
                 try:
                     await self._app(scope, replay_receive, capture_send)
                 except Exception as exc:
                     exc_caught = exc
                 finally:
+                    result_label = "error" if exc_caught else str(status_code[0])
                     with audit_logger.record(tool_name, tool_args, identity=identity) as ctx:
-                        ctx.set_result_code("error" if exc_caught else str(status_code[0]))
+                        ctx.set_result_code(result_label)
+                    # Prometheus metrics (no-op if prometheus_client not installed)
+                    if _metrics_enabled and rpc_method == "tools/call":
+                        elapsed = time.time() - t0
+                        _req_total.labels(tool=tool_name, status=result_label).inc()
+                        _req_duration.labels(tool=tool_name).observe(elapsed)
 
                 if exc_caught:
                     raise exc_caught
@@ -653,6 +716,7 @@ def main() -> None:
         app = Starlette(
             routes=[
                 Route("/health", health_check),
+                Route("/metrics", metrics_endpoint),
                 Mount("/", app=mcp_asgi),
             ]
         )
@@ -686,7 +750,7 @@ def main() -> None:
             os.getenv("WAZUH_MCP_MAX_BODY_KB", "512"),
         )
 
-        log.info("SSE routes: /sse (GET), /messages (POST), /health (GET)")
+        log.info("SSE routes: /sse (GET), /messages (POST), /health (GET), /metrics (GET)")
         tls_kwargs = build_uvicorn_tls_kwargs()
         if tls_kwargs:
             log.info(
@@ -694,7 +758,20 @@ def main() -> None:
                 tls_kwargs.get("ssl_certfile"),
                 f", mTLS CA={tls_kwargs['ssl_ca_certs']}" if "ssl_ca_certs" in tls_kwargs else "",
             )
-        uvicorn.run(app, host=host, port=port, log_level="warning", **tls_kwargs)
+
+        # Use uvicorn.Server directly so _sigterm_handler can set should_exit
+        # for a clean 30-second graceful drain (Gap 10).
+        uv_config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="warning",
+            timeout_graceful_shutdown=30,
+            **tls_kwargs,
+        )
+        uv_server = uvicorn.Server(uv_config)
+        _uvicorn_server.append(uv_server)  # expose to SIGTERM handler
+        uv_server.run()
     else:
         mcp.run(transport="stdio")
 

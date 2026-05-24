@@ -1,7 +1,15 @@
-"""Wazuh Manager REST API client. Handles JWT auth and token refresh."""
+"""Wazuh Manager REST API client. Handles JWT auth, token refresh, and retry backoff.
+
+Retry policy (Gap 12):
+  3 attempts — delays of ~1s, ~2s, ~4s (capped at 10s) + randomised ±1s jitter.
+  Retries on: network errors (httpx.RequestError) and transient 5xx responses.
+  Does NOT retry 4xx client errors (except 429 Too Many Requests).
+"""
 from __future__ import annotations
+import asyncio
 import base64
 import logging
+import random
 import time
 from typing import Any, Optional
 
@@ -13,6 +21,29 @@ log = logging.getLogger(__name__)
 
 # Wazuh JWT tokens default to 900 seconds; refresh ~100s early for safety.
 TOKEN_TTL_SECONDS = 800
+
+# ── Retry configuration ────────────────────────────────────────────────────────
+_MAX_RETRIES  = 3
+_RETRY_BASE   = 1.0   # seconds — first delay before jitter
+_RETRY_CAP    = 10.0  # seconds — maximum delay before jitter
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True if the exception warrants a retry."""
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status >= 500 or status == 429
+    return False
+
+
+async def _retry_sleep(attempt: int) -> None:
+    """Exponential backoff with ±1s uniform jitter."""
+    delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP) + random.uniform(0, 1)
+    log.warning("Wazuh Manager: transient error on attempt %d/%d — retrying in %.1fs",
+                attempt + 1, _MAX_RETRIES, delay)
+    await asyncio.sleep(delay)
 
 
 class WazuhClient:
@@ -39,6 +70,18 @@ class WazuhClient:
             log.info("Wazuh Manager: authenticated, token cached")
 
     async def request(self, method: str, path: str, **kwargs: Any) -> dict:
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return await self._request_once(method, path, **kwargs)
+            except Exception as exc:
+                if not _is_retryable(exc) or attempt == _MAX_RETRIES:
+                    raise
+                last_exc = exc
+                await _retry_sleep(attempt)
+        raise last_exc  # type: ignore[misc]  — unreachable but satisfies type checker
+
+    async def _request_once(self, method: str, path: str, **kwargs: Any) -> dict:
         if not self._token or time.time() > self._token_expires:
             await self._login()
 
@@ -60,12 +103,25 @@ class WazuhClient:
             r.raise_for_status()
             return r.json()
 
-    async def upload_xml_file(self, path: str, xml_content: str, overwrite: bool = True) -> dict:
+    async def upload_xml_file(self, path: str, xml_content: str, overwrite: bool = True) -> dict:  # noqa: E501
         """Upload a raw XML file to the Wazuh Manager (rules or decoders).
 
         Uses application/octet-stream as required by the Manager file upload API.
         Automatically appends ?overwrite=true so existing files are replaced.
+        Retries on transient network/5xx errors (same policy as request()).
         """
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return await self._upload_xml_once(path, xml_content, overwrite)
+            except Exception as exc:
+                if not _is_retryable(exc) or attempt == _MAX_RETRIES:
+                    raise
+                last_exc = exc
+                await _retry_sleep(attempt)
+        raise last_exc  # type: ignore[misc]
+
+    async def _upload_xml_once(self, path: str, xml_content: str, overwrite: bool) -> dict:
         if not self._token or time.time() > self._token_expires:
             await self._login()
 

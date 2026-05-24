@@ -7,6 +7,8 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+    # Gap 10: give the graceful shutdown handler 35s before Docker sends SIGKILL
+    stop_grace_period: 35s
     stdin_open: true
     tty: false
 
