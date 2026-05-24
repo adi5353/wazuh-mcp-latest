@@ -77,12 +77,15 @@ class TestVaultBackend:
             "data": {"data": {"OTHER_KEY": "value"}}
         }
         _inject_hvac(mock_client)
-        with patch.dict(os.environ, {
+        # Build env without WAZUH_PASS so fallback returns None
+        env = {k: v for k, v in os.environ.items() if k != "WAZUH_PASS"}
+        env.update({
             "WAZUH_SECRET_BACKEND": "vault",
             "VAULT_ADDR": "http://vault:8200",
             "VAULT_TOKEN": "test-token",
             "VAULT_SECRET_PATH": "secret/wazuh-mcp",
-        }):
+        })
+        with patch.dict(os.environ, env, clear=True):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
@@ -132,11 +135,14 @@ class TestAWSBackend:
             "SecretString": '{"OTHER": "value"}'
         }
         _inject_boto3(mock_client)
-        with patch.dict(os.environ, {
+        # Build env without WAZUH_PASS so fallback returns None
+        env = {k: v for k, v in os.environ.items() if k != "WAZUH_PASS"}
+        env.update({
             "WAZUH_SECRET_BACKEND": "aws",
             "AWS_SECRET_NAME": "wazuh-mcp/secrets",
             "AWS_REGION": "us-east-1",
-        }):
+        })
+        with patch.dict(os.environ, env, clear=True):
             import wazuh_mcp.secrets_backend as sb
             importlib.reload(sb)
             result = sb.get_secret("WAZUH_PASS")
