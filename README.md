@@ -247,10 +247,10 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 
 | Variable | Description |
 |---|---|
-| `WAZUH_HOST` | Wazuh Manager API URL, e.g. `https://192.168.1.10:55000` |
+| `WAZUH_HOST` | Wazuh Manager API URL, e.g. `https://<WAZUH_MANAGER_IP>:55000` |
 | `WAZUH_USER` | Wazuh Manager API username |
 | `WAZUH_PASS` | Wazuh Manager API password |
-| `WAZUH_INDEXER_HOST` | Wazuh Indexer (OpenSearch) URL, e.g. `https://192.168.1.10:9200` |
+| `WAZUH_INDEXER_HOST` | Wazuh Indexer (OpenSearch) URL, e.g. `https://<WAZUH_INDEXER_IP>:9200` |
 | `WAZUH_INDEXER_USER` | Indexer username |
 | `WAZUH_INDEXER_PASS` | Indexer password |
 
