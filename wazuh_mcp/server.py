@@ -178,6 +178,17 @@ from .tools import autonomous_soc as _autonomous_soc_module  # noqa: E402
 from .tools import baseline as _baseline_module  # noqa: E402
 from .tools import ueba as _ueba_module  # noqa: E402
 from .tools import scheduler as _scheduler_module  # noqa: E402
+from .tools import agent_upgrades as _agent_upgrades_module  # noqa: E402
+from .tools import manager_config as _manager_config_module  # noqa: E402
+from .tools import rootcheck as _rootcheck_module  # noqa: E402
+from .tools import syslog_config as _syslog_config_module  # noqa: E402
+from .tools import manager_audit as _manager_audit_module  # noqa: E402
+from .tools import index_mgmt as _index_mgmt_module  # noqa: E402
+from .tools import servicenow as _servicenow_module  # noqa: E402
+from .tools import pagerduty as _pagerduty_module  # noqa: E402
+from .tools import azure_devops as _azure_devops_module  # noqa: E402
+from .tools import export as _export_module  # noqa: E402
+from .tools import audit_mgmt as _audit_mgmt_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -330,6 +341,17 @@ _autonomous_soc_module.register(mcp, wz, idx, cfg)
 _baseline_module.register(mcp, wz, idx, cfg, _cap)
 _ueba_module.register(mcp, wz, idx, cfg, _cap)
 _scheduler_module.register(mcp, wz, idx, cfg)
+_agent_upgrades_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_manager_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_rootcheck_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_manager_audit_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_index_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_pagerduty_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_azure_devops_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_export_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_audit_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
@@ -543,6 +565,8 @@ def main() -> None:
         from starlette.applications import Starlette
         from .tls_config import build_uvicorn_tls_kwargs, tls_enabled
         from .body_limit import MaxBodySizeMiddleware
+        from .security_headers import SecurityHeadersMiddleware
+        from .ip_filter import IPFilterMiddleware
         from starlette.middleware.base import BaseHTTPMiddleware
         from starlette.responses import JSONResponse, Response
         from starlette.routing import Mount, Route
@@ -588,6 +612,43 @@ def main() -> None:
                 )
             return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
+        # ── OpenAPI spec endpoint ──────────────────────────────────────────
+        async def openapi_endpoint(request):  # type: ignore[no-untyped-def]
+            """Auto-generated OpenAPI 3.1 spec from registered MCP tool schemas."""
+            tools_list = []
+            for tool in mcp._tools.values():  # type: ignore[attr-defined]
+                schema = getattr(tool, "parameters", {}) or {}
+                tools_list.append({
+                    "name": tool.name,
+                    "description": (tool.description or "")[:300],
+                    "inputSchema": schema,
+                })
+            spec = {
+                "openapi": "3.1.0",
+                "info": {
+                    "title": "Wazuh MCP Server",
+                    "version": "1.0.0",
+                    "description": "Model Context Protocol bridge for Wazuh SIEM",
+                },
+                "paths": {
+                    f"/tools/{t['name']}": {
+                        "post": {
+                            "summary": t["description"],
+                            "operationId": t["name"],
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {"schema": t["inputSchema"]}
+                                }
+                            },
+                            "responses": {"200": {"description": "Tool result"}},
+                        }
+                    }
+                    for t in tools_list
+                },
+                "components": {},
+            }
+            return JSONResponse(spec)
+
         # ── Gap 10: Graceful SIGTERM shutdown ──────────────────────────────
         _uvicorn_server: list = []  # populated after server starts
 
@@ -602,39 +663,72 @@ def main() -> None:
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
-        # ── /health endpoint ───────────────────────────────────────────────
+        # ── /health endpoint (deep component health) ───────────────────────
         async def health_check(request):  # type: ignore[no-untyped-def]
             checks: dict = {}
-            # Manager API ping
+            latencies: dict = {}
+
+            # Manager API ping + version
             try:
-                await wz.request("GET", "/")
+                t0 = time.time()
+                info = await wz.request("GET", "/")
+                latencies["manager_api_ms"] = round((time.time() - t0) * 1000)
                 checks["manager_api"] = "ok"
+                mgr_version = (
+                    (info.get("data") or {}).get("api_version") or
+                    (info.get("data") or {}).get("version", "unknown")
+                )
             except Exception as e:
                 checks["manager_api"] = f"error: {str(e)[:80]}"
-            # Indexer cluster health
+                mgr_version = "unknown"
+
+            # Indexer cluster health + latency
             try:
+                t0 = time.time()
                 async with httpx.AsyncClient(
                     verify=cfg.verify_ssl,
                     auth=(cfg.indexer_user, cfg.indexer_pass),
                     timeout=5,
                 ) as c:
                     r = await c.get(f"{cfg.indexer_host}/_cluster/health")
-                    status = r.json().get("status", "unknown") if r.status_code == 200 else "unreachable"
-                    checks["indexer"] = status
+                    latencies["indexer_ms"] = round((time.time() - t0) * 1000)
+                    if r.status_code == 200:
+                        body = r.json()
+                        checks["indexer"] = body.get("status", "unknown")
+                        checks["indexer_nodes"] = body.get("number_of_nodes", 0)
+                    else:
+                        checks["indexer"] = "unreachable"
             except Exception as e:
                 checks["indexer"] = f"error: {str(e)[:80]}"
 
+            # Audit log writability
+            try:
+                from .audit import _AUDIT_LOG_PATH
+                _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                audit_size = _AUDIT_LOG_PATH.stat().st_size if _AUDIT_LOG_PATH.exists() else 0
+                checks["audit_log"] = "writable"
+                checks["audit_log_bytes"] = audit_size
+            except Exception as e:
+                checks["audit_log"] = f"error: {str(e)[:60]}"
+
+            # Cache stats
+            from .cache import cache_stats
+            checks["cache"] = cache_stats()
+
             all_ok = all(
                 v in ("ok", "green", "yellow") or "ok" in str(v)
-                for v in checks.values()
+                for k, v in checks.items()
+                if k in ("manager_api", "indexer", "audit_log")
             )
             return JSONResponse(
                 {
                     "status": "healthy" if all_ok else "degraded",
                     "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+                    "manager_version": mgr_version,
                     "checks": checks,
+                    "latency_ms": latencies,
                     # Operational intelligence omitted from public /health to prevent
-                    # unauthenticated reconnaissance (Gap 8 fix — use /status for details).
+                    # unauthenticated reconnaissance (Gap 8 fix).
                 },
                 status_code=200 if all_ok else 503,
             )
@@ -760,9 +854,10 @@ def main() -> None:
 
         app = Starlette(
             routes=[
-                Route("/health", health_check),
-                Route("/metrics", metrics_endpoint),
-                Mount("/", app=mcp_asgi),
+                Route("/health",      health_check),
+                Route("/metrics",     metrics_endpoint),
+                Route("/openapi.json", openapi_endpoint),
+                Mount("/",            app=mcp_asgi),
             ]
         )
 
@@ -787,6 +882,22 @@ def main() -> None:
             log.info("API key authentication enabled (outermost middleware — runs first)")
         else:
             log.info("API key authentication disabled — set WAZUH_MCP_API_KEY to enable")
+
+        # IPFilterMiddleware — network allowlist/blocklist
+        allowed_ips = os.getenv("WAZUH_MCP_ALLOWED_IPS", "")
+        blocked_ips = os.getenv("WAZUH_MCP_BLOCKED_IPS", "")
+        if allowed_ips or blocked_ips:
+            app = IPFilterMiddleware(app)  # type: ignore[assignment]
+            log.info(
+                "IP filter enabled — allowed=%s blocked=%s",
+                allowed_ips or "(all)",
+                blocked_ips or "(none)",
+            )
+
+        # SecurityHeadersMiddleware — injects HSTS, CSP, X-Frame-Options etc.
+        _tls_on = bool(os.getenv("WAZUH_MCP_TLS_CERT"))
+        app = SecurityHeadersMiddleware(app, tls_enabled=_tls_on)  # type: ignore[assignment]
+        log.info("Security headers middleware enabled (HSTS=%s)", _tls_on)
 
         # MaxBodySizeMiddleware — absolute outermost, guards everything below
         app = MaxBodySizeMiddleware(app)  # type: ignore[assignment]
