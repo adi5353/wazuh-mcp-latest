@@ -1,6 +1,20 @@
 """Fleet inventory tools — per-agent and fleet-wide package/process/port/login queries."""
 from __future__ import annotations
 
+import asyncio
+import os
+
+_FLEET_BATCH_SIZE = int(os.getenv("WAZUH_MCP_FLEET_BATCH_SIZE", "10"))
+
+
+async def _batch_gather(coros, batch_size: int = _FLEET_BATCH_SIZE) -> list:
+    """Run coroutines in batches to avoid overwhelming the Wazuh API."""
+    results = []
+    for i in range(0, len(coros), batch_size):
+        batch = coros[i: i + batch_size]
+        results.extend(await asyncio.gather(*batch, return_exceptions=True))
+    return results
+
 
 def register(mcp, wz, idx, cfg, _cap, _truncate):
 
@@ -197,6 +211,57 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
                 for b in res["aggregations"]["by_proto"]["buckets"]
             ],
             "matches": rows,
+        }
+
+    @mcp.tool()
+    async def fleet_batch_syscollector(
+        agent_ids: list[str],
+        resource: str = "packages",
+        limit_per_agent: int = 20,
+    ) -> dict:
+        """Query syscollector data for multiple agents in parallel batches.
+
+        Fetches packages, processes, or ports for a list of agents concurrently
+        instead of sequentially, using WAZUH_MCP_FLEET_BATCH_SIZE (default 10)
+        to avoid overwhelming the Wazuh Manager API.
+
+        Args:
+            agent_ids: List of agent IDs to query.
+            resource: 'packages', 'processes', or 'ports'.
+            limit_per_agent: Max items to return per agent.
+        """
+        if resource not in ("packages", "processes", "ports"):
+            return {"error": "resource must be 'packages', 'processes', or 'ports'."}
+        if not agent_ids:
+            return {"error": "agent_ids must not be empty."}
+        if len(agent_ids) > 100:
+            return {"error": "Maximum 100 agent_ids per batch call."}
+
+        async def fetch_one(agent_id: str):
+            path = f"/syscollector/{agent_id}/{resource}?limit={_cap(limit_per_agent)}"
+            try:
+                data = await wz.request("GET", path)
+                return {
+                    "agent_id": agent_id,
+                    "items": (data.get("data") or {}).get("affected_items", []),
+                    "total": (data.get("data") or {}).get("total_affected_items", 0),
+                }
+            except Exception as e:
+                return {"agent_id": agent_id, "error": str(e)}
+
+        coros = [fetch_one(aid) for aid in agent_ids]
+        results = await _batch_gather(coros, _FLEET_BATCH_SIZE)
+
+        success = [r for r in results if isinstance(r, dict) and "error" not in r]
+        errors  = [r for r in results if isinstance(r, dict) and "error" in r]
+        return {
+            "resource": resource,
+            "agents_queried": len(agent_ids),
+            "agents_succeeded": len(success),
+            "agents_failed": len(errors),
+            "batch_size": _FLEET_BATCH_SIZE,
+            "results": success,
+            "errors": errors,
         }
 
     @mcp.tool()

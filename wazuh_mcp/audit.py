@@ -152,6 +152,19 @@ _log = logging.getLogger("wazuh_mcp.audit")
 # Audit log path — override with WAZUH_AUDIT_LOG env var.
 _AUDIT_LOG_PATH = Path(os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
 
+# Optional HMAC signing key — set WAZUH_AUDIT_LOG_SIGNING_KEY to enable tamper detection.
+_SIGNING_KEY: str = os.getenv("WAZUH_AUDIT_LOG_SIGNING_KEY", "")
+
+
+def _sign_record(record: dict) -> dict:
+    """Append an HMAC-SHA256 signature to an audit record if a signing key is configured."""
+    if not _SIGNING_KEY:
+        return record
+    import hmac as _hmac
+    canonical = json.dumps(record, sort_keys=True, default=str)
+    sig = _hmac.new(_SIGNING_KEY.encode(), canonical.encode(), "sha256").hexdigest()
+    return {**record, "hmac": sig}
+
 
 def _scrub_params(params: dict) -> dict:
     """Return a copy of params with sensitive values replaced by [REDACTED]."""
@@ -232,7 +245,7 @@ class _AuditContext:
             "result_code": result_code,
             "duration_ms": round((time.time() - self._start) * 1000),
         }
-        _write_record(record)
+        _write_record(_sign_record(record))
         return False  # never suppress exceptions
 
 
