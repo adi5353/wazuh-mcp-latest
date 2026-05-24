@@ -41,6 +41,8 @@ services:
     volumes:
       # Named volume for audit + app logs (writable, survives restarts)
       - wazuh_mcp_logs:/app/logs
+      # Named volume for investigation workspaces (F12)
+      - wazuh_mcp_workspaces:/app/workspaces
 
     logging:
       driver: "json-file"
@@ -50,3 +52,4 @@ services:
 
 volumes:
   wazuh_mcp_logs:
+  wazuh_mcp_workspaces:

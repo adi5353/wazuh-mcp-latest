@@ -110,6 +110,10 @@ from .tools import cluster as _cluster_module  # noqa: E402
 from .tools import archive as _archive_module  # noqa: E402
 from .tools import suppression as _suppression_module  # noqa: E402
 from .tools import agent_health as _agent_health_module  # noqa: E402
+from .tools import credential_mgmt as _cred_module  # noqa: E402
+from .tools import cve_watchlist as _cve_watchlist_module  # noqa: E402
+from .tools import rule_wizard as _rule_wizard_module  # noqa: E402
+from .tools import workspaces as _workspaces_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -250,6 +254,10 @@ _cluster_module.register(mcp, wz, idx, cfg)
 _archive_module.register(mcp, wz, idx, cfg, _cap)
 _suppression_module.register(mcp, wz, idx, cfg, _require_writes)
 _agent_health_module.register(mcp, wz, idx, cfg, _cap)
+_cred_module.register(mcp, wz, cfg, _require_writes)
+_cve_watchlist_module.register(mcp, wz, idx, cfg)
+_rule_wizard_module.register(mcp, wz, cfg)
+_workspaces_module.register(mcp, cfg)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
@@ -459,6 +467,7 @@ def main() -> None:
     if transport == "http":
         import uvicorn
         from starlette.applications import Starlette
+        from .tls_config import build_uvicorn_tls_kwargs, tls_enabled
         from starlette.middleware.base import BaseHTTPMiddleware
         from starlette.responses import JSONResponse, Response
         from starlette.routing import Mount, Route
@@ -635,7 +644,14 @@ def main() -> None:
             log.info("API key authentication disabled — set WAZUH_MCP_API_KEY to enable")
 
         log.info("SSE routes: /sse (GET), /messages (POST), /health (GET)")
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        tls_kwargs = build_uvicorn_tls_kwargs()
+        if tls_kwargs:
+            log.info(
+                "TLS enabled — cert=%s%s",
+                tls_kwargs.get("ssl_certfile"),
+                f", mTLS CA={tls_kwargs['ssl_ca_certs']}" if "ssl_ca_certs" in tls_kwargs else "",
+            )
+        uvicorn.run(app, host=host, port=port, log_level="warning", **tls_kwargs)
     else:
         mcp.run(transport="stdio")
 

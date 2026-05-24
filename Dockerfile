@@ -21,8 +21,9 @@ RUN pip install --no-cache-dir -e .
 # ── Test dependencies (baked in so tests can run inside the container) ────────
 RUN pip install --no-cache-dir pytest pytest-asyncio
 
-# ── Log directory owned by app user ──────────────────────────────────────────
-RUN mkdir -p /app/logs && chown -R wazuhmcp:wazuhmcp /app/logs
+# ── Writable directories owned by app user ───────────────────────────────────
+RUN mkdir -p /app/logs /app/workspaces \
+ && chown -R wazuhmcp:wazuhmcp /app/logs /app/workspaces
 
 # ── Drop to non-root ──────────────────────────────────────────────────────────
 USER wazuhmcp
