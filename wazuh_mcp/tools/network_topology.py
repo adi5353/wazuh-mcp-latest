@@ -132,7 +132,7 @@ def register(mcp, wz, idx, cfg, _cap):
             },
         }
         try:
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
         except Exception as exc:
             return {"error": "Indexer query failed: " + str(exc)}
 

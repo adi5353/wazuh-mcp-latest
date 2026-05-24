@@ -49,7 +49,7 @@ async def _query_auth_events(idx, username: str, hours: int) -> list[dict]:
         "sort": [{"@timestamp": {"order": "desc"}}],
     }
     try:
-        raw = await idx.search("wazuh-alerts-*", query)
+        raw = await idx.search(query, index="wazuh-alerts-*")
         return [(h.get("_source") or {}) for h in (raw.get("hits") or {}).get("hits") or []]
     except Exception as exc:
         log.debug("UEBA auth query error: %s", exc)
@@ -82,7 +82,7 @@ async def _query_privilege_escalations(idx, hours: int, limit: int = 200) -> lis
         "sort": [{"@timestamp": {"order": "desc"}}],
     }
     try:
-        raw = await idx.search("wazuh-alerts-*", query)
+        raw = await idx.search(query, index="wazuh-alerts-*")
         return [(h.get("_source") or {}) for h in (raw.get("hits") or {}).get("hits") or []]
     except Exception as exc:
         log.debug("UEBA escalation query error: %s", exc)
@@ -229,7 +229,7 @@ def register(mcp, wz, idx, cfg, _cap):
             },
         }
         try:
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
         except Exception as exc:
             return {"error": f"Indexer query failed: {exc}"}
 

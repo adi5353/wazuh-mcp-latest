@@ -91,15 +91,15 @@ async def _run_report(schedule: dict, wz, idx, cfg) -> str:
                     "top_agents": {"terms": {"field": "agent.name", "size": 5}},
                 },
             }
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
             total = (raw.get("hits") or {}).get("total", {}).get("value", 0)
             return f"Daily summary: {total} alerts in last 24h (scheduled at {now})"
 
         elif report_type == "vulnerability_summary":
-            raw = await idx.search("wazuh-states-vulnerabilities*", {
-                "size": 0,
-                "query": {"term": {"vulnerability.severity": "critical"}},
-            })
+            raw = await idx.search(
+                {"size": 0, "query": {"term": {"vulnerability.severity": "critical"}}},
+                index="wazuh-states-vulnerabilities*",
+            )
             total = (raw.get("hits") or {}).get("total", {}).get("value", 0)
             return f"Vulnerability report: {total} critical CVEs (scheduled at {now})"
 
@@ -108,7 +108,7 @@ async def _run_report(schedule: dict, wz, idx, cfg) -> str:
 
         elif report_type == "alert_digest":
             query = {"size": 0, "query": {"range": {"@timestamp": {"gte": "now-8h"}}}}
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
             total = (raw.get("hits") or {}).get("total", {}).get("value", 0)
             return f"Alert digest: {total} alerts in last 8h (scheduled at {now})"
 
