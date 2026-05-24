@@ -15,7 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ── Application source ────────────────────────────────────────────────────────
 COPY wazuh_mcp/ ./wazuh_mcp/
 COPY pyproject.toml .
+COPY tests/ ./tests/
 RUN pip install --no-cache-dir -e .
+
+# ── Test dependencies (baked in so tests can run inside the container) ────────
+RUN pip install --no-cache-dir pytest pytest-asyncio
 
 # ── Log directory owned by app user ──────────────────────────────────────────
 RUN mkdir -p /app/logs && chown -R wazuhmcp:wazuhmcp /app/logs
