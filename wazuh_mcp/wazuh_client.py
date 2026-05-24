@@ -59,3 +59,39 @@ class WazuhClient:
                 r = await do_call(c)
             r.raise_for_status()
             return r.json()
+
+    async def upload_xml_file(self, path: str, xml_content: str, overwrite: bool = True) -> dict:
+        """Upload a raw XML file to the Wazuh Manager (rules or decoders).
+
+        Uses application/octet-stream as required by the Manager file upload API.
+        Automatically appends ?overwrite=true so existing files are replaced.
+        """
+        if not self._token or time.time() > self._token_expires:
+            await self._login()
+
+        url = f"{self.cfg.manager_host}{path}"
+        if overwrite and "overwrite" not in path:
+            url += ("&" if "?" in path else "?") + "overwrite=true"
+
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/octet-stream",
+        }
+
+        async def do_call(client: httpx.AsyncClient) -> httpx.Response:
+            return await client.put(
+                url,
+                content=xml_content.encode("utf-8"),
+                headers=headers,
+                timeout=self.cfg.request_timeout,
+            )
+
+        async with httpx.AsyncClient(verify=self._ssl) as c:
+            r = await do_call(c)
+            if r.status_code == 401:
+                log.info("Wazuh Manager: token rejected, re-authenticating")
+                await self._login()
+                headers["Authorization"] = f"Bearer {self._token}"
+                r = await do_call(c)
+            r.raise_for_status()
+            return r.json()
