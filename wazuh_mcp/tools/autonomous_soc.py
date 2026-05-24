@@ -125,7 +125,7 @@ async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int) ->
                 "_source": ["@timestamp", "agent", "rule", "data"],
                 "sort": [{"@timestamp": {"order": "desc"}}],
             }
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
             hits = (raw.get("hits") or {}).get("hits") or []
             _monitor_state["last_poll"] = now.isoformat()
             _monitor_state["alerts_processed"] += len(hits)

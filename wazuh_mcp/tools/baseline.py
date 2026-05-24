@@ -67,7 +67,7 @@ async def _get_daily_alert_counts(idx, agent_id: str, days: int = 7) -> list[flo
             },
         }
         try:
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
             counts.append(float((raw.get("hits") or {}).get("total", {}).get("value", 0)))
         except Exception:
             counts.append(0.0)
@@ -94,7 +94,7 @@ async def _get_critical_alert_counts(idx, agent_id: str, days: int = 7) -> list[
             },
         }
         try:
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
             counts.append(float((raw.get("hits") or {}).get("total", {}).get("value", 0)))
         except Exception:
             counts.append(0.0)
@@ -208,7 +208,7 @@ def register(mcp, wz, idx, cfg, _cap):
                 },
             }
             try:
-                raw = await idx.search("wazuh-alerts-*", query)
+                raw = await idx.search(query, index="wazuh-alerts-*")
                 return float((raw.get("hits") or {}).get("total", {}).get("value", 0))
             except Exception:
                 return 0.0

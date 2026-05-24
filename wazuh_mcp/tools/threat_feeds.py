@@ -215,7 +215,7 @@ def register(mcp, wz, idx, cfg, _require_writes):
             "sort": [{"@timestamp": {"order": "desc"}}],
         }
         try:
-            raw = await idx.search("wazuh-alerts-*", query)
+            raw = await idx.search(query, index="wazuh-alerts-*")
         except Exception as exc:
             return {"error": "Indexer query failed: " + str(exc)}
 
