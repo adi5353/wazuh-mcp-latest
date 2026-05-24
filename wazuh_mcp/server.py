@@ -36,7 +36,7 @@ from email.mime.text import MIMEText
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from .audit import audit_logger
+from .audit import audit_logger, sanitize_response
 from .config import Config
 from .rbac import _current_role, _ROLE_NAMES
 from .rate_limit import RateLimitMiddleware
@@ -86,6 +86,33 @@ MAX_RESULTS_GLOBAL = int(os.getenv("WAZUH_MAX_RESULTS_GLOBAL", "500"))
 SERVER_START_TIME = time.time()
 
 mcp = FastMCP("wazuh")
+
+# ── Response sanitization wrapper (Gap 7 + Gap 9) ────────────────────────────
+# Intercept every @mcp.tool() registration so tool return values are sanitized
+# before reaching the LLM. Strips prompt injection tokens and plaintext secrets.
+_original_mcp_tool = mcp.tool
+
+
+def _sanitizing_tool_decorator(*args, **kwargs):
+    """Wrap mcp.tool() so every registered tool's return value is sanitized."""
+    import functools
+
+    decorator = _original_mcp_tool(*args, **kwargs)
+
+    def wrapping_decorator(fn):
+        @functools.wraps(fn)
+        async def sanitized_fn(*fn_args, **fn_kwargs):
+            result = await fn(*fn_args, **fn_kwargs)
+            if isinstance(result, dict):
+                result = sanitize_response(result)
+            return result
+
+        return decorator(sanitized_fn)
+
+    return wrapping_decorator
+
+
+mcp.tool = _sanitizing_tool_decorator  # type: ignore[method-assign]
 
 # ── Domain tool modules ────────────────────────────────────────────────────────
 from .tools import agents as _agents_module  # noqa: E402
@@ -468,6 +495,7 @@ def main() -> None:
         import uvicorn
         from starlette.applications import Starlette
         from .tls_config import build_uvicorn_tls_kwargs, tls_enabled
+        from .body_limit import MaxBodySizeMiddleware
         from starlette.middleware.base import BaseHTTPMiddleware
         from starlette.responses import JSONResponse, Response
         from starlette.routing import Mount, Route
@@ -504,9 +532,8 @@ def main() -> None:
                     "status": "healthy" if all_ok else "degraded",
                     "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
                     "checks": checks,
-                    "max_results_global": MAX_RESULTS_GLOBAL,
-                    "writes_enabled": cfg.allow_writes,
-                    "active_role": _ROLE_NAMES.get(_current_role(), "unknown"),
+                    # Operational intelligence omitted from public /health to prevent
+                    # unauthenticated reconnaissance (Gap 8 fix — use /status for details).
                 },
                 status_code=200 if all_ok else 503,
             )
@@ -601,6 +628,8 @@ def main() -> None:
                     raise exc_caught
 
         # ── Optional Bearer-token middleware ───────────────────────────────
+        import hmac as _hmac
+
         class APIKeyMiddleware(BaseHTTPMiddleware):
             def __init__(self, app, key: str) -> None:
                 super().__init__(app)
@@ -610,7 +639,8 @@ def main() -> None:
                 if self._key and request.url.path != "/health":
                     auth = request.headers.get("Authorization", "")
                     token = auth.removeprefix("Bearer ").strip()
-                    if token != self._key:
+                    # Constant-time comparison prevents timing-attack brute force
+                    if not _hmac.compare_digest(token, self._key):
                         return Response("Unauthorized", status_code=401)
                 return await call_next(request)
 
@@ -627,6 +657,12 @@ def main() -> None:
             ]
         )
 
+        # Middleware stack ordering (outermost runs FIRST on request, LAST on response):
+        # 1. APIKeyMiddleware  — reject unauthenticated requests before anything else
+        # 2. RateLimitMiddleware — throttle authenticated requests
+        # 3. AuditMiddleware  — log only authenticated, rate-allowed requests
+        # This prevents unauthenticated probe patterns from appearing in audit logs.
+
         app = AuditMiddleware(app)  # type: ignore[assignment]
         log.info("Audit logging enabled → %s", os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
 
@@ -639,9 +675,16 @@ def main() -> None:
 
         if api_key:
             app = APIKeyMiddleware(app, key=api_key)  # type: ignore[assignment]
-            log.info("API key authentication enabled")
+            log.info("API key authentication enabled (outermost middleware — runs first)")
         else:
             log.info("API key authentication disabled — set WAZUH_MCP_API_KEY to enable")
+
+        # MaxBodySizeMiddleware — absolute outermost, guards everything below
+        app = MaxBodySizeMiddleware(app)  # type: ignore[assignment]
+        log.info(
+            "Body size limit: %s KB (override with WAZUH_MCP_MAX_BODY_KB)",
+            os.getenv("WAZUH_MCP_MAX_BODY_KB", "512"),
+        )
 
         log.info("SSE routes: /sse (GET), /messages (POST), /health (GET)")
         tls_kwargs = build_uvicorn_tls_kwargs()
