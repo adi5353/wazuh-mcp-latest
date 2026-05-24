@@ -23,6 +23,7 @@ class Config:
 
     # Operational
     verify_ssl: bool
+    ca_bundle: str | None       # path to custom CA cert bundle (PEM)
     allow_writes: bool
     request_timeout: int
 
@@ -52,7 +53,8 @@ class Config:
             inventory_ports_index=os.getenv(
                 "WAZUH_INV_PORTS_INDEX", "wazuh-states-inventory-ports-*"
             ),
-            verify_ssl=os.getenv("WAZUH_VERIFY_SSL", "false").lower() == "true",
+            verify_ssl=os.getenv("WAZUH_VERIFY_SSL", "true").lower() == "true",
+            ca_bundle=os.getenv("WAZUH_CA_BUNDLE") or None,
             allow_writes=os.getenv("WAZUH_ALLOW_WRITES", "false").lower() == "true",
             request_timeout=int(os.getenv("WAZUH_REQUEST_TIMEOUT", "30")),
         )

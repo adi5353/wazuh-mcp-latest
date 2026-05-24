@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..helpers import trim_vuln, severities_at_or_above
+from ..validators import safe_validate, validate_severity, validate_cve_id, validate_agent_id
 
 
 def register(mcp, wz, idx, cfg, _cap):
@@ -13,6 +14,9 @@ def register(mcp, wz, idx, cfg, _cap):
         Call this BEFORE listing specific CVEs for broad 'how exposed are we' questions.
         min_severity: Critical | High | Medium | Low
         """
+        _, err = safe_validate(validate_severity, min_severity, "min_severity")
+        if err:
+            return err
         included = severities_at_or_above(min_severity)
         body = {
             "size": 0,
@@ -101,6 +105,9 @@ def register(mcp, wz, idx, cfg, _cap):
 
         cve_id: e.g. 'CVE-2024-3094'
         """
+        cve_id, err = safe_validate(validate_cve_id, cve_id)
+        if err:
+            return err
         body = {
             "size": 500,
             "query": {"term": {"vulnerability.id": cve_id}},

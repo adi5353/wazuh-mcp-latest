@@ -36,7 +36,10 @@ from email.mime.text import MIMEText
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from .audit import audit_logger
 from .config import Config
+from .rbac import _current_role, _ROLE_NAMES
+from .rate_limit import RateLimitMiddleware
 from .helpers import trim_alert, trim_vuln, severities_at_or_above, time_window
 from .wazuh_client import WazuhClient
 from .wazuh_indexer import WazuhIndexer
@@ -44,6 +47,7 @@ from .wazuh_indexer import WazuhIndexer
 # ── Structured logging (structlog optional, stdlib fallback) ──────────────────
 try:
     import structlog
+    from .logging_config import _redact_sensitive
 
     structlog.configure(
         processors=[
@@ -52,6 +56,7 @@ try:
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.stdlib.PositionalArgumentsFormatter(),
+            _redact_sensitive,                      # ← strip secrets before rendering
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
@@ -104,6 +109,7 @@ from .tools import onboarding as _onboarding_module  # noqa: E402
 from .tools import cluster as _cluster_module  # noqa: E402
 from .tools import archive as _archive_module  # noqa: E402
 from .tools import suppression as _suppression_module  # noqa: E402
+from .tools import agent_health as _agent_health_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -243,6 +249,7 @@ _onboarding_module.register(mcp, wz, idx, cfg, _cap)
 _cluster_module.register(mcp, wz, idx, cfg)
 _archive_module.register(mcp, wz, idx, cfg, _cap)
 _suppression_module.register(mcp, wz, idx, cfg, _require_writes)
+_agent_health_module.register(mcp, wz, idx, cfg, _cap)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
@@ -490,9 +497,35 @@ def main() -> None:
                     "checks": checks,
                     "max_results_global": MAX_RESULTS_GLOBAL,
                     "writes_enabled": cfg.allow_writes,
+                    "active_role": _ROLE_NAMES.get(_current_role(), "unknown"),
                 },
                 status_code=200 if all_ok else 503,
             )
+
+        # ── Audit middleware — log every MCP tool invocation ──────────────
+        class AuditMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):  # type: ignore[override]
+                import hashlib
+                auth_header = request.headers.get("Authorization", "")
+                # Identity = first 12 chars of SHA-256 of the API key, never the key itself.
+                identity = (
+                    hashlib.sha256(auth_header.encode()).hexdigest()[:12]
+                    if auth_header
+                    else "anonymous"
+                )
+                path = request.url.path
+                body_bytes = await request.body()
+                params: dict = {}
+                if body_bytes:
+                    try:
+                        params = json.loads(body_bytes)
+                    except Exception:
+                        params = {"raw_size": len(body_bytes)}
+                tool_name = params.get("method", path)
+                with audit_logger.record(tool_name, params, identity=identity) as ctx:
+                    response = await call_next(request)
+                    ctx.set_result_code(str(response.status_code))
+                return response
 
         # ── Optional Bearer-token middleware ───────────────────────────────
         class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -519,6 +552,16 @@ def main() -> None:
                 Route("/health", health_check),
                 Mount("/", app=mcp_asgi),
             ]
+        )
+
+        app = AuditMiddleware(app)  # type: ignore[assignment]
+        log.info("Audit logging enabled → %s", os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
+
+        app = RateLimitMiddleware(app)  # type: ignore[assignment]
+        log.info(
+            "Rate limiting enabled — %s RPM per identity (burst +%s)",
+            os.getenv("WAZUH_MCP_RATE_LIMIT_RPM", "60"),
+            os.getenv("WAZUH_MCP_RATE_LIMIT_BURST", "10"),
         )
 
         if api_key:

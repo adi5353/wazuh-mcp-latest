@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..helpers import trim_alert
+from ..validators import safe_validate, validate_time_range, validate_min_level, validate_agent_id, validate_ip_address, validate_limit
 
 
 def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
@@ -14,6 +15,13 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         Returns aggregations only, not raw alerts — much smaller payload.
         Includes trend vs prior period and enriched MITRE technique names.
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
+        _, err = safe_validate(validate_min_level, min_level)
+        if err:
+            return err
+
         body = {
             "size": 0,
             "query": {
@@ -131,6 +139,20 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         agent_id: optional agent filter
         rule_groups: optional rule-group filter (e.g. ['authentication_failed', 'ssh'])
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
+        _, err = safe_validate(validate_min_level, min_level)
+        if err:
+            return err
+        if agent_id:
+            _, err = safe_validate(validate_agent_id, agent_id)
+            if err:
+                return err
+        limit, err = safe_validate(validate_limit, limit)
+        if err:
+            return err
+
         filters = [
             {"range": {"@timestamp": {"gte": f"now-{time_range}"}}},
             {"range": {"rule.level": {"gte": min_level}}},
@@ -183,6 +205,12 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         src_ip: str, time_range: str = "7d", limit: int = 100
     ) -> dict:
         """Find all alerts originating from a specific source IP. Useful for IoC pivoting."""
+        _, err = safe_validate(validate_ip_address, src_ip, "src_ip")
+        if err:
+            return err
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         body = {
             "size": _cap(limit),
             "sort": [{"@timestamp": "desc"}],

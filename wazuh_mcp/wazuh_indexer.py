@@ -13,11 +13,13 @@ log = logging.getLogger(__name__)
 class WazuhIndexer:
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        # Use CA bundle when provided, otherwise fall back to verify_ssl flag.
+        self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
 
     async def search(self, body: dict, index: Optional[str] = None) -> dict:
         idx = index or self.cfg.alerts_index
         async with httpx.AsyncClient(
-            verify=self.cfg.verify_ssl,
+            verify=self._ssl,
             auth=(self.cfg.indexer_user, self.cfg.indexer_pass),
             timeout=self.cfg.request_timeout,
         ) as c:
@@ -32,7 +34,7 @@ class WazuhIndexer:
     async def count(self, query: dict, index: Optional[str] = None) -> int:
         idx = index or self.cfg.alerts_index
         async with httpx.AsyncClient(
-            verify=self.cfg.verify_ssl,
+            verify=self._ssl,
             auth=(self.cfg.indexer_user, self.cfg.indexer_pass),
             timeout=self.cfg.request_timeout,
         ) as c:

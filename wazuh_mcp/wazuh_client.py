@@ -20,12 +20,14 @@ class WazuhClient:
         self.cfg = cfg
         self._token: Optional[str] = None
         self._token_expires: float = 0.0
+        # Use CA bundle when provided, otherwise fall back to verify_ssl flag.
+        self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
 
     async def _login(self) -> None:
         auth = base64.b64encode(
             f"{self.cfg.manager_user}:{self.cfg.manager_pass}".encode()
         ).decode()
-        async with httpx.AsyncClient(verify=self.cfg.verify_ssl) as c:
+        async with httpx.AsyncClient(verify=self._ssl) as c:
             r = await c.post(
                 f"{self.cfg.manager_host}/security/user/authenticate",
                 headers={"Authorization": f"Basic {auth}"},
@@ -49,7 +51,7 @@ class WazuhClient:
                 **kwargs,
             )
 
-        async with httpx.AsyncClient(verify=self.cfg.verify_ssl) as c:
+        async with httpx.AsyncClient(verify=self._ssl) as c:
             r = await do_call(c)
             if r.status_code == 401:
                 log.info("Wazuh Manager: token rejected, re-authenticating")

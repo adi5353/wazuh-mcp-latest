@@ -44,6 +44,7 @@ async def _abuse_get(ip: str) -> dict | None:
 
 
 def register(mcp, wz, idx, cfg, _geoip_lookup):
+    from ..validators import safe_validate, validate_ip_address, validate_ip_list
 
     @mcp.tool()
     async def enrich_ip(ip: str) -> dict:
@@ -53,6 +54,9 @@ def register(mcp, wz, idx, cfg, _geoip_lookup):
         combined KNOWN MALICIOUS / SUSPICIOUS / CLEAN / UNKNOWN verdict.
         Requires VIRUSTOTAL_API_KEY and/or ABUSEIPDB_API_KEY in .env.
         """
+        _, err = safe_validate(validate_ip_address, ip)
+        if err:
+            return err
         vt_data, abuse_data = await asyncio.gather(
             _vt_get(f"ip_addresses/{ip}"),
             _abuse_get(ip),

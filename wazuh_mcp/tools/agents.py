@@ -1,6 +1,8 @@
 """Agent management tools — list, inspect, restart, group assignment."""
 from __future__ import annotations
 
+from ..rbac import responder_only, admin_only
+
 
 def register(mcp, wz, idx, cfg, _cap, _require_writes):
 
@@ -23,7 +25,11 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes):
 
         dry_run=True (default) — shows what would happen without executing.
         Set dry_run=False to actually restart. Requires WAZUH_ALLOW_WRITES=true.
+        Requires role: responder or above.
         """
+        err = responder_only()
+        if err:
+            return err
         if dry_run:
             return {
                 "dry_run": True,
@@ -46,7 +52,11 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes):
 
         dry_run=True (default) — shows what would be sent without executing.
         Set dry_run=False to actually trigger. Requires WAZUH_ALLOW_WRITES=true.
+        Requires role: responder or above.
         """
+        err = responder_only()
+        if err:
+            return err
         if dry_run:
             return {
                 "dry_run": True,
@@ -77,7 +87,12 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes):
 
     @mcp.tool()
     async def add_agent_to_group(agent_id: str, group_id: str) -> dict:
-        """Assign an agent to a group. Destructive — requires WAZUH_ALLOW_WRITES=true."""
+        """Assign an agent to a group. Destructive — requires WAZUH_ALLOW_WRITES=true.
+        Requires role: admin.
+        """
+        err = admin_only()
+        if err:
+            return err
         blocked = _require_writes()
         if blocked:
             return blocked

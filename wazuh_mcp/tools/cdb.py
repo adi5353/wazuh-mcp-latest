@@ -1,6 +1,8 @@
 """CDB list management tools — list, read, add, remove, and preview blocklist impact."""
 from __future__ import annotations
 
+from ..rbac import responder_only
+
 
 def register(mcp, wz, idx, cfg, _require_writes):
 
@@ -18,11 +20,14 @@ def register(mcp, wz, idx, cfg, _require_writes):
     async def add_to_cdb_list(list_name: str, key: str, value: str = "malicious") -> dict:
         """Add an IP, domain, or file hash to a CDB blocklist — takes effect immediately.
 
-        Requires WAZUH_ALLOW_WRITES=true.
+        Requires WAZUH_ALLOW_WRITES=true. Requires role: responder or above.
         list_name: e.g. 'malicious-ips'
         key: the IP/domain/hash to add
         value: label, e.g. 'c2-server', 'attacker', 'phishing'
         """
+        err = responder_only()
+        if err:
+            return err
         blocked = _require_writes()
         if blocked:
             return blocked
@@ -43,7 +48,12 @@ def register(mcp, wz, idx, cfg, _require_writes):
 
     @mcp.tool()
     async def remove_from_cdb_list(list_name: str, key: str) -> dict:
-        """Remove an entry from a CDB list. Requires WAZUH_ALLOW_WRITES=true."""
+        """Remove an entry from a CDB list. Requires WAZUH_ALLOW_WRITES=true.
+        Requires role: responder or above.
+        """
+        err = responder_only()
+        if err:
+            return err
         blocked = _require_writes()
         if blocked:
             return blocked

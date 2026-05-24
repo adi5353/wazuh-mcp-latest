@@ -9,14 +9,39 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: false
+
+    # ── Security hardening ────────────────────────────────────────────────────
+    # Run as non-root UID 1001 (matches Dockerfile USER directive)
+    user: "1001:1001"
+
+    # Read-only root filesystem — prevents writing anywhere except declared mounts
+    read_only: true
+
+    # Writable scratch space the app actually needs
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+
+    # Drop ALL Linux capabilities; add back only what's strictly required.
+    # wazuh-mcp binds on port 8000 (>1024) so NET_BIND_SERVICE is not needed.
+    cap_drop:
+      - ALL
+
+    # Prevent privilege escalation via setuid/setgid binaries
+    security_opt:
+      - no-new-privileges:true
+
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/sse || exit 1"]
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       start_period: 15s
       retries: 3
+
     volumes:
+      # Named volume for audit + app logs (writable, survives restarts)
       - wazuh_mcp_logs:/app/logs
+
     logging:
       driver: "json-file"
       options:
