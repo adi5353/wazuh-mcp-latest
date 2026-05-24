@@ -1,6 +1,7 @@
-"""Tests for H1 (RBAC), H6 (rate limiting), and agent health scoring."""
+"""Tests for H1 (RBAC), H6 (rate limiting), agent health, and Phase 1 security gaps."""
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import pytest
