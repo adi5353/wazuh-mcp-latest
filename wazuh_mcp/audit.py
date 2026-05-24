@@ -2,6 +2,10 @@
 
 Writes one JSONL record per tool call to the audit log file.
 The record intentionally omits raw result payloads and credential values.
+
+Also provides:
+  sanitize_response() — strips secrets + prompt injection payloads from tool responses
+  before they are serialized and sent to the LLM client.
 """
 from __future__ import annotations
 
@@ -18,6 +22,71 @@ _SENSITIVE_KEYS = re.compile(
     r"(password|passwd|token|api_key|apikey|secret|authorization|credential)",
     re.IGNORECASE,
 )
+
+# ── Prompt injection / adversarial AI patterns ─────────────────────────────────
+# These patterns neutralize known LLM boundary-crossing tokens that an attacker
+# could embed in log data (e.g. User-Agent strings stored in Wazuh alerts).
+_PROMPT_INJECTION_PATTERNS = [
+    # System prompt override tokens
+    re.compile(r"</?system[^>]*>", re.IGNORECASE),
+    re.compile(r"</?admin[^>]*>", re.IGNORECASE),
+    re.compile(r"\[/?INST\]", re.IGNORECASE),
+    re.compile(r"<</?SYS>>", re.IGNORECASE),
+    re.compile(r"</s>", re.IGNORECASE),
+    # Common LLM meta-control sequences
+    re.compile(r"###\s*(System|Instruction|Human|Assistant|User)\s*:", re.IGNORECASE),
+    re.compile(r"(?i)ignore\s+(all\s+)?previous\s+instructions?"),
+    re.compile(r"(?i)you\s+are\s+now\s+(a\s+)?(?:an?\s+)?(?:unrestricted|jailbreak|DAN)"),
+]
+
+# Executable code block patterns that could trick LLMs into running code
+_CODE_EXECUTION_PATTERNS = re.compile(
+    r"(eval\(|exec\(|subprocess\.|os\.system|__import__|`[^`]{1,200}`)",
+    re.IGNORECASE,
+)
+
+# ── Value-level secret pattern (for response payloads) ────────────────────────
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)(password|passwd|token|api_key|apikey|secret|bearer)\s*[=:]\s*\S+",
+)
+
+
+def _sanitize_string(value: str) -> str:
+    """Strip prompt injection tokens and secret values from a string."""
+    for pat in _PROMPT_INJECTION_PATTERNS:
+        value = pat.sub("[FILTERED]", value)
+    value = _CODE_EXECUTION_PATTERNS.sub("[CODE_FILTERED]", value)
+    value = _SECRET_VALUE_RE.sub(r"\1=[REDACTED]", value)
+    return value
+
+
+def _sanitize_value(value: Any, _depth: int = 0) -> Any:
+    """Recursively sanitize a response value (dict, list, str)."""
+    if _depth > 10:  # prevent infinite recursion on deeply nested data
+        return value
+    if isinstance(value, str):
+        return _sanitize_string(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_value(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_value(item, _depth + 1) for item in value]
+    return value
+
+
+def sanitize_response(result: dict) -> dict:
+    """Sanitize a tool response dict before sending to the LLM client.
+
+    Removes:
+    - Prompt injection tokens (<system>, [INST], ###System:, etc.)
+    - Executable code patterns (eval, exec, subprocess)
+    - Plaintext secrets in values (password=xxx, token=xxx)
+
+    Safe on tool error responses — returns them unchanged structurally,
+    only scanning string content within them.
+    """
+    if not isinstance(result, dict):
+        return result
+    return _sanitize_value(result)
 
 _log = logging.getLogger("wazuh_mcp.audit")
 
