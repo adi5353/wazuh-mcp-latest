@@ -161,19 +161,29 @@ def register(mcp, wz, cfg):
         }
 
     @mcp.tool()
-    async def push_custom_rule(xml_content: str, dry_run: bool = True) -> dict:
+    async def push_custom_rule(
+        xml_content: str,
+        filename: str = "custom_rules.xml",
+        dry_run: bool = True,
+    ) -> dict:
         """Push validated rule XML to the Wazuh Manager's custom rules file.
 
         Validates the XML locally first. If valid, uploads to
-        /var/ossec/etc/rules/custom_rules.xml via Manager API.
+        /var/ossec/etc/rules/<filename> via Manager API (PUT with overwrite=true).
 
         xml_content: Complete XML rule group (must include <group> wrapper).
+        filename:    Target filename under etc/rules/ (default: custom_rules.xml).
         dry_run=True (default): validate only, do not push.
         Requires role: admin. Requires WAZUH_ALLOW_WRITES=true.
         """
         err = admin_only()
         if err:
             return err
+
+        # Sanitise filename — only alphanumeric, hyphens, underscores, dots
+        import re as _re
+        if not _re.match(r'^[\w\-\.]+\.xml$', filename):
+            return {"error": "filename must be a simple .xml filename with no path separators."}
 
         # Validate first
         validation = await validate_rule_xml(xml_content)
@@ -189,29 +199,120 @@ def register(mcp, wz, cfg):
                 "valid": True,
                 "warnings": validation.get("warnings", []),
                 "rules_found": validation.get("rules_found", 0),
+                "target_file": filename,
                 "message": (
-                    "DRY RUN: XML is valid. Set dry_run=False to push to "
-                    "custom_rules.xml on the Wazuh Manager."
+                    f"DRY RUN: XML is valid. Set dry_run=False to push to "
+                    f"etc/rules/{filename} on the Wazuh Manager."
                 ),
             }
 
-        # Push to Manager
+        # Push to Manager using dedicated file-upload method
         try:
-            result = await wz.request(
-                "PUT",
-                "/rules/files/custom_rules.xml",
-                data=xml_content.encode(),
-                headers={"Content-Type": "application/xml"},
+            result = await wz.upload_xml_file(
+                f"/rules/files/{filename}",
+                xml_content,
+                overwrite=True,
             )
         except Exception as exc:
             return {"error": f"Failed to push rule to Manager: {exc}"}
 
         return {
             "success": True,
+            "target_file": filename,
             "warnings": validation.get("warnings", []),
             "rules_found": validation.get("rules_found", 0),
             "manager_response": result,
             "next_step": (
-                "The rule is now active. Use search_rules or test_rule_coverage to verify."
+                "The rule is now active. Use search_rules or test_rule_coverage to verify detection."
+            ),
+        }
+
+    @mcp.tool()
+    async def push_custom_decoder(
+        xml_content: str,
+        filename: str = "custom_decoders.xml",
+        dry_run: bool = True,
+    ) -> dict:
+        """Push a custom decoder XML file to the Wazuh Manager.
+
+        Validates the XML locally first. If valid, uploads to
+        /var/ossec/etc/decoders/<filename> via Manager API (PUT with overwrite=true).
+
+        xml_content: Complete XML decoder group (must include <decoder> elements).
+        filename:    Target filename under etc/decoders/ (default: custom_decoders.xml).
+        dry_run=True (default): validate only, do not push.
+        Requires role: admin. Requires WAZUH_ALLOW_WRITES=true.
+
+        Decoder XML example:
+            <decoder name="my-app">
+              <prematch>^MyApp </prematch>
+            </decoder>
+            <decoder name="my-app-fields">
+              <parent>my-app</parent>
+              <regex>user=(\\S+) action=(\\S+)</regex>
+              <order>user, action</order>
+            </decoder>
+        """
+        err = admin_only()
+        if err:
+            return err
+
+        import re as _re
+        if not _re.match(r'^[\w\-\.]+\.xml$', filename):
+            return {"error": "filename must be a simple .xml filename with no path separators."}
+
+        if not xml_content or not xml_content.strip():
+            return {"error": "xml_content must not be empty."}
+
+        # Validate XML structure
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(xml_content.strip())
+        except ET.ParseError as exc:
+            return {"valid": False, "error": f"XML parse error: {exc}"}
+
+        # Check for <decoder> elements
+        decoders = list(root.iter("decoder")) if root.tag != "decoder" else [root]
+        if not decoders:
+            return {
+                "error": "No <decoder> elements found in XML. "
+                         "Decoder XML must contain at least one <decoder name='...'> element."
+            }
+
+        warnings = []
+        for d in decoders:
+            if not d.get("name"):
+                warnings.append("A <decoder> element is missing the required 'name' attribute.")
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "valid": True,
+                "decoders_found": len(decoders),
+                "warnings": warnings,
+                "target_file": filename,
+                "message": (
+                    f"DRY RUN: XML is valid ({len(decoders)} decoder(s) found). "
+                    f"Set dry_run=False to push to etc/decoders/{filename}."
+                ),
+            }
+
+        try:
+            result = await wz.upload_xml_file(
+                f"/decoders/files/{filename}",
+                xml_content,
+                overwrite=True,
+            )
+        except Exception as exc:
+            return {"error": f"Failed to push decoder to Manager: {exc}"}
+
+        return {
+            "success": True,
+            "target_file": filename,
+            "decoders_found": len(decoders),
+            "warnings": warnings,
+            "manager_response": result,
+            "next_step": (
+                "The decoder is now active. Use test_log_against_rules to verify it parses logs correctly."
             ),
         }

@@ -8,6 +8,7 @@ def _make_env():
     mcp = MagicMock()
     mcp.tool = lambda: (lambda fn: tools.__setitem__(fn.__name__, fn) or fn)
     wz = MagicMock()
+    wz.upload_xml_file = AsyncMock()  # dedicated file-upload method
     cfg = MagicMock()
 
     from wazuh_mcp.tools.rule_wizard import register
@@ -133,12 +134,12 @@ class TestPushCustomRule:
             tools["push_custom_rule"]("<bad xml", dry_run=False)
         )
         assert "error" in result
-        wz.request.assert_not_called()
+        wz.upload_xml_file.assert_not_called()
 
-    def test_push_calls_manager_api(self):
+    def test_push_calls_upload_xml_file(self):
         import asyncio
         tools, wz, _ = _make_env()
-        wz.request = AsyncMock(return_value={"data": {"affected_items": ["custom_rules.xml"]}})
+        wz.upload_xml_file = AsyncMock(return_value={"data": {"affected_items": ["custom_rules.xml"]}})
         xml = """<group name="local,">
   <rule id="100001" level="5">
     <description>Test push</description>
@@ -148,4 +149,62 @@ class TestPushCustomRule:
             tools["push_custom_rule"](xml, dry_run=False)
         )
         assert "error" not in result
-        wz.request.assert_called_once()
+        assert result.get("success") is True
+        wz.upload_xml_file.assert_called_once()
+        # Verify it targets the rules endpoint
+        call_args = wz.upload_xml_file.call_args
+        assert "rules/files" in call_args[0][0]
+
+    def test_dangerous_filename_rejected(self):
+        import asyncio
+        tools, wz, _ = _make_env()
+        xml = """<group name="local,"><rule id="100001" level="5"><description>t</description></rule></group>"""
+        result = asyncio.get_event_loop().run_until_complete(
+            tools["push_custom_rule"](xml, filename="../etc/passwd", dry_run=False)
+        )
+        assert "error" in result
+
+
+class TestPushCustomDecoder:
+    def test_dry_run_decoder(self):
+        import asyncio
+        tools, wz, _ = _make_env()
+        xml = """<decoder name="my-app">
+  <prematch>^MyApp </prematch>
+</decoder>"""
+        result = asyncio.get_event_loop().run_until_complete(
+            tools["push_custom_decoder"](xml, dry_run=True)
+        )
+        assert result.get("dry_run") is True
+        assert result.get("decoders_found") == 1
+
+    def test_no_decoder_elements_rejected(self):
+        import asyncio
+        tools, wz, _ = _make_env()
+        xml = """<group name="local,"><rule id="100001" level="5"><description>t</description></rule></group>"""
+        result = asyncio.get_event_loop().run_until_complete(
+            tools["push_custom_decoder"](xml, dry_run=True)
+        )
+        assert "error" in result
+
+    def test_push_decoder_calls_upload_xml_file(self):
+        import asyncio
+        tools, wz, _ = _make_env()
+        wz.upload_xml_file = AsyncMock(return_value={"data": {"affected_items": ["custom_decoders.xml"]}})
+        xml = """<decoder name="my-app">
+  <prematch>^MyApp </prematch>
+</decoder>"""
+        result = asyncio.get_event_loop().run_until_complete(
+            tools["push_custom_decoder"](xml, dry_run=False)
+        )
+        assert result.get("success") is True
+        call_args = wz.upload_xml_file.call_args
+        assert "decoders/files" in call_args[0][0]
+
+    def test_malformed_decoder_xml_rejected(self):
+        import asyncio
+        tools, wz, _ = _make_env()
+        result = asyncio.get_event_loop().run_until_complete(
+            tools["push_custom_decoder"]("<decoder name='unclosed", dry_run=True)
+        )
+        assert "error" in result
