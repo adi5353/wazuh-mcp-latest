@@ -8,7 +8,10 @@ active-response commands.
 """
 from __future__ import annotations
 
+import base64
 import re
+import unicodedata
+import urllib.parse
 from typing import Any
 
 # ── Hard limits ───────────────────────────────────────────────────────────────
@@ -45,21 +48,46 @@ _INJECTION_CHECKS: list[tuple[re.Pattern, str]] = [
 ]
 
 
-def sanitize_input_string(value: str, field: str = "input") -> str:
-    """Screen a single string parameter.
+def _normalize(s: str) -> str:
+    """NFKC-normalize + collapse whitespace to defeat homoglyph and newline tricks."""
+    normalized = unicodedata.normalize("NFKC", s)
+    return re.sub(r"\s+", " ", normalized)
 
-    Raises ValueError if the value exceeds the length cap or matches
-    any injection pattern.  Returns the original value unchanged when
-    all checks pass — no silent mutation of caller-provided data.
+
+def _decode_variants(s: str) -> list[str]:
+    """Return original + URL-decoded + base64-decoded variants for multi-layer checking."""
+    variants = [s, urllib.parse.unquote(s)]
+    try:
+        decoded = base64.b64decode(s + "==").decode("utf-8", errors="ignore")
+        if decoded and decoded != s:
+            variants.append(decoded)
+    except Exception:
+        pass
+    return variants
+
+
+def sanitize_input_string(value: str, field: str = "input") -> str:
+    """Screen a single string parameter with defense-in-depth injection detection.
+
+    Layers applied in order:
+      1. Length cap
+      2. Unicode NFKC normalization + whitespace collapse (defeats homoglyphs)
+      3. URL-decode and base64-decode variants checked against injection patterns
+      4. Pattern check on normalized form
+
+    Raises ValueError on any violation. Returns original value unchanged when clean.
     """
     if len(value) > MAX_STRING_LEN:
         raise ValueError(
             f"'{field}' exceeds maximum allowed length of {MAX_STRING_LEN} chars "
             f"(got {len(value)})"
         )
-    for pattern, label in _INJECTION_CHECKS:
-        if pattern.search(value):
-            raise ValueError(f"'{field}' contains disallowed pattern: {label}")
+    # Check all variants: original, normalized, URL-decoded, base64-decoded
+    normalized = _normalize(value)
+    for variant in _decode_variants(value) + [normalized]:
+        for pattern, label in _INJECTION_CHECKS:
+            if pattern.search(variant):
+                raise ValueError(f"'{field}' contains disallowed pattern: {label}")
     return value
 
 

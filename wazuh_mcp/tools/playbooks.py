@@ -78,6 +78,9 @@ _BUILTIN_PLAYBOOKS = [
     },
 ]
 
+from ..state_store import save_run, load_run, list_recent_runs
+
+# In-memory cache — persisted to disk via state_store on every write
 _RUN_HISTORY: dict[str, dict] = {}
 
 
@@ -91,7 +94,18 @@ def _resolve_params(params: dict, variables: dict) -> dict:
     return resolved
 
 
-def register(mcp, wz, idx, cfg):
+def _save(record: dict) -> None:
+    _RUN_HISTORY[record["run_id"]] = record
+    save_run(record["run_id"], record)
+
+
+def _load(run_id: str) -> dict | None:
+    if run_id in _RUN_HISTORY:
+        return _RUN_HISTORY[run_id]
+    return load_run(run_id)
+
+
+def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
 
     def _get_playbook(playbook_id: str) -> dict | None:
         for pb in _BUILTIN_PLAYBOOKS:
@@ -180,9 +194,12 @@ def register(mcp, wz, idx, cfg):
                     }
                     for i, step in enumerate(pb["steps"])
                 ],
-                "message": "Dry run only — no actions taken. Use this run_id with get_playbook_status. Set dry_run=False to execute.",
+                "message": (
+                    "Dry run only — no actions taken. "
+                    "Set dry_run=False to execute with real tool chaining."
+                ),
             }
-            _RUN_HISTORY[run_id] = preview
+            _save(preview)
             return preview
 
         run_id = str(uuid.uuid4())[:8]
@@ -195,18 +212,21 @@ def register(mcp, wz, idx, cfg):
             "status": "running",
             "steps": [],
         }
-        _RUN_HISTORY[run_id] = run_record
+        _save(run_record)
 
         approval_gate = pb.get("approval_before_step")
+        registry = tool_registry or {}
+
         for i, step in enumerate(pb["steps"]):
             if approval_gate is not None and i == approval_gate:
                 run_record["status"] = "awaiting_approval"
                 run_record["paused_at_step"] = i
                 run_record["message"] = (
-                    f"Paused at step {i+1} (approval gate). "
-                    "Review results and invoke step manually."
+                    f"Paused at step {i+1} '{step['name']}' (approval gate). "
+                    "Review results above then call resume_playbook(run_id, approved=True) to continue."
                 )
-                break
+                _save(run_record)
+                return run_record
 
             resolved = _resolve_params(step["params"], variables)
             step_result: dict[str, Any] = {
@@ -215,15 +235,50 @@ def register(mcp, wz, idx, cfg):
                 "tool": step["tool"],
                 "params": resolved,
                 "started_at": datetime.now(timezone.utc).isoformat(),
-                "status": "completed",
-                "note": "Step recorded — invoke the tool separately for full output.",
             }
+
+            fn = registry.get(step["tool"])
+            if fn is None:
+                step_result["status"] = "skipped"
+                step_result["note"] = f"Tool '{step['tool']}' not in registry — call manually."
+            else:
+                try:
+                    output = await asyncio.wait_for(fn(**resolved), timeout=30)
+                    step_result["status"] = "completed"
+                    step_result["output"] = output
+                    # Stop playbook if a step returns an error to prevent destructive follow-on steps
+                    if isinstance(output, dict) and "error" in output:
+                        step_result["status"] = "failed"
+                        run_record["steps"].append(step_result)
+                        run_record["status"] = "failed"
+                        run_record["failed_at_step"] = i + 1
+                        run_record["error"] = output["error"]
+                        _save(run_record)
+                        return run_record
+                except asyncio.TimeoutError:
+                    step_result["status"] = "timeout"
+                    step_result["error"] = f"Tool '{step['tool']}' timed out after 30s"
+                    run_record["steps"].append(step_result)
+                    run_record["status"] = "failed"
+                    run_record["failed_at_step"] = i + 1
+                    _save(run_record)
+                    return run_record
+                except Exception as exc:
+                    step_result["status"] = "failed"
+                    step_result["error"] = str(exc)
+                    run_record["steps"].append(step_result)
+                    run_record["status"] = "failed"
+                    run_record["failed_at_step"] = i + 1
+                    _save(run_record)
+                    return run_record
+
             run_record["steps"].append(step_result)
 
         if run_record["status"] == "running":
             run_record["status"] = "completed"
             run_record["completed_at"] = datetime.now(timezone.utc).isoformat()
 
+        _save(run_record)
         return run_record
 
     @mcp.tool()
@@ -233,10 +288,85 @@ def register(mcp, wz, idx, cfg):
         run_id: returned by run_playbook (both dry_run=True and dry_run=False).
         Dry-run records have status='dry_run_preview'.
         """
-        record = _RUN_HISTORY.get(run_id)
+        record = _load(run_id)
         if not record:
+            recent = list_recent_runs(5)
             return {
                 "error": f"Run ID '{run_id}' not found.",
-                "recent_run_ids": list(_RUN_HISTORY.keys())[-5:],
+                "recent_runs": recent,
             }
+        return record
+
+    @mcp.tool()
+    async def resume_playbook(run_id: str, approved: bool = False) -> dict:
+        """Resume a playbook that is paused at an approval gate.
+
+        run_id: the run ID from run_playbook.
+        approved=True: continue execution past the gate.
+        approved=False: abort the playbook.
+        """
+        record = _load(run_id)
+        if not record:
+            return {"error": f"Run ID '{run_id}' not found."}
+        if record.get("status") != "awaiting_approval":
+            return {
+                "error": f"Playbook '{run_id}' is not awaiting approval.",
+                "current_status": record.get("status"),
+            }
+        if not approved:
+            record["status"] = "aborted"
+            record["aborted_at"] = datetime.now(timezone.utc).isoformat()
+            _save(record)
+            return {"status": "aborted", "run_id": run_id}
+
+        pb = _get_playbook(record["playbook"])
+        if pb is None:
+            return {"error": f"Playbook definition for '{record['playbook']}' not found."}
+
+        registry = tool_registry or {}
+        paused_at = record.get("paused_at_step", len(record["steps"]))
+        variables = record.get("variables", {})
+        record["status"] = "running"
+        record.pop("message", None)
+        record.pop("paused_at_step", None)
+
+        for i, step in enumerate(pb["steps"]):
+            if i <= paused_at - 1:
+                continue  # already completed
+            resolved = _resolve_params(step["params"], variables)
+            step_result: dict[str, Any] = {
+                "step": i + 1,
+                "name": step["name"],
+                "tool": step["tool"],
+                "params": resolved,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+            fn = registry.get(step["tool"])
+            if fn is None:
+                step_result["status"] = "skipped"
+                step_result["note"] = f"Tool '{step['tool']}' not in registry."
+            else:
+                try:
+                    output = await asyncio.wait_for(fn(**resolved), timeout=30)
+                    step_result["status"] = "completed"
+                    step_result["output"] = output
+                    if isinstance(output, dict) and "error" in output:
+                        step_result["status"] = "failed"
+                        record["steps"].append(step_result)
+                        record["status"] = "failed"
+                        record["error"] = output["error"]
+                        _save(record)
+                        return record
+                except Exception as exc:
+                    step_result["status"] = "failed"
+                    step_result["error"] = str(exc)
+                    record["steps"].append(step_result)
+                    record["status"] = "failed"
+                    _save(record)
+                    return record
+            record["steps"].append(step_result)
+
+        record["status"] = "completed"
+        record["completed_at"] = datetime.now(timezone.utc).isoformat()
+        _save(record)
         return record

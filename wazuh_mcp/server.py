@@ -39,7 +39,8 @@ from mcp.server.fastmcp import FastMCP
 from .audit import audit_logger, sanitize_response, cap_response_size, _sanitize_string
 from .input_sanitizer import sanitize_input_value
 from .config import Config
-from .rbac import _current_role, _ROLE_NAMES
+from .identity import resolve_role_for_key, set_session_role, record_injection_attempt
+from .rbac import _current_role, _ROLE_NAMES, ROLE, _NAME_TO_ROLE
 from .rate_limit import RateLimitMiddleware
 from .helpers import trim_alert, trim_vuln, severities_at_or_above, time_window
 from .wazuh_client import WazuhClient
@@ -116,7 +117,11 @@ def _sanitizing_tool_decorator(*args, **kwargs):
                 try:
                     clean_kwargs[field] = sanitize_input_value(value, field)
                 except ValueError as exc:
-                    return {"error": f"Input rejected: {exc}"}
+                    locked_out = record_injection_attempt()
+                    msg = f"Input rejected: {exc}"
+                    if locked_out:
+                        msg += " [session locked to VIEWER after repeated violations]"
+                    return {"error": msg}
 
             # ── Tool execution ────────────────────────────────────────────────
             result = await fn(*fn_args, **clean_kwargs)
@@ -142,6 +147,28 @@ def _sanitizing_tool_decorator(*args, **kwargs):
 
 
 mcp.tool = _sanitizing_tool_decorator  # type: ignore[method-assign]
+
+# ── Tool registry for playbook engine (Gap 3) ─────────────────────────────────
+# Maps tool_name → async callable so run_playbook can invoke tools directly.
+_TOOL_REGISTRY: dict[str, Any] = {}
+_original_tool_for_registry = mcp.tool
+
+
+def _registry_capturing_tool(*args, **kwargs):
+    """Wrap mcp.tool() to capture each registered function by name."""
+    decorator = _original_tool_for_registry(*args, **kwargs)
+
+    def capturing_decorator(fn):
+        result = decorator(fn)
+        import functools
+        # The original fn name is the tool name used in playbook steps
+        _TOOL_REGISTRY[fn.__name__] = fn
+        return result
+
+    return capturing_decorator
+
+
+mcp.tool = _registry_capturing_tool  # type: ignore[method-assign]
 
 # ── Domain tool modules ────────────────────────────────────────────────────────
 from .tools import agents as _agents_module  # noqa: E402
@@ -337,9 +364,9 @@ _rule_wizard_module.register(mcp, wz, cfg)
 _workspaces_module.register(mcp, cfg)
 _geo_intel_module.register(mcp, wz, idx, cfg)
 _threat_feeds_module.register(mcp, wz, idx, cfg, _require_writes)
-_playbooks_module.register(mcp, wz, idx, cfg)
+_playbooks_module.register(mcp, wz, idx, cfg, tool_registry=_TOOL_REGISTRY)
 _net_topology_module.register(mcp, wz, idx, cfg, _cap)
-_autonomous_soc_module.register(mcp, wz, idx, cfg)
+_autonomous_soc_module.register(mcp, wz, idx, cfg, tool_registry=_TOOL_REGISTRY)
 _baseline_module.register(mcp, wz, idx, cfg, _cap)
 _ueba_module.register(mcp, wz, idx, cfg, _cap)
 _scheduler_module.register(mcp, wz, idx, cfg)
@@ -356,6 +383,35 @@ _servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _health_check_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+
+
+# ── Session identity tool (Gap 1) ─────────────────────────────────────────────
+
+@mcp.tool()
+async def set_session_role_tool(api_key: str) -> dict:
+    """Authenticate this session with an API key and bind its role.
+
+    Configure API keys via WAZUH_MCP_KEY_MAP env var:
+        WAZUH_MCP_KEY_MAP=viewer:key_abc,analyst:key_def,admin:key_xyz
+
+    If WAZUH_MCP_KEY_MAP is not set, this tool has no effect and the server
+    falls back to WAZUH_MCP_USER_ROLE (single-user mode).
+    """
+    role = resolve_role_for_key(api_key)
+    if role is None:
+        return {
+            "error": "Unknown API key. Configure WAZUH_MCP_KEY_MAP or check your key.",
+            "hint": "Format: WAZUH_MCP_KEY_MAP=viewer:key1,analyst:key2,admin:key3",
+        }
+    set_session_role(role)
+    role_name = {ROLE.VIEWER: "viewer", ROLE.ANALYST: "analyst",
+                 ROLE.RESPONDER: "responder", ROLE.ADMIN: "admin"}.get(role, "analyst")
+    return {
+        "status": "ok",
+        "role": role_name,
+        "message": f"Session authenticated as '{role_name}'.",
+    }
+
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
@@ -563,6 +619,42 @@ def main() -> None:
         "Starting Wazuh MCP server — transport=%s host=%s port=%s writes=%s manager=%s indexer=%s",
         transport, host, port, cfg.allow_writes, cfg.manager_host, cfg.indexer_host,
     )
+
+    # ── Auto-resume autonomous monitor if it was running before restart (Gap 2) ──
+    from .state_store import load_monitor_state
+    _saved_monitor = load_monitor_state()
+    if _saved_monitor and _saved_monitor.get("running"):
+        log.info(
+            "Autonomous SOC monitor was active before restart — auto-resuming "
+            "(interval=%ds threshold=%d)",
+            _saved_monitor.get("interval_seconds", 60),
+            _saved_monitor.get("severity_threshold", 10),
+        )
+        import asyncio as _asyncio
+        from .tools.autonomous_soc import _monitor_state, _monitor_loop
+        _monitor_state.update({
+            "running": True,
+            "interval_seconds": _saved_monitor.get("interval_seconds", 60),
+            "severity_threshold": _saved_monitor.get("severity_threshold", 10),
+            "started_at": _saved_monitor.get("started_at"),
+            "alerts_processed": _saved_monitor.get("alerts_processed", 0),
+            "actions_taken": _saved_monitor.get("actions_taken", 0),
+            "seen_alert_ids": _saved_monitor.get("seen_alert_ids", []),
+            "recent_actions": [],
+        })
+        try:
+            loop = _asyncio.get_event_loop()
+            task = loop.create_task(
+                _monitor_loop(
+                    wz, idx, cfg,
+                    _saved_monitor.get("interval_seconds", 60),
+                    _saved_monitor.get("severity_threshold", 10),
+                    tool_registry=_TOOL_REGISTRY,
+                )
+            )
+            _monitor_state["task"] = task
+        except RuntimeError:
+            log.warning("Could not auto-resume monitor — no running event loop at startup")
 
     if transport == "http":
         import uvicorn
