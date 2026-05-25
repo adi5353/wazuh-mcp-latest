@@ -190,6 +190,7 @@ from .tools import rootcheck as _rootcheck_module  # noqa: E402
 from .tools import servicenow as _servicenow_module  # noqa: E402
 from .tools import syslog_config as _syslog_config_module  # noqa: E402
 from .tools import health_check as _health_check_module  # noqa: E402
+from .tools import prompt_advisor as _prompt_advisor_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -354,6 +355,7 @@ _rootcheck_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _health_check_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
