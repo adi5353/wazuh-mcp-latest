@@ -14,12 +14,12 @@ _SOAR_TIMEOUT = 15
 
 def register(mcp, wz, idx, cfg):
 
-    _JIRA_URL     = os.getenv("JIRA_URL", "")
-    _JIRA_USER    = os.getenv("JIRA_USER", "")
-    _JIRA_TOKEN   = os.getenv("JIRA_API_TOKEN", "")
-    _JIRA_PROJECT = os.getenv("JIRA_PROJECT_KEY", "SOC")
-    _THEHIVE_URL  = os.getenv("THEHIVE_URL", "")
-    _THEHIVE_KEY  = os.getenv("THEHIVE_API_KEY", "")
+    def _jira_url()     -> str: return os.getenv("JIRA_URL", "")
+    def _jira_user()    -> str: return os.getenv("JIRA_USER", "")
+    def _jira_token()   -> str: return os.getenv("JIRA_API_TOKEN", "")
+    def _jira_project() -> str: return os.getenv("JIRA_PROJECT_KEY", "SOC")
+    def _thehive_url()  -> str: return os.getenv("THEHIVE_URL", "")
+    def _thehive_key()  -> str: return os.getenv("THEHIVE_API_KEY", "")
 
     @mcp.tool()
     async def create_jira_ticket(
@@ -40,7 +40,10 @@ def register(mcp, wz, idx, cfg):
         assignee: Jira accountId (not email) — find in Jira user profile URL.
         Requires JIRA_URL, JIRA_USER, JIRA_API_TOKEN in .env.
         """
-        if not _JIRA_URL or not _JIRA_TOKEN:
+        jira_url   = _jira_url()
+        jira_user  = _jira_user()
+        jira_token = _jira_token()
+        if not jira_url or not jira_token:
             return {
                 "error": "Jira not configured. Add JIRA_URL, JIRA_USER, JIRA_API_TOKEN to .env."
             }
@@ -64,7 +67,7 @@ def register(mcp, wz, idx, cfg):
 
         payload: dict = {
             "fields": {
-                "project":     {"key": _JIRA_PROJECT},
+                "project":     {"key": _jira_project()},
                 "summary":     title,
                 "description": "\n".join(body_lines),
                 "issuetype":   {"name": "Bug"},
@@ -78,15 +81,15 @@ def register(mcp, wz, idx, cfg):
         try:
             async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
                 r = await client.post(
-                    f"{_JIRA_URL.rstrip('/')}/rest/api/2/issue",
+                    f"{jira_url.rstrip('/')}/rest/api/2/issue",
                     json=payload,
-                    auth=(_JIRA_USER, _JIRA_TOKEN),
+                    auth=(jira_user, jira_token),
                     headers={"Content-Type": "application/json"},
                 )
             r.raise_for_status()
             data      = r.json()
             issue_key = data.get("key", "")
-            issue_url = f"{_JIRA_URL.rstrip('/')}/browse/{issue_key}"
+            issue_url = f"{jira_url.rstrip('/')}/browse/{issue_key}"
             log.info("Created Jira issue %s for: %s", issue_key, title)
             return {
                 "status":    "ok",
@@ -119,7 +122,9 @@ def register(mcp, wz, idx, cfg):
         pap: 0=WHITE 1=GREEN 2=AMBER 3=RED (default AMBER)
         Requires THEHIVE_URL and THEHIVE_API_KEY in .env.
         """
-        if not _THEHIVE_URL or not _THEHIVE_KEY:
+        thehive_url = _thehive_url()
+        thehive_key = _thehive_key()
+        if not thehive_url or not thehive_key:
             return {
                 "error": "TheHive not configured. Add THEHIVE_URL, THEHIVE_API_KEY to .env."
             }
@@ -162,10 +167,10 @@ def register(mcp, wz, idx, cfg):
         try:
             async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
                 r = await client.post(
-                    f"{_THEHIVE_URL.rstrip('/')}/api/v1/case",
+                    f"{thehive_url.rstrip('/')}/api/v1/case",
                     json=payload,
                     headers={
-                        "Authorization":  f"Bearer {_THEHIVE_KEY}",
+                        "Authorization":  f"Bearer {thehive_key}",
                         "Content-Type":   "application/json",
                     },
                 )
@@ -173,7 +178,7 @@ def register(mcp, wz, idx, cfg):
             data     = r.json()
             case_id  = data.get("_id", "")
             case_num = data.get("caseId", "")
-            case_url = f"{_THEHIVE_URL.rstrip('/')}/cases/{case_id}"
+            case_url = f"{thehive_url.rstrip('/')}/cases/{case_id}"
             log.info("Created TheHive case #%s (%s) for: %s", case_num, case_id, title)
             return {
                 "status":   "ok",
@@ -201,15 +206,18 @@ def register(mcp, wz, idx, cfg):
         resolution: e.g. 'Fixed', 'Won\\'t Fix', 'Duplicate' (used when closing).
         Requires JIRA_URL, JIRA_USER, JIRA_API_TOKEN in .env.
         """
-        if not _JIRA_URL or not _JIRA_TOKEN:
+        jira_url   = _jira_url()
+        jira_user  = _jira_user()
+        jira_token = _jira_token()
+        if not jira_url or not jira_token:
             return {
                 "error": "Jira not configured. Add JIRA_URL, JIRA_USER, JIRA_API_TOKEN to .env."
             }
         try:
             async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
                 tr_r = await client.get(
-                    f"{_JIRA_URL.rstrip('/')}/rest/api/2/issue/{issue_key}/transitions",
-                    auth=(_JIRA_USER, _JIRA_TOKEN),
+                    f"{jira_url.rstrip('/')}/rest/api/2/issue/{issue_key}/transitions",
+                    auth=(jira_user, jira_token),
                 )
                 tr_r.raise_for_status()
                 transitions = tr_r.json().get("transitions", [])
@@ -235,9 +243,9 @@ def register(mcp, wz, idx, cfg):
 
             async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
                 do_r = await client.post(
-                    f"{_JIRA_URL.rstrip('/')}/rest/api/2/issue/{issue_key}/transitions",
+                    f"{jira_url.rstrip('/')}/rest/api/2/issue/{issue_key}/transitions",
                     json=tr_payload,
-                    auth=(_JIRA_USER, _JIRA_TOKEN),
+                    auth=(jira_user, jira_token),
                     headers={"Content-Type": "application/json"},
                 )
             do_r.raise_for_status()
@@ -246,7 +254,7 @@ def register(mcp, wz, idx, cfg):
                 "status":     "ok",
                 "issue_key":  issue_key,
                 "new_status": new_status,
-                "issue_url":  f"{_JIRA_URL.rstrip('/')}/browse/{issue_key}",
+                "issue_url":  f"{jira_url.rstrip('/')}/browse/{issue_key}",
                 "message":    f"{issue_key} transitioned to '{new_status}'.",
             }
         except httpx.HTTPStatusError as e:

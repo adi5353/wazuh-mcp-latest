@@ -51,6 +51,7 @@ class WazuhClient:
         self.cfg = cfg
         self._token: Optional[str] = None
         self._token_expires: float = 0.0
+        self._login_lock = asyncio.Lock()
         # Use CA bundle when provided, otherwise fall back to verify_ssl flag.
         self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
 
@@ -83,7 +84,9 @@ class WazuhClient:
 
     async def _request_once(self, method: str, path: str, **kwargs: Any) -> dict:
         if not self._token or time.time() > self._token_expires:
-            await self._login()
+            async with self._login_lock:
+                if not self._token or time.time() > self._token_expires:
+                    await self._login()
 
         async def do_call(client: httpx.AsyncClient) -> httpx.Response:
             return await client.request(
@@ -123,7 +126,9 @@ class WazuhClient:
 
     async def _upload_xml_once(self, path: str, xml_content: str, overwrite: bool) -> dict:
         if not self._token or time.time() > self._token_expires:
-            await self._login()
+            async with self._login_lock:
+                if not self._token or time.time() > self._token_expires:
+                    await self._login()
 
         url = f"{self.cfg.manager_host}{path}"
         if overwrite and "overwrite" not in path:

@@ -48,7 +48,12 @@ _ROLE_NAMES: dict[ROLE, str] = {v: k for k, v in _NAME_TO_ROLE.items()}
 
 
 def _current_role() -> ROLE:
-    """Read the effective role from env; default analyst."""
+    """Return the effective role: task-local identity first, env var fallback."""
+    try:
+        from .identity import effective_role
+        return effective_role()
+    except ImportError:
+        pass
     raw = os.getenv("WAZUH_MCP_USER_ROLE", "analyst").strip().lower()
     return _NAME_TO_ROLE.get(raw, ROLE.ANALYST)
 

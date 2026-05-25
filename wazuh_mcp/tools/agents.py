@@ -15,7 +15,9 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes):
         """
         url = f"/agents?status={status}&limit={_cap(limit)}"
         if group_filter:
-            url += f"&group={group_filter}"
+            # Strip characters that could break the query string
+            safe_group = "".join(c for c in group_filter if c.isalnum() or c in ("-", "_"))
+            url += f"&group={safe_group}"
         return await wz.request("GET", url)
 
     @mcp.tool()

@@ -195,9 +195,18 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incid
         if blocked:
             return blocked
 
-        update_url = (
-            f"{cfg.indexer_host}/{os.getenv('WAZUH_ALERTS_INDEX', 'wazuh-alerts-*')}/_update/{alert_id}"
-        )
+        # Resolve the concrete index for this alert — wildcard indices don't support _update.
+        resolve_body = {"size": 1, "query": {"term": {"_id": alert_id}}, "_source": False}
+        try:
+            resolved_res = await idx.search(resolve_body)
+            hits = resolved_res.get("hits", {}).get("hits", [])
+            if not hits:
+                return {"error": f"Alert {alert_id} not found in index."}
+            concrete_index = hits[0]["_index"]
+        except Exception as e:
+            return {"error": f"Failed to resolve alert index: {e}"}
+
+        update_url = f"{cfg.indexer_host}/{concrete_index}/_update/{alert_id}"
         payload = {
             "doc": {
                 "analyst_tag": tag,
@@ -256,7 +265,7 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incid
         if blocked:
             return blocked
 
-        alerts_index = os.getenv("WAZUH_ALERTS_INDEX", "wazuh-alerts-4.x-*")
+        alerts_index = cfg.alerts_index
         ubq_url = f"{cfg.indexer_host}/{alerts_index}/_update_by_query"
         ubq_body = {
             "query": count_query["query"],
