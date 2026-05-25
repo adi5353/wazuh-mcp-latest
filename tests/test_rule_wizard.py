@@ -20,7 +20,7 @@ class TestGenerateRuleXML:
     def test_generates_xml_with_description(self):
         import asyncio
         tools, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["generate_rule_xml"](
                 description="Alert when SSH login fails more than 5 times",
                 rule_id=100001,
@@ -33,7 +33,7 @@ class TestGenerateRuleXML:
     def test_rule_id_out_of_range_rejected(self):
         import asyncio
         tools, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["generate_rule_xml"](
                 description="Test rule",
                 rule_id=999,  # below 100000
@@ -44,7 +44,7 @@ class TestGenerateRuleXML:
     def test_empty_description_rejected(self):
         import asyncio
         tools, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["generate_rule_xml"](
                 description="",
                 rule_id=100002,
@@ -55,7 +55,7 @@ class TestGenerateRuleXML:
     def test_description_too_long_rejected(self):
         import asyncio
         tools, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["generate_rule_xml"](
                 description="x" * 1001,
                 rule_id=100003,
@@ -74,7 +74,7 @@ class TestValidateRuleXML:
     <description>SSH brute force attempt</description>
   </rule>
 </group>"""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["validate_rule_xml"](xml)
         )
         assert result.get("valid") is True
@@ -83,7 +83,7 @@ class TestValidateRuleXML:
         import asyncio
         tools, _, _ = _make_env()
         xml = "<rule id='100001' level='5'><description>Unclosed"
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["validate_rule_xml"](xml)
         )
         assert result.get("valid") is False
@@ -96,7 +96,7 @@ class TestValidateRuleXML:
   <rule id="100001" level="5">
   </rule>
 </group>"""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["validate_rule_xml"](xml)
         )
         # Should at least parse (valid XML) but warn about missing description
@@ -107,7 +107,7 @@ class TestValidateRuleXML:
     def test_empty_xml_rejected(self):
         import asyncio
         tools, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["validate_rule_xml"]("")
         )
         assert "error" in result
@@ -116,21 +116,23 @@ class TestValidateRuleXML:
 class TestPushCustomRule:
     def test_dry_run_returns_preview(self):
         import asyncio
+        from unittest.mock import patch
         tools, wz, _ = _make_env()
         xml = """<group name="local,">
   <rule id="100001" level="5">
     <description>Test</description>
   </rule>
 </group>"""
-        result = asyncio.get_event_loop().run_until_complete(
-            tools["push_custom_rule"](xml, dry_run=True)
-        )
+        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+            result = asyncio.run(
+                tools["push_custom_rule"](xml, dry_run=True)
+            )
         assert result.get("dry_run") is True
 
     def test_invalid_xml_rejected_before_push(self):
         import asyncio
         tools, wz, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["push_custom_rule"]("<bad xml", dry_run=False)
         )
         assert "error" in result
@@ -138,6 +140,7 @@ class TestPushCustomRule:
 
     def test_push_calls_upload_xml_file(self):
         import asyncio
+        from unittest.mock import patch
         tools, wz, _ = _make_env()
         wz.upload_xml_file = AsyncMock(return_value={"data": {"affected_items": ["custom_rules.xml"]}})
         xml = """<group name="local,">
@@ -145,9 +148,10 @@ class TestPushCustomRule:
     <description>Test push</description>
   </rule>
 </group>"""
-        result = asyncio.get_event_loop().run_until_complete(
-            tools["push_custom_rule"](xml, dry_run=False)
-        )
+        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+            result = asyncio.run(
+                tools["push_custom_rule"](xml, dry_run=False)
+            )
         assert "error" not in result
         assert result.get("success") is True
         wz.upload_xml_file.assert_called_once()
@@ -159,7 +163,7 @@ class TestPushCustomRule:
         import asyncio
         tools, wz, _ = _make_env()
         xml = """<group name="local,"><rule id="100001" level="5"><description>t</description></rule></group>"""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["push_custom_rule"](xml, filename="../etc/passwd", dry_run=False)
         )
         assert "error" in result
@@ -168,13 +172,15 @@ class TestPushCustomRule:
 class TestPushCustomDecoder:
     def test_dry_run_decoder(self):
         import asyncio
+        from unittest.mock import patch
         tools, wz, _ = _make_env()
         xml = """<decoder name="my-app">
   <prematch>^MyApp </prematch>
 </decoder>"""
-        result = asyncio.get_event_loop().run_until_complete(
-            tools["push_custom_decoder"](xml, dry_run=True)
-        )
+        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+            result = asyncio.run(
+                tools["push_custom_decoder"](xml, dry_run=True)
+            )
         assert result.get("dry_run") is True
         assert result.get("decoders_found") == 1
 
@@ -182,21 +188,23 @@ class TestPushCustomDecoder:
         import asyncio
         tools, wz, _ = _make_env()
         xml = """<group name="local,"><rule id="100001" level="5"><description>t</description></rule></group>"""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["push_custom_decoder"](xml, dry_run=True)
         )
         assert "error" in result
 
     def test_push_decoder_calls_upload_xml_file(self):
         import asyncio
+        from unittest.mock import patch
         tools, wz, _ = _make_env()
         wz.upload_xml_file = AsyncMock(return_value={"data": {"affected_items": ["custom_decoders.xml"]}})
         xml = """<decoder name="my-app">
   <prematch>^MyApp </prematch>
 </decoder>"""
-        result = asyncio.get_event_loop().run_until_complete(
-            tools["push_custom_decoder"](xml, dry_run=False)
-        )
+        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+            result = asyncio.run(
+                tools["push_custom_decoder"](xml, dry_run=False)
+            )
         assert result.get("success") is True
         call_args = wz.upload_xml_file.call_args
         assert "decoders/files" in call_args[0][0]
@@ -204,7 +212,7 @@ class TestPushCustomDecoder:
     def test_malformed_decoder_xml_rejected(self):
         import asyncio
         tools, wz, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["push_custom_decoder"]("<decoder name='unclosed", dry_run=True)
         )
         assert "error" in result

@@ -295,7 +295,7 @@ class TestRBACOnLogTestTools:
     def test_viewer_blocked_from_test_log(self):
         tools, _ = self._make_rules_tools()
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["test_log_against_rules"]("Jun 2 10:00:00 sshd: error")
             )
         assert "error" in result
@@ -304,7 +304,7 @@ class TestRBACOnLogTestTools:
         tools, wz = self._make_rules_tools()
         wz.request = AsyncMock(return_value={"data": {}})
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "analyst"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["test_log_against_rules"]("Jun 2 10:00:00 sshd: error")
             )
         wz.request.assert_called_once()
@@ -312,7 +312,7 @@ class TestRBACOnLogTestTools:
     def test_viewer_blocked_from_test_rule_coverage(self):
         tools, _ = self._make_rules_tools()
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["test_rule_coverage"](["Jun 2 10:00:00 sshd: error"])
             )
         assert "error" in result
@@ -338,35 +338,35 @@ class TestThreatHuntingValidation:
 
     def test_invalid_time_range_lateral_movement(self):
         tools = self._make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["hunt_lateral_movement"](time_range="../../bad")
         )
         assert "error" in result
 
     def test_invalid_min_targets(self):
         tools = self._make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["hunt_lateral_movement"](time_range="24h", min_targets=-5)
         )
         assert "error" in result
 
     def test_valid_params_accepted(self):
         tools = self._make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["hunt_lateral_movement"](time_range="24h", min_targets=2)
         )
         assert "error" not in result
 
     def test_invalid_time_range_persistence(self):
         tools = self._make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["hunt_persistence_mechanisms"](time_range="bad_range!!!")
         )
         assert "error" in result
 
     def test_invalid_min_event_count_exfil(self):
         tools = self._make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["hunt_data_exfiltration"](time_range="24h", min_event_count=0)
         )
         assert "error" in result
@@ -393,7 +393,7 @@ class TestSuppressionValidation:
 
     def test_invalid_time_range_in_list_suppressed(self):
         tools = self._make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["list_suppressed_rules"](time_range="not_a_range")
         )
         assert "error" in result
@@ -401,7 +401,7 @@ class TestSuppressionValidation:
     def test_invalid_rule_id_in_expire_suppression(self):
         tools = self._make_env()
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["expire_suppression"](rule_id=-99, older_than_hours=24)
             )
         assert "error" in result
@@ -409,7 +409,7 @@ class TestSuppressionValidation:
     def test_invalid_older_than_hours(self):
         tools = self._make_env()
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["expire_suppression"](rule_id=5710, older_than_hours=0)
             )
         assert "error" in result
@@ -442,7 +442,7 @@ class TestMaxBodySizeMiddleware:
 
             await middleware(scope, receive, send)
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
         assert app_called
 
     def test_large_content_length_rejected_with_413(self):
@@ -475,7 +475,7 @@ class TestMaxBodySizeMiddleware:
             await middleware(scope, receive, send)
             return sent
 
-        sent = asyncio.get_event_loop().run_until_complete(run())
+        sent = asyncio.run(run())
         assert not app_called
         statuses = [m.get("status") for m in sent if m.get("type") == "http.response.start"]
         assert 413 in statuses
@@ -494,7 +494,7 @@ class TestMaxBodySizeMiddleware:
         async def run():
             await middleware({"type": "websocket"}, None, None)
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
         assert app_called
 
 

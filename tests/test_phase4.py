@@ -67,7 +67,7 @@ class TestBaseline:
             wz.request.return_value = {"data": {"affected_items": []}}
             result = await reg["compute_agent_baseline"]("999")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_compute_baseline_stores_in_cache(self):
         async def run():
@@ -82,7 +82,7 @@ class TestBaseline:
             result = await reg["compute_agent_baseline"]("001", days=3)
             assert result.get("status") == "baseline_computed"
             assert "001" in bl._BASELINES
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_score_deviation_without_baseline(self):
         async def run():
@@ -90,7 +90,7 @@ class TestBaseline:
             bl._BASELINES.clear()
             result = await reg["score_agent_deviation"]("999")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_list_anomalous_no_baselines(self):
         async def run():
@@ -98,7 +98,7 @@ class TestBaseline:
             bl._BASELINES.clear()
             result = await reg["list_anomalous_agents"]()
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_score_deviation_returns_score(self):
         async def run():
@@ -115,7 +115,7 @@ class TestBaseline:
             assert "deviation_score" in result
             assert "label" in result
             assert 0 <= result["deviation_score"] <= 100
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── F3: UEBA ─────────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ class TestUEBA:
             idx.search.return_value = {"hits": {"hits": [], "total": {"value": 0}}}
             result = await reg["get_user_activity_profile"]("nobody", hours=24)
             assert result["total_events"] == 0
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_get_user_profile_with_events(self):
         async def run():
@@ -186,7 +186,7 @@ class TestUEBA:
             assert result["total_events"] == 2
             assert result["authentication_successes"] == 1
             assert result["authentication_failures"] == 1
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_detect_user_anomalies_query(self):
         async def run():
@@ -198,7 +198,7 @@ class TestUEBA:
             result = await reg["detect_user_anomalies"](hours=24)
             assert "anomalous_users" in result
             assert result["anomalous_users"] == 0
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_list_privileged_escalations_empty(self):
         async def run():
@@ -207,7 +207,7 @@ class TestUEBA:
             result = await reg["list_privileged_escalations"](hours=24)
             assert result["total_escalation_events"] == 0
             assert result["severity"] == "none"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── F5: Scheduler ─────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ class TestScheduler:
             result = await reg["list_report_schedules"]()
             assert "schedules" in result
             assert result["total"] == 0
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_create_schedule_invalid_type(self):
         async def run():
@@ -246,7 +246,7 @@ class TestScheduler:
             with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None):
                 result = await reg["create_report_schedule"]("test", "invalid_type")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_create_schedule_invalid_interval(self):
         async def run():
@@ -256,7 +256,7 @@ class TestScheduler:
                     "test", "daily_summary", interval="biweekly"
                 )
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_create_schedule_success(self):
         async def run():
@@ -271,7 +271,7 @@ class TestScheduler:
             assert result["status"] == "created"
             assert result["report_type"] == "daily_summary"
             assert "schedule_id" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_delete_schedule_not_found(self):
         async def run():
@@ -280,7 +280,7 @@ class TestScheduler:
             with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None):
                 result = await reg["delete_report_schedule"]("nonexistent")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_delete_schedule_success(self):
         async def run():
@@ -294,7 +294,7 @@ class TestScheduler:
                 result = await reg["delete_report_schedule"]("abc123")
             assert result["status"] == "deleted"
             assert "abc123" not in sched._SCHEDULES
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_interval_seconds(self):
         from wazuh_mcp.tools.scheduler import _interval_seconds
@@ -310,7 +310,7 @@ class TestScheduler:
                        return_value={"error": "analyst only"}):
                 result = await reg["create_report_schedule"]("test", "daily_summary")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── F11: Multi-Tenant Group Scoping ──────────────────────────────────────────
@@ -395,7 +395,7 @@ class TestOpenWebUIDoc:
         doc_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "docs", "open-webui-integration.md"
         )
-        with open(doc_path) as f:
+        with open(doc_path, encoding="utf-8") as f:
             content = f.read()
         assert "/sse" in content
         assert "API Key" in content or "api_key" in content.lower() or "X-API-Key" in content
@@ -404,7 +404,7 @@ class TestOpenWebUIDoc:
         doc_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "docs", "open-webui-integration.md"
         )
-        with open(doc_path) as f:
+        with open(doc_path, encoding="utf-8") as f:
             content = f.read()
         assert "Mermaid" in content or "mermaid" in content
 
@@ -412,7 +412,7 @@ class TestOpenWebUIDoc:
         doc_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "docs", "open-webui-integration.md"
         )
-        with open(doc_path) as f:
+        with open(doc_path, encoding="utf-8") as f:
             content = f.read()
         assert "System Prompt" in content or "system_prompt" in content.lower()
 

@@ -53,7 +53,7 @@ class TestGeoIntel:
             geo_intel.register(mcp, None, None, None)
             result = await registered_fn["enrich_ip_extended"]("192.168.1.100")
             assert result["classification"] == "private/rfc1918"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_enrich_ip_extended_public_ip(self):
         async def run():
@@ -80,7 +80,7 @@ class TestGeoIntel:
             assert "datacenter" in result["classification"]
             assert result["is_tor_exit"] is False
             assert result["location"]["country"] == "US"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_enrich_ip_tor_exit_overrides_classification(self):
         async def run():
@@ -103,7 +103,7 @@ class TestGeoIntel:
             assert result["classification"] == "tor-exit-node"
             assert result["risk_level"] == "high"
             assert result["is_tor_exit"] is True
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_classify_ip_infrastructure_private(self):
         async def run():
@@ -119,7 +119,7 @@ class TestGeoIntel:
             geo_intel.register(mcp, None, None, None)
             result = await registered_fn["classify_ip_infrastructure"]("10.10.10.1")
             assert result["classification"] == "private/rfc1918"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── F10: Threat Feeds ─────────────────────────────────────────────────────────
@@ -151,14 +151,14 @@ class TestThreatFeeds:
             assert "feodo" in feed_ids
             assert "urlhaus" in feed_ids
             assert "torstats" in feed_ids
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_sync_unknown_feed_returns_error(self):
         async def run():
             fns, _ = self._register()
             result = await fns["sync_threat_feed"]("nonexistent")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_sync_feed_dry_run_caches_iocs(self):
         async def run():
@@ -171,7 +171,7 @@ class TestThreatFeeds:
             assert result["ioc_count"] == 3
             assert "feodo" in tf_module._FEED_CACHE
             assert tf_module._FEED_CACHE["feodo"]["count"] == 3
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_correlate_requires_cached_feed(self):
         async def run():
@@ -179,7 +179,7 @@ class TestThreatFeeds:
             tf_module._FEED_CACHE.clear()
             result = await fns["correlate_alerts_with_feed"]("feodo")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_correlate_finds_matches(self):
         async def run():
@@ -214,7 +214,7 @@ class TestThreatFeeds:
             result = await reg2["correlate_alerts_with_feed"]("feodo", hours=24)
             assert result["matches_found"] == 1
             assert result["severity"] == "critical"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_parse_feodo_csv(self):
         from wazuh_mcp.tools.threat_feeds import _parse_feodo_csv
@@ -258,14 +258,14 @@ class TestPlaybooks:
             assert "brute-force-response" in ids
             assert "cve-triage" in ids
             assert "incident-response" in ids
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_run_playbook_unknown_returns_error(self):
         async def run():
             fns, _ = self._register()
             result = await fns["run_playbook"]("nonexistent")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_run_playbook_missing_param_returns_error(self):
         async def run():
@@ -273,7 +273,7 @@ class TestPlaybooks:
             result = await fns["run_playbook"]("isolate-compromised-host", dry_run=True)
             assert "error" in result
             assert "agent_id" in str(result)
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_run_playbook_dry_run_shows_steps(self):
         async def run():
@@ -285,7 +285,7 @@ class TestPlaybooks:
             assert "steps" in result
             assert len(result["steps"]) > 0
             assert result["steps"][0]["tool"] == "get_agent"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_run_playbook_dry_run_resolves_params(self):
         async def run():
@@ -296,14 +296,14 @@ class TestPlaybooks:
             assert result["dry_run"] is True
             first_step = result["steps"][0]
             assert "1.2.3.4" in str(first_step["params"])
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_get_playbook_status_not_found(self):
         async def run():
             fns, _ = self._register()
             result = await fns["get_playbook_status"]("nonexistent-run-id")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_run_playbook_live_creates_run_record(self):
         async def run():
@@ -315,7 +315,7 @@ class TestPlaybooks:
             run_id = result["run_id"]
             assert run_id in pb_module._RUN_HISTORY
             assert result["status"] in ("completed", "failed", "awaiting_approval")
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── F1: Network Topology ──────────────────────────────────────────────────────
@@ -369,14 +369,14 @@ class TestNetworkTopology:
             assert "192.168.1.0/24" in subnets
             assert "10.0.1.0/24" in subnets
             assert result["total_agents"] == 3
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_map_subnet_exposure_invalid_subnet(self):
         async def run():
             fns, wz, idx, mod = self._register()
             result = await fns["map_subnet_exposure"]("not-a-subnet")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_map_subnet_exposure_filters_by_subnet(self):
         async def run():
@@ -395,7 +395,7 @@ class TestNetworkTopology:
                 result = await fns["map_subnet_exposure"]("192.168.1.0/24")
             assert result["agents_in_subnet"] == 1
             assert result["nodes"][0]["name"] == "web1"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_get_agent_neighbors_agent_not_found(self):
         async def run():
@@ -403,7 +403,7 @@ class TestNetworkTopology:
             wz.request.return_value = {"data": {"affected_items": []}}
             result = await fns["get_agent_neighbors"]("999")
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── F9-doc: Autonomous SOC Monitor ───────────────────────────────────────────
@@ -433,7 +433,7 @@ class TestAutonomousSOC:
             mod._monitor_state["started_at"] = None
             result = await fns["get_autonomous_status"]()
             assert result["running"] is False
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_stop_monitor_when_not_running(self):
         async def run():
@@ -442,7 +442,7 @@ class TestAutonomousSOC:
             with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None):
                 result = await fns["stop_autonomous_monitor"]()
             assert result["status"] == "not_running"
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_start_monitor_rbac_blocks_non_admin(self):
         async def run():
@@ -452,7 +452,7 @@ class TestAutonomousSOC:
                        return_value={"error": "admin only"}):
                 result = await fns["start_autonomous_monitor"]()
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_start_monitor_returns_started(self):
         async def run():
@@ -469,7 +469,7 @@ class TestAutonomousSOC:
             assert result["status"] == "started"
             assert result["interval_seconds"] == 30
             mod._monitor_state["running"] = False
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
     def test_start_monitor_already_running(self):
         async def run():
             fns, mod = self._register()
@@ -479,7 +479,7 @@ class TestAutonomousSOC:
                 result = await fns["start_autonomous_monitor"]()
             assert result["status"] == "already_running"
             mod._monitor_state["running"] = False
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_status_reflects_state(self):
         async def run():
@@ -494,7 +494,7 @@ class TestAutonomousSOC:
             assert result["alerts_processed"] == 42
             assert result["actions_taken"] == 7
             assert result["severity_threshold"] == 12
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── Module import smoke tests ─────────────────────────────────────────────────
