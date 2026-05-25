@@ -1,4 +1,4 @@
-"""Bulk data export tools — CSV and JSON export of alerts, vulnerabilities, compliance.
+"""Bulk data export tools — CSV export of alerts, vulnerabilities, compliance.
 
 Returns file content as a string. For large exports, combine with the
 workspace tools to save to a file.
@@ -13,7 +13,6 @@ def _to_csv(rows: list[dict], fieldnames: list[str] | None = None) -> str:
     if not rows:
         return ""
     if fieldnames is None:
-        # Union of all keys from all rows
         seen: dict = {}
         for r in rows:
             seen.update(r)
@@ -40,7 +39,7 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
 
         Args:
             time_range: Lookback window (e.g. '24h', '7d').
-            min_level: Minimum Wazuh rule level (1–15, default 7).
+            min_level: Minimum Wazuh rule level (1-15, default 7).
             limit: Maximum rows to export (max 500).
         """
         from ..validators import validate_time_range, validate_min_level

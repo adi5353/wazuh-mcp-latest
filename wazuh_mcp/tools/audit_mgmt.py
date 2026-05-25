@@ -104,7 +104,7 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
                         continue
                     results.append(record)
 
-            results = results[-_cap(limit):]  # last N matching records
+            results = results[-_cap(limit):]
             return {
                 "total_matching": len(results),
                 "records": results,

@@ -42,21 +42,13 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
             server: Hostname or IP of the syslog destination.
             port: UDP/TCP port (default 514).
         """
-        from ..validators import validate_ip_address
-        try:
-            validate_ip_address(server)
-        except ValueError:
-            pass  # allow hostnames too
-
         results: dict = {"server": server, "port": port}
-        # TCP probe
         try:
             sock = socket.create_connection((server, port), timeout=3)
             sock.close()
             results["tcp"] = "reachable"
         except OSError as e:
             results["tcp"] = f"unreachable ({e})"
-        # UDP probe (best-effort — always appears open)
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(2)
