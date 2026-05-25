@@ -627,3 +627,100 @@ class TestWazuhApiHealth:
         result = _run(self.tools["get_wazuh_api_health"]())
         assert "checked_at" in result
         assert result["checked_at"].endswith("Z")
+
+
+# ── prompt_advisor ────────────────────────────────────────────────────────────
+
+class TestPromptAdvisor:
+    def setup_method(self):
+        self.tools, _, _, _ = _make_env("wazuh_mcp.tools.prompt_advisor")
+
+    def test_get_recommended_system_prompt_returns_prompt(self):
+        result = _run(self.tools["get_recommended_system_prompt"]())
+        assert "system_prompt" in result
+        assert "Tier 1 security orchestrator" in result["system_prompt"]
+        assert "Wazuh Manager Tools" in result["system_prompt"]
+        assert "Wazuh Indexer Tools" in result["system_prompt"]
+
+    def test_system_prompt_contains_strict_rules(self):
+        result = _run(self.tools["get_recommended_system_prompt"]())
+        assert "STRICT RULES" in result["system_prompt"]
+        assert "NEVER" in result["system_prompt"]
+
+    def test_memory_guardrail_present(self):
+        result = _run(self.tools["get_recommended_system_prompt"]())
+        assert result["memory_guardrail"]["context_window_turns"] in (2, 3)
+
+    def test_token_budget_present(self):
+        result = _run(self.tools["get_recommended_system_prompt"]())
+        tb = result["token_budget"]
+        assert tb["model_tpm_limit"] == 12000
+        assert tb["recommended_per_response_limit"] > 0
+        assert tb["recommended_tool_result_limit"] <= 10
+
+    def test_custom_tpm_limit(self):
+        result = _run(self.tools["get_recommended_system_prompt"](model_tpm_limit=60000))
+        assert result["token_budget"]["model_tpm_limit"] == 60000
+        # higher TPM → higher budget
+        assert result["token_budget"]["recommended_per_response_limit"] > 2000
+
+    def test_indexer_query_template_present(self):
+        result = _run(self.tools["get_recommended_system_prompt"]())
+        tpl = result["indexer_query_template"]
+        assert "wazuh-alerts" in tpl["index"]
+        assert "now-24h" in str(tpl["query"])
+
+    def test_routing_table_excluded_by_default(self):
+        result = _run(self.tools["get_recommended_system_prompt"]())
+        assert "routing_table" not in result
+
+    def test_routing_table_included_when_requested(self):
+        result = _run(self.tools["get_recommended_system_prompt"](include_routing_table=True))
+        assert "routing_table" in result
+        assert "manager" in result["routing_table"]
+        assert "indexer" in result["routing_table"]
+
+    # check_response_size
+    def test_check_response_size_ok(self):
+        small = '{"data": "short"}'
+        result = _run(self.tools["check_response_size"]("list_agents", small))
+        assert result["status"] == "ok"
+        assert result["estimated_tokens"] < 2000
+
+    def test_check_response_size_warns_large(self):
+        big = '{"data": "' + "x" * 10000 + '"}'
+        result = _run(self.tools["check_response_size"]("list_agents", big))
+        assert result["status"] in ("warn", "critical")
+        assert result["estimated_tokens"] > 2000
+
+    def test_check_response_size_returns_tool_name(self):
+        result = _run(self.tools["check_response_size"]("search_alerts", "{}"))
+        assert result["tool_name"] == "search_alerts"
+
+    # get_routing_advice
+    def test_routing_advice_indexer_for_alerts(self):
+        result = _run(self.tools["get_routing_advice"]("Show me recent alerts from the last 24 hours"))
+        assert result["recommended_api"] == "indexer"
+        assert result["confidence"] in ("medium", "high")
+
+    def test_routing_advice_manager_for_agents(self):
+        result = _run(self.tools["get_routing_advice"]("List all deployed agents and their connection status"))
+        assert result["recommended_api"] == "manager"
+
+    def test_routing_advice_indexer_for_events(self):
+        result = _run(self.tools["get_routing_advice"]("Search for attack events with severity level 10"))
+        assert result["recommended_api"] == "indexer"
+
+    def test_routing_advice_unknown_query(self):
+        result = _run(self.tools["get_routing_advice"]("hello world"))
+        assert result["recommended_api"] == "unknown"
+        assert result["confidence"] == "low"
+
+    def test_routing_advice_includes_suggested_tools(self):
+        result = _run(self.tools["get_routing_advice"]("List all agents"))
+        assert len(result["suggested_tools"]) > 0
+
+    def test_routing_advice_includes_rationale(self):
+        result = _run(self.tools["get_routing_advice"]("Show triggered alerts"))
+        assert "rationale" in result
+        assert len(result["rationale"]) > 20
