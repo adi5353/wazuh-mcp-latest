@@ -22,7 +22,7 @@ class TestAddCVE:
         tools, wz, idx, cfg = _make_env()
         # Mock CDB list operations
         wz.request = AsyncMock(return_value={"data": {"affected_items": []}})
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["add_cve_to_watchlist"]("CVE-2024-1234")
         )
         assert result.get("added") == "CVE-2024-1234" or "error" not in result
@@ -30,7 +30,7 @@ class TestAddCVE:
     def test_invalid_cve_id_rejected(self):
         import asyncio
         tools, _, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["add_cve_to_watchlist"]("not-a-cve")
         )
         assert "error" in result
@@ -39,7 +39,7 @@ class TestAddCVE:
         import asyncio
         tools, wz, idx, cfg = _make_env()
         wz.request = AsyncMock(return_value={"data": {"affected_items": []}})
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["add_cve_to_watchlist"]("CVE-2024-5678", note="Critical RCE in nginx")
         )
         # Should not error on note addition
@@ -53,7 +53,7 @@ class TestListWatchlist:
         wz.request = AsyncMock(return_value={
             "data": {"affected_items": []}
         })
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["list_cve_watchlist"]()
         )
         assert "watchlist" in result
@@ -70,7 +70,7 @@ class TestListWatchlist:
                 ]
             }
         })
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["list_cve_watchlist"]()
         )
         assert len(result["watchlist"]) == 2
@@ -79,7 +79,7 @@ class TestListWatchlist:
         import asyncio
         tools, wz, idx, cfg = _make_env()
         wz.request = AsyncMock(side_effect=Exception("API down"))
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["list_cve_watchlist"]()
         )
         assert "error" in result
@@ -93,7 +93,7 @@ class TestMarkPatched:
         wz.request = AsyncMock(return_value={
             "data": {"affected_items": [{"key": "CVE-2024-1234", "value": "active|test note"}]}
         })
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["mark_patched"]("CVE-2024-1234")
         )
         assert "error" not in result or "patched" in str(result).lower()
@@ -101,7 +101,7 @@ class TestMarkPatched:
     def test_mark_patched_invalid_cve(self):
         import asyncio
         tools, _, _, _ = _make_env()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["mark_patched"]("bad-id")
         )
         assert "error" in result
@@ -127,7 +127,7 @@ class TestWatchlistExposure:
                 {"_source": {"agent": {"id": "003", "name": "db01"}}},
             ]}
         })
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             tools["get_watchlist_exposure"]()
         )
         assert "exposure" in result or "error" in result  # at minimum returns a dict

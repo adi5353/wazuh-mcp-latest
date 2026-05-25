@@ -22,7 +22,7 @@ class TestCreateWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["create_workspace"]("Ransomware Investigation")
             )
         assert "workspace_id" in result
@@ -32,7 +32,7 @@ class TestCreateWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["create_workspace"]("Test WS")
             )
         ws_id = result["workspace_id"]
@@ -43,7 +43,7 @@ class TestCreateWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["create_workspace"]("")
             )
         assert "error" in result
@@ -54,11 +54,11 @@ class TestAddToWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            created = asyncio.get_event_loop().run_until_complete(
+            created = asyncio.run(
                 tools["create_workspace"]("Incident WS")
             )
             ws_id = created["workspace_id"]
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["add_to_workspace"](ws_id, item_type="note", content="Suspicious process on web01")
             )
         assert result.get("added") is True
@@ -67,11 +67,11 @@ class TestAddToWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            created = asyncio.get_event_loop().run_until_complete(
+            created = asyncio.run(
                 tools["create_workspace"]("Incident WS 2")
             )
             ws_id = created["workspace_id"]
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["add_to_workspace"](ws_id, item_type="alert_id", content="abc123def456")
             )
         assert result.get("added") is True
@@ -80,7 +80,7 @@ class TestAddToWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["add_to_workspace"]("nonexistent-id", item_type="note", content="test")
             )
         assert "error" in result
@@ -91,14 +91,14 @@ class TestGetWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            created = asyncio.get_event_loop().run_until_complete(
+            created = asyncio.run(
                 tools["create_workspace"]("Get Test")
             )
             ws_id = created["workspace_id"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 tools["add_to_workspace"](ws_id, item_type="note", content="note1")
             )
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_workspace"](ws_id)
             )
         assert result["workspace_id"] == ws_id
@@ -108,7 +108,7 @@ class TestGetWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_workspace"]("does-not-exist")
             )
         assert "error" in result
@@ -119,14 +119,14 @@ class TestExportWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            created = asyncio.get_event_loop().run_until_complete(
+            created = asyncio.run(
                 tools["create_workspace"]("Export Test")
             )
             ws_id = created["workspace_id"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 tools["add_to_workspace"](ws_id, item_type="note", content="export note")
             )
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["export_workspace"](ws_id, fmt="json")
             )
         assert "export" in result
@@ -137,11 +137,11 @@ class TestExportWorkspace:
         import asyncio
         tools, _ = _make_env(tmp_path)
         with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
-            created = asyncio.get_event_loop().run_until_complete(
+            created = asyncio.run(
                 tools["create_workspace"]("MD Export")
             )
             ws_id = created["workspace_id"]
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["export_workspace"](ws_id, fmt="markdown")
             )
         assert "export" in result

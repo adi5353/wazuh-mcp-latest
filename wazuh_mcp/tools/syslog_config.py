@@ -3,7 +3,8 @@
 Read and test syslog output destinations configured in ossec.conf.
 """
 from __future__ import annotations
-import socket
+
+import asyncio
 
 
 def register(mcp, wz, idx, cfg, _cap, _truncate):
@@ -38,25 +39,44 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
     async def test_syslog_connection(server: str, port: int = 514) -> dict:
         """Test TCP/UDP reachability to a syslog server.
 
+        Uses non-blocking async I/O — safe to call from within the MCP event loop.
+
         Args:
             server: Hostname or IP of the syslog destination.
             port: UDP/TCP port (default 514).
         """
         results: dict = {"server": server, "port": port}
+
+        # ── TCP probe (async, non-blocking) ──────────────────────────────────
         try:
-            sock = socket.create_connection((server, port), timeout=3)
-            sock.close()
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(server, port), timeout=3.0
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
             results["tcp"] = "reachable"
+        except asyncio.TimeoutError:
+            results["tcp"] = "unreachable (timeout)"
         except OSError as e:
             results["tcp"] = f"unreachable ({e})"
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2)
-            sock.sendto(b"<14>test", (server, port))
-            sock.close()
-            results["udp"] = "sent"
-        except OSError as e:
-            results["udp"] = f"error ({e})"
+
+        # ── UDP probe (best-effort via executor — sendto is synchronous) ──────
+        def _udp_probe():
+            import socket
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(2)
+                sock.sendto(b"<14>wazuh-mcp syslog test", (server, port))
+                sock.close()
+                return "sent"
+            except OSError as e:
+                return f"error ({e})"
+
+        loop = asyncio.get_event_loop()
+        results["udp"] = await loop.run_in_executor(None, _udp_probe)
         return results
 
     @mcp.tool()

@@ -47,7 +47,7 @@ class TestWazuhClientRetry:
                  patch("wazuh_mcp.wazuh_client._retry_sleep", new=AsyncMock()):
                 return await client.request("GET", "/agents")
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         assert result == {"data": "ok"}
         assert call_count[0] == 3
 
@@ -67,7 +67,7 @@ class TestWazuhClientRetry:
                 return await client.request("GET", "/agents")
 
         with pytest.raises(Exception):
-            asyncio.get_event_loop().run_until_complete(run())
+            asyncio.run(run())
 
     def test_does_not_retry_on_404(self):
         """404 Not Found is a client error — must not retry."""
@@ -90,7 +90,7 @@ class TestWazuhClientRetry:
                 return await client.request("GET", "/nonexistent")
 
         with pytest.raises(Exception):
-            asyncio.get_event_loop().run_until_complete(run())
+            asyncio.run(run())
         assert call_count[0] == 1  # no retries for 404
 
     def test_retries_on_503(self):
@@ -115,7 +115,7 @@ class TestWazuhClientRetry:
                  patch("wazuh_mcp.wazuh_client._retry_sleep", new=AsyncMock()):
                 return await client.request("GET", "/agents")
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         assert result == {"data": "recovered"}
         assert call_count[0] == 2
 

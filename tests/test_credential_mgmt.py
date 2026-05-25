@@ -29,7 +29,7 @@ class TestCredentialAge:
         import asyncio
         env = {k: v for k, v in os.environ.items() if k != "WAZUH_CRED_CREATED_AT"}
         with patch.dict(os.environ, env, clear=True):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_credential_age"]()
             )
         assert result["status"] == "unknown"
@@ -40,7 +40,7 @@ class TestCredentialAge:
         import asyncio
         ts = str(int(time.time()))
         with patch.dict(os.environ, {"WAZUH_CRED_CREATED_AT": ts}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_credential_age"]()
             )
         assert result["status"] == "ok"
@@ -51,7 +51,7 @@ class TestCredentialAge:
         import asyncio
         ts = str(int(time.time()) - 61 * 86400)
         with patch.dict(os.environ, {"WAZUH_CRED_CREATED_AT": ts}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_credential_age"]()
             )
         assert result["status"] == "warning"
@@ -61,7 +61,7 @@ class TestCredentialAge:
         import asyncio
         ts = str(int(time.time()) - 91 * 86400)
         with patch.dict(os.environ, {"WAZUH_CRED_CREATED_AT": ts}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_credential_age"]()
             )
         assert result["status"] == "critical"
@@ -70,7 +70,7 @@ class TestCredentialAge:
         tools, _, _ = _make_tool_env()
         import asyncio
         with patch.dict(os.environ, {"WAZUH_CRED_CREATED_AT": "not-a-number"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["get_credential_age"]()
             )
         assert "error" in result
@@ -81,7 +81,7 @@ class TestPasswordRotation:
         tools, _, _ = _make_tool_env()
         import asyncio
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "admin"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["rotate_wazuh_api_password"]("NewP@ss123", dry_run=True)
             )
         assert result.get("dry_run") is True
@@ -91,7 +91,7 @@ class TestPasswordRotation:
         tools, _, _ = _make_tool_env()
         import asyncio
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "admin"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["rotate_wazuh_api_password"]("short", dry_run=False)
             )
         assert "error" in result
@@ -101,7 +101,7 @@ class TestPasswordRotation:
         tools, _, _ = _make_tool_env()
         import asyncio
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["rotate_wazuh_api_password"]("NewP@ss123", dry_run=False)
             )
         assert "error" in result
@@ -111,7 +111,7 @@ class TestPasswordRotation:
         tools, _, _ = _make_tool_env()
         import asyncio
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools["rotate_wazuh_api_password"]("NewP@ss123", dry_run=False)
             )
         assert "error" in result
@@ -132,7 +132,7 @@ class TestPasswordRotation:
 
         import asyncio
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "admin"}):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 tools_w_block["rotate_wazuh_api_password"]("NewP@ss123", dry_run=False)
             )
         assert "error" in result

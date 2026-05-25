@@ -537,3 +537,93 @@ class TestAuditMgmt:
             result = _run(self.tools["get_audit_log_stats"]())
         assert result["total_records"] == 2
         assert result["parse_errors"] == 0
+
+
+# ── health_check ──────────────────────────────────────────────────────────────
+
+class TestWazuhApiHealth:
+    def setup_method(self):
+        self.tools, self.wz, self.idx, _ = _make_env("wazuh_mcp.tools.health_check")
+
+    def _setup_manager_up(self):
+        self.wz.request = AsyncMock(side_effect=[
+            # /manager/info
+            {"data": {"affected_items": [{"version": "v4.10.0"}]}},
+            # /manager/status
+            {"data": {"affected_items": [{"analysisd": "running", "remoted": "running"}]}},
+        ])
+
+    def _setup_manager_down(self):
+        self.wz.request = AsyncMock(side_effect=Exception("connection refused"))
+
+    def _setup_indexer_up(self):
+        self.idx.request = AsyncMock(return_value={
+            "status": "green",
+            "number_of_nodes": 1,
+            "active_shards": 10,
+            "unassigned_shards": 0,
+        })
+
+    def _setup_indexer_down(self):
+        self.idx.request = AsyncMock(side_effect=Exception("connection refused"))
+
+    def test_both_up_returns_healthy(self):
+        self._setup_manager_up()
+        self._setup_indexer_up()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert result["overall_status"] == "healthy"
+        assert result["manager"]["status"] == "up"
+        assert result["indexer"]["status"] == "up"
+
+    def test_manager_down_returns_degraded(self):
+        self._setup_manager_down()
+        self._setup_indexer_up()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert result["overall_status"] == "degraded"
+        assert result["manager"]["status"] == "down"
+        assert result["indexer"]["status"] == "up"
+
+    def test_indexer_down_returns_degraded(self):
+        self._setup_manager_up()
+        self._setup_indexer_down()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert result["overall_status"] == "degraded"
+        assert result["manager"]["status"] == "up"
+        assert result["indexer"]["status"] == "down"
+
+    def test_both_down_returns_critical(self):
+        self._setup_manager_down()
+        self._setup_indexer_down()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert result["overall_status"] == "critical"
+        assert result["manager"]["status"] == "down"
+        assert result["indexer"]["status"] == "down"
+
+    def test_manager_includes_version_and_daemons(self):
+        self._setup_manager_up()
+        self._setup_indexer_up()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert result["manager"]["version"] == "v4.10.0"
+        assert result["manager"]["daemons_running"] == "2/2"
+
+    def test_indexer_includes_cluster_status(self):
+        self._setup_manager_up()
+        self._setup_indexer_up()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert result["indexer"]["cluster_status"] == "green"
+        assert result["indexer"]["nodes"] == 1
+
+    def test_latency_ms_present(self):
+        self._setup_manager_up()
+        self._setup_indexer_up()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert "latency_ms" in result["manager"]
+        assert "latency_ms" in result["indexer"]
+        assert isinstance(result["manager"]["latency_ms"], int)
+
+    def test_checked_at_in_result(self):
+        self._setup_manager_up()
+        self._setup_indexer_up()
+        result = _run(self.tools["get_wazuh_api_health"]())
+        assert "checked_at" in result
+        assert result["checked_at"].endswith("Z")
