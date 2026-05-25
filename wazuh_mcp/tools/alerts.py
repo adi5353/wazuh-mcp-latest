@@ -339,3 +339,45 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         if not hits:
             return {"error": "Alert not found", "alert_id": alert_id}
         return {"alert_id": alert_id, "source": hits[0]["_source"]}
+
+    @mcp.tool()
+    async def get_recent_alerts_24h(
+        limit: int = 10,
+        min_level: int = 1,
+    ) -> dict:
+        """Fetch the most recent security alerts from the last 24 hours, ordered newest first.
+
+        Uses the Wazuh Indexer exclusively — do not use this for infrastructure/agent queries.
+        This is the recommended starting point for a SOC morning review or quick triage.
+
+        Args:
+            limit: Number of alerts to return (max 50, default 10).
+            min_level: Minimum rule level to include (1-15, default 1 = all).
+        """
+        body = {
+            "size": _cap(min(limit, 50)),
+            "query": {
+                "bool": {
+                    "must": [
+                        {"range": {"@timestamp": {"gte": "now-24h"}}},
+                    ],
+                    "filter": [
+                        {"range": {"rule.level": {"gte": min_level}}},
+                    ],
+                }
+            },
+            "sort": [{"@timestamp": {"order": "desc"}}],
+        }
+        try:
+            res = await idx.search(body, index=cfg.alerts_index)
+            hits = res["hits"]["hits"]
+            alerts = [trim_alert(h) for h in hits]
+            return {
+                "window": "last 24 hours",
+                "total_returned": len(alerts),
+                "total_available": res["hits"]["total"]["value"],
+                "min_level": min_level,
+                "alerts": alerts,
+            }
+        except Exception as e:
+            return {"error": str(e)}

@@ -1,7 +1,6 @@
 """Wazuh Manager configuration management tools.
 
-Reads ossec.conf sections via the Manager REST API. Write operations
-require ADMIN role and WAZUH_ALLOW_WRITES=true.
+Reads ossec.conf sections via the Manager REST API.
 """
 from __future__ import annotations
 

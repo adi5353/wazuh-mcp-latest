@@ -179,16 +179,16 @@ from .tools import baseline as _baseline_module  # noqa: E402
 from .tools import ueba as _ueba_module  # noqa: E402
 from .tools import scheduler as _scheduler_module  # noqa: E402
 from .tools import agent_upgrades as _agent_upgrades_module  # noqa: E402
-from .tools import manager_config as _manager_config_module  # noqa: E402
-from .tools import rootcheck as _rootcheck_module  # noqa: E402
-from .tools import syslog_config as _syslog_config_module  # noqa: E402
-from .tools import manager_audit as _manager_audit_module  # noqa: E402
-from .tools import index_mgmt as _index_mgmt_module  # noqa: E402
-from .tools import servicenow as _servicenow_module  # noqa: E402
-from .tools import pagerduty as _pagerduty_module  # noqa: E402
+from .tools import audit_mgmt as _audit_mgmt_module  # noqa: E402
 from .tools import azure_devops as _azure_devops_module  # noqa: E402
 from .tools import export as _export_module  # noqa: E402
-from .tools import audit_mgmt as _audit_mgmt_module  # noqa: E402
+from .tools import index_mgmt as _index_mgmt_module  # noqa: E402
+from .tools import manager_audit as _manager_audit_module  # noqa: E402
+from .tools import manager_config as _manager_config_module  # noqa: E402
+from .tools import pagerduty as _pagerduty_module  # noqa: E402
+from .tools import rootcheck as _rootcheck_module  # noqa: E402
+from .tools import servicenow as _servicenow_module  # noqa: E402
+from .tools import syslog_config as _syslog_config_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -342,16 +342,16 @@ _baseline_module.register(mcp, wz, idx, cfg, _cap)
 _ueba_module.register(mcp, wz, idx, cfg, _cap)
 _scheduler_module.register(mcp, wz, idx, cfg)
 _agent_upgrades_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_manager_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_rootcheck_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_manager_audit_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_index_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_pagerduty_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_audit_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _azure_devops_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _export_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_audit_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_index_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_manager_audit_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_manager_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_pagerduty_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_rootcheck_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 
 # ============================================================================
 # Anomaly comparison + reporting — see tools/reporting.py
