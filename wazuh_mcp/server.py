@@ -218,6 +218,7 @@ from .tools import servicenow as _servicenow_module  # noqa: E402
 from .tools import syslog_config as _syslog_config_module  # noqa: E402
 from .tools import health_check as _health_check_module  # noqa: E402
 from .tools import prompt_advisor as _prompt_advisor_module  # noqa: E402
+from .tools import explain_alert as _explain_alert_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -383,6 +384,7 @@ _servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _health_check_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_explain_alert_module.register(mcp, wz, idx, cfg, _cap, _geoip_lookup)
 
 
 # ── Session identity tool (Gap 1) ─────────────────────────────────────────────
@@ -410,6 +412,90 @@ async def set_session_role_tool(api_key: str) -> dict:
         "status": "ok",
         "role": role_name,
         "message": f"Session authenticated as '{role_name}'.",
+    }
+
+
+# ============================================================================
+# MSSP multi-tenant instance switching
+# ============================================================================
+
+# Active tenant state (None = use default single-instance config)
+_active_tenant: dict | None = None
+
+
+@mcp.tool()
+async def list_tenants() -> dict:
+    """List all configured Wazuh tenants (MSSP mode).
+
+    Returns tenant names and manager hosts from WAZUH_INSTANCES config.
+    Only available when WAZUH_INSTANCES is configured.
+    """
+    if not cfg.tenants:
+        return {
+            "mssp_mode": False,
+            "message": "Single-instance mode. Set WAZUH_INSTANCES env var to enable MSSP multi-tenant mode.",
+        }
+    return {
+        "mssp_mode": True,
+        "active_tenant": _active_tenant["name"] if _active_tenant else "(default)",
+        "tenants": [
+            {"name": t.name, "manager_host": t.manager_host}
+            for t in cfg.tenants
+        ],
+    }
+
+
+@mcp.tool()
+async def switch_tenant(tenant_name: str) -> dict:
+    """Switch the active Wazuh tenant for this session (MSSP mode).
+
+    After switching, all subsequent tool calls query the selected tenant's
+    Wazuh Manager and Indexer. Requires WAZUH_INSTANCES to be configured.
+
+    Args:
+        tenant_name: The name of the tenant as defined in WAZUH_INSTANCES.
+    """
+    global _active_tenant, wz, idx
+
+    if not cfg.tenants:
+        return {
+            "error": "MSSP multi-tenant mode is not configured. "
+                     "Set WAZUH_INSTANCES JSON env var to enable.",
+        }
+
+    tenant = next((t for t in cfg.tenants if t.name == tenant_name), None)
+    if not tenant:
+        names = [t.name for t in cfg.tenants]
+        return {
+            "error": f"Tenant '{tenant_name}' not found.",
+            "available": names,
+        }
+
+    # Swap out the shared WazuhClient + WazuhIndexer to point at the new tenant
+    from .config import Config as _Config
+    from .wazuh_client import WazuhClient as _WC
+    from .wazuh_indexer import WazuhIndexer as _WI
+    import dataclasses
+
+    tenant_cfg = dataclasses.replace(
+        cfg,
+        manager_host=tenant.manager_host,
+        manager_user=tenant.manager_user,
+        manager_pass=tenant.manager_pass,
+        indexer_host=tenant.indexer_host,
+        indexer_user=tenant.indexer_user,
+        indexer_pass=tenant.indexer_pass,
+    )
+    wz = _WC(tenant_cfg)
+    idx = _WI(tenant_cfg)
+    _active_tenant = {"name": tenant.name, "manager_host": tenant.manager_host}
+
+    log.info("MSSP tenant switched to '%s' (%s)", tenant.name, tenant.manager_host)
+    return {
+        "status": "ok",
+        "active_tenant": tenant.name,
+        "manager_host": tenant.manager_host,
+        "message": f"All subsequent tool calls now target tenant '{tenant.name}'.",
     }
 
 
@@ -601,6 +687,165 @@ def end_of_shift_handover() -> str:
 
 Format as a handover document:
 SUMMARY | OPEN INCIDENTS | PATCH QUEUE | CONFIG ISSUES | WATCH LIST"""
+
+
+# ── Role-optimized prompts ────────────────────────────────────────────────────
+
+@mcp.prompt()
+def tier1_analyst_guide(alert_id: str = "") -> str:
+    """Step-by-step alert walkthrough for Tier 1 SOC analysts.
+
+    Designed for analysts who are new to Wazuh or to a particular alert type.
+    Explains every step before executing it so the analyst builds understanding.
+    """
+    target = f'alert ID {alert_id}' if alert_id else 'the most recent high-severity alert'
+    return f"""You are helping a Tier 1 SOC analyst investigate {target}.
+Explain WHAT each tool does and WHY before calling it. Use simple language — assume the analyst
+is learning on the job and may not know Wazuh terminology.
+
+Step 1 — Get the alert details:
+  Call: {'get_alert_by_id("' + alert_id + '")' if alert_id else 'explain_recent_alerts(time_range="1h", min_level=10, audience="tier1")'}
+  Explain what each field means (rule.level, rule.description, agent.name, data.srcip).
+
+Step 2 — Get a plain-English explanation:
+  Call: explain_alert("{alert_id or '<id from step 1>'}", audience="tier1")
+  Read the narrative aloud and confirm you understand the WHAT HAPPENED section.
+
+Step 3 — Is the source IP suspicious?
+  If there is a src_ip, call: enrich_ip("<src_ip>")
+  Explain: VirusTotal score >5 = likely malicious. AbuseIPDB confidence >50 = block it.
+
+Step 4 — Did Wazuh already respond?
+  Call: correlate_alert_with_response(src_ip="<src_ip>")
+  If active response fired = the IP was blocked. If not = we may need to act.
+
+Step 5 — Decide and document:
+  - False positive? → tag_alert(alert_id, tag="false_positive", note="your reason")
+  - True positive, handled? → tag_alert(alert_id, tag="investigated")
+  - Not sure? → Escalate to Tier 2 and describe what you found in Steps 1-4.
+
+Remember: it is always OK to escalate. Document your findings before doing so."""
+
+
+@mcp.prompt()
+def tier2_analyst_deep_dive(agent_name: str = "", src_ip: str = "", time_range: str = "24h") -> str:
+    """Deep-dive investigation workflow for experienced Tier 2 / IR analysts.
+
+    Assumes familiarity with Wazuh, MITRE ATT&CK, and incident response procedures.
+    Focuses on breadth-first evidence gathering followed by hypothesis testing.
+    """
+    target = f"agent '{agent_name}'" if agent_name else f"source IP '{src_ip}'" if src_ip else "the active incident"
+    return f"""Tier 2 deep-dive investigation for {target} over the last {time_range}.
+
+Phase 1 — Evidence collection (run in parallel where possible):
+  search_alerts(time_range="{time_range}") filtered to target
+  search_fim_alerts(time_range="{time_range}") — file integrity events
+  {'get_agent_login_history(agent_name="' + agent_name + '")' if agent_name else 'search_authentication_failures(time_range="' + time_range + '", threshold=3)'}
+  {'enrich_ip("' + src_ip + '")' if src_ip else 'get_agent_processes(agent_name="' + agent_name + '")'}
+  {'enrich_ip_extended("' + src_ip + '")' if src_ip else ''}
+
+Phase 2 — Lateral movement check:
+  hunt_lateral_movement(time_range="{time_range}")
+  get_agent_neighbors({'agent_name="' + agent_name + '"' if agent_name else ''})
+  blast_radius_analysis({'src_ip="' + src_ip + '"' if src_ip else 'agent_name="' + agent_name + '"'}, time_range="{time_range}")
+
+Phase 3 — Persistence check:
+  hunt_persistence_mechanisms(time_range="{time_range}")
+  critical_file_changes({'agent_name="' + agent_name + '"' if agent_name else ''}, time_range="{time_range}")
+
+Phase 4 — MITRE mapping:
+  search_by_mitre() on all technique IDs found in alerts above
+  mitre_coverage_analysis() — confirm detection coverage for observed techniques
+
+Phase 5 — Containment decision:
+  Score findings: CONFIRMED / SUSPECTED / BENIGN
+  If CONFIRMED HIGH/CRITICAL:
+    run_active_response(agent_id, command="firewall-drop", src_ip="{src_ip or '?'}")  [requires ALLOW_WRITES]
+    create_incident_report(alert_ids=[...], title="...", severity="HIGH")
+    create_jira_ticket(summary="...", description="...", priority="High")
+  Document all findings in create_workspace() for handover."""
+
+
+@mcp.prompt()
+def ciso_security_briefing(period: str = "7d") -> str:
+    """Executive security briefing formatted for CISO / leadership consumption.
+
+    No technical jargon. Business risk framing. Action items with owners.
+    """
+    return f"""Generate an executive security briefing for the last {period}.
+
+Data collection (run these first):
+  alert_summary(time_range="{period}", min_level=7)
+  vulnerability_summary(min_severity="High")
+  prioritize_patches(top_n=5)
+  compliance_summary(framework="PCI-DSS")
+  fleet_sca_weakest_agents(limit=3)
+  active_response_effectiveness(time_range="{period}")
+
+Format the output as:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECURITY BRIEFING — {period.upper()} SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OVERALL RISK POSTURE:  [GREEN / YELLOW / RED]
+
+KEY METRICS
+  Total alerts:         [n]   vs prior period [n] ([+/-x%])
+  Critical/High:        [n]   requiring immediate attention
+  Systems monitored:    [n]   agents
+  Unpatched CVEs (High+): [n]
+
+TOP 3 RISKS THIS PERIOD
+  1. [Risk name] — [1-sentence business impact] — Owner: [team]
+  2. [Risk name] — [1-sentence business impact] — Owner: [team]
+  3. [Risk name] — [1-sentence business impact] — Owner: [team]
+
+COMPLIANCE STATUS
+  [Framework]: [PASS/PARTIAL/FAIL] — [key finding]
+
+ACTIONS REQUIRED
+  • [Action] — Priority: [P0/P1/P2] — Due: [timeframe] — Owner: [team]
+
+No further escalation required at this time. / Recommend emergency review."""
+
+
+@mcp.prompt()
+def compliance_officer_review(framework: str = "PCI-DSS", period: str = "30d") -> str:
+    """Compliance review workflow for compliance officers and auditors.
+
+    Maps security events to specific control requirements and produces
+    audit-ready evidence summaries.
+    """
+    return f"""Run a {framework} compliance review for the last {period}.
+
+Step 1 — Framework compliance status:
+  compliance_summary(framework="{framework}", time_range="{period}")
+  compliance_control_details(framework="{framework}")
+
+Step 2 — Evidence collection:
+  export_compliance_csv(framework="{framework}", time_range="{period}")
+  generate_compliance_report(framework="{framework}")
+
+Step 3 — Security controls verification:
+  fleet_sca_weakest_agents(limit=10) — configuration compliance posture
+  get_agent_sca_policies(agent_id=<worst agent>) — specific policy failures
+  critical_file_changes(time_range="{period}") — file integrity evidence
+
+Step 4 — Access control review:
+  search_authentication_failures(time_range="{period}") — failed access attempts
+  list_privileged_escalations(time_range="{period}") — privilege escalation events
+  get_credential_age() — credential rotation compliance
+
+Step 5 — Audit trail verification:
+  verify_audit_log_integrity() — confirm logs are tamper-evident
+  get_audit_log_stats() — coverage and completeness
+
+Format output as audit-ready evidence with:
+  Control ID | Requirement | Status | Evidence | Risk | Remediation
+
+Flag any control failures with FAIL status and link to specific alert IDs as evidence.
+Export final report with: email_compliance_report(framework="{framework}", recipient="compliance@yourorg.com")"""
 
 
 # ============================================================================
