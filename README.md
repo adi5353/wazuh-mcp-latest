@@ -2,16 +2,24 @@
 
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
-**114+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (PCI-DSS, HIPAA, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
+**121+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (PCI-DSS, HIPAA, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
-[![Tools](https://img.shields.io/badge/tools-114%2B-brightgreen)](#tool-reference)
+[![Tools](https://img.shields.io/badge/tools-121%2B-brightgreen)](#tool-reference)
 
 ---
 
 ## What's New
+
+### v2.1 — 7 high-impact tools (cross-fleet correlation, Sigma pipeline, IOC enrichment)
+
+| Area | New Tools | Details |
+|---|---|---|
+| **Cross-fleet correlation** | `correlate_multi_agent_incident` | 5-phase graph expansion: seed alert → pivot on attacker IPs/usernames → related agents → MITRE kill-chain → confidence score 0–99 with tier (LOW/MEDIUM/HIGH/CRITICAL) |
+| **Sigma rule pipeline** | `sigma_bulk_import`, `sigma_coverage_gap`, `test_sigma_rule_against_archive`, `suggest_rule_tuning` | Bulk import multi-doc Sigma YAML, find ATT&CK technique gaps, backtest a rule against archive logs, and get noise score + XML tuning snippets for any rule |
+| **IOC enrichment** | `enrich_email`, `ioc_to_alert_match` | Email breach check via HaveIBeenPwned + Hunter.io deliverability; scan 12 alert fields across the last N days for live IOC hits, grouped by IOC with ACTIVE_THREATS_DETECTED verdict |
 
 ### v2.0 — 18 new tools across 6 areas
 
