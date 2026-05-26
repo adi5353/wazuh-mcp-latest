@@ -1,0 +1,186 @@
+###############################################################################
+# Wazuh MCP — Demo Environment
+#
+# Spins up a full Wazuh stack + the MCP server pre-configured for the demo.
+# After `docker compose up -d` wait ~2 minutes for Wazuh to initialise,
+# then seed sample data: `docker compose run --rm seed`
+#
+# Access:
+#   MCP Server  → http://localhost:8000
+#   Dashboard   → open dashboard/index.html in your browser
+#   Wazuh UI    → https://localhost (admin / SecureDemo@123)
+###############################################################################
+version: "3.8"
+
+services:
+
+  # ── Wazuh Manager ──────────────────────────────────────────────────────────
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.3
+    container_name: demo-wazuh-manager
+    hostname: wazuh-manager
+    restart: unless-stopped
+    environment:
+      INDEXER_URL:      https://wazuh-indexer:9200
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: SecureDemo@123
+      FILEBEAT_SSL_VERIFICATION_MODE: none
+      SSL_CERTIFICATE_AUTHORITIES: /etc/ssl/root-ca.pem
+      SSL_CERTIFICATE:  /etc/ssl/wazuh-manager.pem
+      SSL_KEY:          /etc/ssl/wazuh-manager-key.pem
+      API_USERNAME:     wazuh-wui
+      API_PASSWORD:     MyS3cr37P450r.*-
+    ports:
+      - "55000:55000"    # Manager REST API
+      - "1514:1514/udp"  # Agent communication
+      - "1515:1515"      # Agent enrollment
+    volumes:
+      - wazuh-manager-data:/var/ossec/data
+      - wazuh-manager-logs:/var/ossec/logs
+      - wazuh-manager-etc:/var/ossec/etc
+      - wazuh-manager-integrations:/var/ossec/integrations
+      - wazuh-manager-active-response:/var/ossec/active-response/bin
+      - wazuh-manager-agentless:/var/ossec/agentless
+    networks:
+      - wazuh-net
+
+  # ── Wazuh Indexer (OpenSearch) ─────────────────────────────────────────────
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.7.3
+    container_name: demo-wazuh-indexer
+    hostname: wazuh-indexer
+    restart: unless-stopped
+    environment:
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+      - wazuh-indexer-config:/usr/share/wazuh-indexer/config
+    networks:
+      - wazuh-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -u admin:SecureDemo@123 https://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── Wazuh Dashboard ───────────────────────────────────────────────────────
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.7.3
+    container_name: demo-wazuh-dashboard
+    hostname: wazuh-dashboard
+    restart: unless-stopped
+    depends_on:
+      wazuh-indexer:
+        condition: service_healthy
+    environment:
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: SecureDemo@123
+      WAZUH_API_URL:    https://wazuh-manager
+      DASHBOARD_USERNAME: kibanaserver
+      DASHBOARD_PASSWORD: kibanaserver
+      API_USERNAME:     wazuh-wui
+      API_PASSWORD:     MyS3cr37P450r.*-
+    ports:
+      - "443:5601"
+    volumes:
+      - wazuh-dashboard-config:/usr/share/wazuh-dashboard/config
+      - wazuh-dashboard-custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    networks:
+      - wazuh-net
+
+  # ── Wazuh MCP Server ─────────────────────────────────────────────────────
+  wazuh-mcp:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: demo-wazuh-mcp
+    restart: unless-stopped
+    depends_on:
+      wazuh-indexer:
+        condition: service_healthy
+    environment:
+      # Manager
+      WAZUH_HOST:         https://wazuh-manager:55000
+      WAZUH_USER:         wazuh-wui
+      WAZUH_PASS:         "MyS3cr37P450r.*-"
+      # Indexer
+      WAZUH_INDEXER_HOST: https://wazuh-indexer:9200
+      WAZUH_INDEXER_USER: admin
+      WAZUH_INDEXER_PASS: SecureDemo@123
+      # Transport
+      WAZUH_MCP_TRANSPORT: http
+      WAZUH_MCP_HOST:      0.0.0.0
+      WAZUH_MCP_PORT:      8000
+      # Security — demo only, no auth required
+      WAZUH_VERIFY_SSL:    "false"
+      WAZUH_ALLOW_WRITES:  "false"
+      WAZUH_MCP_USER_ROLE: analyst
+    ports:
+      - "8000:8000"
+    networks:
+      - wazuh-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health | grep -q healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Demo seed agent (simulates a monitored Linux host) ────────────────────
+  demo-agent:
+    image: wazuh/wazuh-agent:4.7.3
+    container_name: demo-agent
+    hostname: web-server-01
+    restart: unless-stopped
+    environment:
+      WAZUH_MANAGER: wazuh-manager
+      WAZUH_AGENT_NAME: web-server-01
+    depends_on:
+      - wazuh-manager
+    networks:
+      - wazuh-net
+
+  # ── Seed script (one-shot) ────────────────────────────────────────────────
+  seed:
+    image: python:3.11-slim
+    container_name: demo-seed
+    command: python /seed/seed_alerts.py
+    depends_on:
+      wazuh-indexer:
+        condition: service_healthy
+    environment:
+      INDEXER_URL:      https://wazuh-indexer:9200
+      INDEXER_USER:     admin
+      INDEXER_PASS:     SecureDemo@123
+    volumes:
+      - ./:/seed
+    networks:
+      - wazuh-net
+    profiles:
+      - seed   # run with: docker compose --profile seed run seed
+
+volumes:
+  wazuh-manager-data:
+  wazuh-manager-logs:
+  wazuh-manager-etc:
+  wazuh-manager-integrations:
+  wazuh-manager-active-response:
+  wazuh-manager-agentless:
+  wazuh-indexer-data:
+  wazuh-indexer-config:
+  wazuh-dashboard-config:
+  wazuh-dashboard-custom:
+
+networks:
+  wazuh-net:
+    driver: bridge

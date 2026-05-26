@@ -83,7 +83,8 @@ def require_role(minimum: ROLE) -> dict | None:
 
 # ── Convenience aliases ───────────────────────────────────────────────────────
 
-def viewer_only()    -> dict | None: return require_role(ROLE.VIEWER)
-def analyst_only()   -> dict | None: return require_role(ROLE.ANALYST)
-def responder_only() -> dict | None: return require_role(ROLE.RESPONDER)
-def admin_only()     -> dict | None: return require_role(ROLE.ADMIN)
+def viewer_only()      -> dict | None: return require_role(ROLE.VIEWER)
+def analyst_only()     -> dict | None: return require_role(ROLE.ANALYST)
+def analyst_or_above() -> dict | None: return require_role(ROLE.ANALYST)
+def responder_only()   -> dict | None: return require_role(ROLE.RESPONDER)
+def admin_only()       -> dict | None: return require_role(ROLE.ADMIN)
