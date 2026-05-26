@@ -228,6 +228,7 @@ from .tools import health_check as _health_check_module  # noqa: E402
 from .tools import prompt_advisor as _prompt_advisor_module  # noqa: E402
 from .tools import explain_alert as _explain_alert_module  # noqa: E402
 from .tools import roi as _roi_module  # noqa: E402
+from .tools import quick_wins as _quick_wins_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -395,6 +396,7 @@ _health_check_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _explain_alert_module.register(mcp, wz, idx, cfg, _cap, _geoip_lookup)
 _roi_module.register(mcp, wz, idx, cfg, _cap, _truncate)
+_quick_wins_module.register(mcp, wz, idx, cfg, _cap)
 
 
 # ── Session identity tool (Gap 1) ─────────────────────────────────────────────
