@@ -57,6 +57,27 @@ class Config:
     # MSSP multi-tenant instances (empty list = single-instance mode)
     tenants: tuple = field(default_factory=tuple)
 
+    def redacted(self) -> dict:
+        """Return a safe dict representation for logging — secrets replaced with [REDACTED].
+
+        Use this instead of str(cfg) or vars(cfg) anywhere the output might be
+        written to logs, error messages, or the audit trail.
+        """
+        return {
+            "manager_host": self.manager_host,
+            "manager_user": self.manager_user,
+            "manager_pass": "[REDACTED]",
+            "indexer_host": self.indexer_host,
+            "indexer_user": self.indexer_user,
+            "indexer_pass": "[REDACTED]",
+            "alerts_index": self.alerts_index,
+            "verify_ssl": self.verify_ssl,
+            "allow_writes": self.allow_writes,
+            "request_timeout": self.request_timeout,
+            "cloud_mode": self.cloud_mode,
+            "tenant_count": len(self.tenants),
+        }
+
     @classmethod
     def from_env(cls) -> "Config":
         def required(name: str) -> str:

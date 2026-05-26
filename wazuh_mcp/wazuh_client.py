@@ -112,6 +112,8 @@ class WazuhClient:
         if not self._token or time.time() > self._token_expires:
             async with self._login_lock:
                 if not self._token or time.time() > self._token_expires:
+                    # Clear the expired token from memory before fetching a new one
+                    self._token = None
                     await self._login()
 
         r = await self._client.request(

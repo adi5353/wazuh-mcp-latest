@@ -1042,6 +1042,52 @@ def main() -> None:
                         return Response("Unauthorized", status_code=401)
                 return await call_next(request)
 
+        # ── Origin validation middleware (CSRF protection) ─────────────────
+        # Rejects requests whose Origin header is not in the allowlist.
+        # Set WAZUH_MCP_ALLOWED_ORIGINS as a comma-separated list of trusted
+        # origins (e.g. "https://claude.ai,https://your-dashboard.example.com").
+        # When unset, same-host requests and requests without an Origin header
+        # (non-browser clients, curl, MCP SDKs) pass through unrestricted.
+        _raw_origins = os.getenv("WAZUH_MCP_ALLOWED_ORIGINS", "").strip()
+        _allowed_origins: set[str] = (
+            {o.strip().rstrip("/") for o in _raw_origins.split(",") if o.strip()}
+            if _raw_origins else set()
+        )
+
+        class OriginValidationMiddleware:
+            def __init__(self, app) -> None:
+                self._app = app
+
+            async def __call__(self, scope, receive, send) -> None:
+                if scope["type"] != "http":
+                    await self._app(scope, receive, send)
+                    return
+
+                headers = dict(scope.get("headers", []))
+                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
+
+                # Non-browser clients (SDKs, curl) send no Origin — allow through
+                if not origin:
+                    await self._app(scope, receive, send)
+                    return
+
+                path = scope.get("path", "")
+                if path == "/health":
+                    await self._app(scope, receive, send)
+                    return
+
+                # If an allowlist is configured, enforce it
+                if _allowed_origins and origin not in _allowed_origins:
+                    response = Response(
+                        f"Origin '{origin}' not allowed. "
+                        f"Set WAZUH_MCP_ALLOWED_ORIGINS to permit it.",
+                        status_code=403,
+                    )
+                    await response(scope, receive, send)
+                    return
+
+                await self._app(scope, receive, send)
+
         # ── Assemble ASGI app ──────────────────────────────────────────────
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=False
@@ -1058,10 +1104,10 @@ def main() -> None:
         )
 
         # Middleware stack ordering (outermost runs FIRST on request, LAST on response):
-        # 1. APIKeyMiddleware  — reject unauthenticated requests before anything else
-        # 2. RateLimitMiddleware — throttle authenticated requests
-        # 3. AuditMiddleware  — log only authenticated, rate-allowed requests
-        # This prevents unauthenticated probe patterns from appearing in audit logs.
+        # 1. APIKeyMiddleware       — reject unauthenticated requests
+        # 2. OriginValidationMiddleware — CSRF: block disallowed browser origins
+        # 3. RateLimitMiddleware    — throttle authenticated requests
+        # 4. AuditMiddleware        — log only authenticated, rate-allowed requests
 
         app = AuditMiddleware(app)  # type: ignore[assignment]
         log.info("Audit logging enabled → %s", os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
@@ -1072,6 +1118,12 @@ def main() -> None:
             os.getenv("WAZUH_MCP_RATE_LIMIT_RPM", "60"),
             os.getenv("WAZUH_MCP_RATE_LIMIT_BURST", "10"),
         )
+
+        app = OriginValidationMiddleware(app)  # type: ignore[assignment]
+        if _allowed_origins:
+            log.info("Origin validation enabled — allowed: %s", ", ".join(sorted(_allowed_origins)))
+        else:
+            log.info("Origin validation: passthrough (set WAZUH_MCP_ALLOWED_ORIGINS to restrict)")
 
         if api_key:
             app = APIKeyMiddleware(app, key=api_key)  # type: ignore[assignment]
