@@ -1244,20 +1244,40 @@ def main() -> None:
                     raise exc_caught
 
         # ── Optional Bearer-token middleware ───────────────────────────────
+        # Supports two modes, checked in order:
+        #   1. Multi-key RBAC: WAZUH_MCP_KEY_MAP=viewer:k1,analyst:k2,admin:k3
+        #      Each key maps to a role. The resolved role is bound to the request
+        #      context so every tool call in that request inherits the right tier.
+        #   2. Single-key: WAZUH_MCP_API_KEY=<key>  (legacy; role from WAZUH_MCP_USER_ROLE)
         import hmac as _hmac
+        from .identity import resolve_role_for_key as _resolve_role, set_session_role as _set_role
+        from .identity import _KEY_MAP as _http_key_map
 
         class APIKeyMiddleware(BaseHTTPMiddleware):
             def __init__(self, app, key: str) -> None:
                 super().__init__(app)
                 self._key = key
+                self._multi = bool(_http_key_map)
 
             async def dispatch(self, request, call_next):  # type: ignore[override]
-                if self._key and request.url.path != "/health":
-                    auth = request.headers.get("Authorization", "")
-                    token = auth.removeprefix("Bearer ").strip()
-                    # Constant-time comparison prevents timing-attack brute force
-                    if not _hmac.compare_digest(token, self._key):
+                if request.url.path == "/health":
+                    return await call_next(request)
+
+                auth = request.headers.get("Authorization", "")
+                token = auth.removeprefix("Bearer ").strip()
+
+                if self._multi:
+                    # Multi-key mode: token must be in the key map
+                    role = _resolve_role(token)
+                    if role is None:
                         return Response("Unauthorized", status_code=401)
+                    # Bind the resolved role to this request's async task context
+                    _set_role(role)
+                elif self._key:
+                    # Single-key legacy mode
+                    if not token or not _hmac.compare_digest(token, self._key):
+                        return Response("Unauthorized", status_code=401)
+
                 return await call_next(request)
 
         # ── Origin validation middleware (CSRF protection) ─────────────────
@@ -1351,11 +1371,18 @@ def main() -> None:
         else:
             log.info("Origin validation: passthrough (set WAZUH_MCP_ALLOWED_ORIGINS to restrict)")
 
-        if api_key:
+        from .identity import _KEY_MAP as _startup_key_map
+        if _startup_key_map:
+            app = APIKeyMiddleware(app, key="")  # type: ignore[assignment]
+            log.info(
+                "Per-key RBAC enabled via WAZUH_MCP_KEY_MAP — %d keys configured",
+                len(_startup_key_map),
+            )
+        elif api_key:
             app = APIKeyMiddleware(app, key=api_key)  # type: ignore[assignment]
-            log.info("API key authentication enabled (outermost middleware — runs first)")
+            log.info("API key authentication enabled (single-key mode)")
         else:
-            log.info("API key authentication disabled — set WAZUH_MCP_API_KEY to enable")
+            log.info("API key authentication disabled — set WAZUH_MCP_API_KEY or WAZUH_MCP_KEY_MAP to enable")
 
         # IPFilterMiddleware — network allowlist/blocklist
         allowed_ips = os.getenv("WAZUH_MCP_ALLOWED_IPS", "")
