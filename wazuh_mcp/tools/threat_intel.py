@@ -395,3 +395,223 @@ def register(mcp, wz, idx, cfg, _geoip_lookup):
         tasks = [_geoip_lookup(ip) for ip in ips[:10]]
         results = await asyncio.gather(*tasks, return_exceptions=False)
         return {"results": list(results)}
+
+    @mcp.tool()
+    async def enrich_email(email: str) -> dict:
+        """Enrich an email address with breach and deliverability intelligence.
+
+        Checks HaveIBeenPwned (k-anonymity, no key required) for known data breaches
+        and Hunter.io (optional HUNTER_API_KEY) for domain deliverability / MX info.
+
+        Returns:
+          - breach_count, breaches list (name, domain, date, data_classes)
+          - hunter_score, mx_records (if HUNTER_API_KEY set)
+          - verdict: BREACHED / CLEAN / UNKNOWN
+        """
+        import base64
+        import hashlib
+
+        result: dict = {"email": email, "breaches": [], "breach_count": 0}
+
+        # ── HaveIBeenPwned email lookup ────────────────────────────────────────
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+                hibp_headers = {
+                    "User-Agent": "wazuh-mcp-security-tool",
+                    "hibp-api-key": os.getenv("HIBP_API_KEY", ""),
+                }
+                # Remove empty header values
+                hibp_headers = {k: v for k, v in hibp_headers.items() if v}
+                r = await c.get(
+                    f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false",
+                    headers=hibp_headers,
+                )
+                if r.status_code == 200:
+                    breaches = r.json()
+                    result["breach_count"] = len(breaches)
+                    result["breaches"] = [
+                        {
+                            "name": b.get("Name"),
+                            "domain": b.get("Domain"),
+                            "breach_date": b.get("BreachDate"),
+                            "data_classes": b.get("DataClasses", []),
+                            "pwn_count": b.get("PwnCount", 0),
+                        }
+                        for b in breaches
+                    ]
+                elif r.status_code == 404:
+                    result["breach_count"] = 0  # Not found = clean
+                elif r.status_code == 401:
+                    result["hibp_note"] = "HIBP API key required for email lookup — set HIBP_API_KEY"
+                else:
+                    result["hibp_note"] = f"HIBP returned HTTP {r.status_code}"
+        except Exception as e:
+            result["hibp_note"] = f"HIBP lookup failed: {e}"
+
+        # ── Hunter.io domain/email verification (optional) ─────────────────────
+        hunter_key = os.getenv("HUNTER_API_KEY")
+        if hunter_key and "@" in email:
+            domain = email.split("@", 1)[1]
+            try:
+                async with httpx.AsyncClient(timeout=15) as c:
+                    # Email verification endpoint
+                    r = await c.get(
+                        "https://api.hunter.io/v2/email-verifier",
+                        params={"email": email, "api_key": hunter_key},
+                    )
+                    if r.status_code == 200:
+                        data = r.json().get("data", {})
+                        result["hunter_score"] = data.get("score")
+                        result["hunter_status"] = data.get("status")  # valid/risky/invalid
+                        result["mx_records"] = data.get("mx_records", False)
+                        result["disposable"] = data.get("disposable", False)
+                        result["webmail"] = data.get("webmail", False)
+            except Exception as e:
+                result["hunter_note"] = f"Hunter.io lookup failed: {e}"
+        elif not hunter_key:
+            result["hunter_note"] = "Set HUNTER_API_KEY for email deliverability scoring"
+
+        # ── Verdict ────────────────────────────────────────────────────────────
+        if result["breach_count"] > 0:
+            result["verdict"] = "BREACHED"
+            result["risk_level"] = "HIGH" if result["breach_count"] >= 3 else "MEDIUM"
+        elif "hibp_note" in result and "key required" in result.get("hibp_note", ""):
+            result["verdict"] = "UNKNOWN"
+            result["risk_level"] = "UNKNOWN"
+        else:
+            result["verdict"] = "CLEAN"
+            result["risk_level"] = "LOW"
+
+        return result
+
+    @mcp.tool()
+    async def ioc_to_alert_match(
+        iocs: list,
+        time_range: str = "7d",
+        limit: int = 200,
+    ) -> dict:
+        """Scan recent Wazuh alerts for matches against a list of known IOCs.
+
+        Searches alert fields: data.srcip, data.win.eventdata.ipAddress, data.dstip,
+        data.url, data.hostname, data.md5, data.sha256, data.sha1.
+
+        Args:
+            iocs:       List of IOC strings (IPs, domains, hashes, URLs — mixed OK)
+            time_range: Look-back window, e.g. "24h", "7d", "30d"
+            limit:      Maximum alerts to return per IOC match
+
+        Returns:
+            matched_iocs, total_matches, alerts grouped by IOC, unmatched_iocs
+        """
+        if not iocs:
+            return {"error": "iocs list is empty"}
+
+        iocs = [str(i).strip() for i in iocs[:100]]  # cap at 100 IOCs
+
+        # Build time range
+        _range_map = {"1h": "now-1h", "4h": "now-4h", "24h": "now-24h",
+                      "7d": "now-7d", "14d": "now-14d", "30d": "now-30d"}
+        gte = _range_map.get(time_range, f"now-{time_range}")
+
+        # Fields to search for IOC matches
+        _ioc_fields = [
+            "data.srcip", "data.dstip", "data.win.eventdata.ipAddress",
+            "data.win.eventdata.destinationIp",
+            "data.url", "data.http.url",
+            "data.hostname", "data.win.eventdata.hostName",
+            "data.md5", "data.sha256", "data.sha1",
+            "data.win.eventdata.hashes",
+        ]
+
+        should_clauses = []
+        for ioc in iocs:
+            for field in _ioc_fields:
+                should_clauses.append({"term": {field: ioc}})
+            # Also try wildcard for URL/domain partial matches
+            if "." in ioc and not ioc.replace(".", "").isdigit():
+                should_clauses.append({"wildcard": {"data.url": f"*{ioc}*"}})
+
+        body = {
+            "query": {
+                "bool": {
+                    "must": [{"range": {"@timestamp": {"gte": gte}}}],
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
+                }
+            },
+            "sort": [{"@timestamp": {"order": "desc"}}],
+            "size": min(limit, 500),
+            "_source": [
+                "@timestamp", "rule.id", "rule.description", "rule.level",
+                "agent.id", "agent.name",
+                "data.srcip", "data.dstip", "data.url",
+                "data.hostname", "data.md5", "data.sha256",
+            ],
+        }
+
+        try:
+            resp = await idx.search(body, index=cfg.get("alerts_index", "wazuh-alerts-*"))
+        except Exception as e:
+            return {"error": f"Index search failed: {e}"}
+
+        hits = resp.get("hits", {}).get("hits", [])
+
+        # Group matched alerts by the IOC that triggered the match
+        ioc_set = set(ioc.lower() for ioc in iocs)
+        grouped: dict[str, list] = {}
+
+        for hit in hits:
+            src = hit.get("_source", {})
+            # Find which IOC matched this alert
+            matched_ioc = None
+            for field in _ioc_fields:
+                val = src
+                for part in field.split("."):
+                    val = val.get(part, {}) if isinstance(val, dict) else None
+                if val and str(val).lower() in ioc_set:
+                    matched_ioc = str(val).lower()
+                    break
+                # Check wildcard/partial matches for URLs
+                if val and isinstance(val, str):
+                    for ioc in iocs:
+                        if "." in ioc and ioc.lower() in val.lower():
+                            matched_ioc = ioc.lower()
+                            break
+                if matched_ioc:
+                    break
+
+            if matched_ioc:
+                if matched_ioc not in grouped:
+                    grouped[matched_ioc] = []
+                grouped[matched_ioc].append({
+                    "timestamp": src.get("@timestamp"),
+                    "rule_id": src.get("rule", {}).get("id"),
+                    "rule_description": src.get("rule", {}).get("description"),
+                    "rule_level": src.get("rule", {}).get("level"),
+                    "agent_id": src.get("agent", {}).get("id"),
+                    "agent_name": src.get("agent", {}).get("name"),
+                    "src_ip": src.get("data", {}).get("srcip"),
+                    "dst_ip": src.get("data", {}).get("dstip"),
+                    "url": src.get("data", {}).get("url"),
+                })
+
+        matched_iocs = list(grouped.keys())
+        unmatched = [ioc for ioc in iocs if ioc.lower() not in set(matched_iocs)]
+        total_matches = sum(len(v) for v in grouped.values())
+
+        return {
+            "time_range": time_range,
+            "iocs_checked": len(iocs),
+            "matched_iocs": matched_iocs,
+            "matched_ioc_count": len(matched_iocs),
+            "unmatched_iocs": unmatched,
+            "total_alert_matches": total_matches,
+            "matches_by_ioc": {
+                ioc: {
+                    "alert_count": len(alerts),
+                    "alerts": alerts[:20],  # cap per-IOC to 20
+                }
+                for ioc, alerts in grouped.items()
+            },
+            "verdict": "ACTIVE_THREATS_DETECTED" if matched_iocs else "NO_MATCHES",
+        }
