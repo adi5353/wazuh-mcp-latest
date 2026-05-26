@@ -164,17 +164,20 @@ import threading as _threading
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 
 _audit_handler: _RotatingFileHandler | None = None
+_audit_handler_path: Path | None = None
 _audit_handler_lock = _threading.Lock()
 
 
 def _get_audit_handler() -> _RotatingFileHandler:
     """Return (or initialise) the module-level rotating file handler."""
-    global _audit_handler
-    if _audit_handler is not None:
+    global _audit_handler, _audit_handler_path
+    if _audit_handler is not None and _audit_handler_path == _AUDIT_LOG_PATH:
         return _audit_handler
     with _audit_handler_lock:
-        if _audit_handler is not None:
+        if _audit_handler is not None and _audit_handler_path == _AUDIT_LOG_PATH:
             return _audit_handler
+        if _audit_handler is not None:
+            _audit_handler.close()
         _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         handler = _RotatingFileHandler(
             str(_AUDIT_LOG_PATH),
@@ -183,6 +186,7 @@ def _get_audit_handler() -> _RotatingFileHandler:
             encoding="utf-8",
         )
         _audit_handler = handler
+        _audit_handler_path = _AUDIT_LOG_PATH
         return handler
 
 

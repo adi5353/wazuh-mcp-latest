@@ -127,6 +127,25 @@ def test_audit_redacts_sensitive_params(tmp_path, monkeypatch):
     assert record["params_scrubbed"]["user"] == "admin"
 
 
+def test_audit_reinitializes_handler_when_log_path_changes(tmp_path, monkeypatch):
+    import wazuh_mcp.audit as audit_mod
+    first_path = tmp_path / "first_audit.jsonl"
+    second_path = tmp_path / "second_audit.jsonl"
+    monkeypatch.setattr(audit_mod, "_audit_handler", None)
+    monkeypatch.setattr(audit_mod, "_audit_handler_path", None)
+
+    monkeypatch.setattr(audit_mod, "_AUDIT_LOG_PATH", first_path)
+    with audit_mod.audit_logger.record("first_tool", {"user": "alice"}, identity="tester"):
+        pass
+
+    monkeypatch.setattr(audit_mod, "_AUDIT_LOG_PATH", second_path)
+    with audit_mod.audit_logger.record("second_tool", {"user": "bob"}, identity="tester"):
+        pass
+
+    assert first_path.exists()
+    assert second_path.exists()
+
+
 # ── Log redaction tests ───────────────────────────────────────────────────────
 
 def test_redact_sensitive_processor():
