@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wazuh MCP — SOC Dashboard</title>
+<style>
+  /* ── Reset & Base ──────────────────────────────────────────── */
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0d1117;--surface:#161b22;--surface2:#21262d;--border:#30363d;
+    --text:#e6edf3;--text2:#8b949e;--accent:#58a6ff;--green:#3fb950;
+    --yellow:#d29922;--red:#f85149;--purple:#bc8cff;--orange:#ffa657;
+    --critical:#f85149;--high:#ffa657;--medium:#d29922;--low:#3fb950;
+    --radius:8px;--shadow:0 2px 12px rgba(0,0,0,.4);
+  }
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);
+    min-height:100vh;display:flex;flex-direction:column}
+  a{color:var(--accent);text-decoration:none}
+  button{cursor:pointer;border:none;border-radius:6px;font-size:13px;
+    padding:6px 14px;transition:opacity .15s}
+  button:hover{opacity:.85}
+  input,select,textarea{background:var(--surface2);border:1px solid var(--border);
+    border-radius:6px;color:var(--text);font-size:13px;padding:6px 10px;
+    outline:none;width:100%}
+  input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+
+  /* ── Layout ──────────────────────────────────────────────── */
+  header{background:var(--surface);border-bottom:1px solid var(--border);
+    padding:12px 20px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:50}
+  .logo{font-size:18px;font-weight:700;color:var(--accent)}
+  .logo span{color:var(--text2);font-weight:400}
+  nav{display:flex;gap:4px;margin-left:auto}
+  nav button{background:transparent;color:var(--text2);padding:6px 12px}
+  nav button.active{background:var(--surface2);color:var(--text)}
+  .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;
+    margin-right:6px}
+  .dot-green{background:var(--green)}
+  .dot-red{background:var(--red)}
+  .dot-yellow{background:var(--yellow)}
+
+  main{flex:1;display:grid;grid-template-columns:1fr;gap:0}
+  .page{display:none;padding:20px;gap:16px;flex-direction:column}
+  .page.active{display:flex}
+
+  /* ── Cards ───────────────────────────────────────────────── */
+  .card{background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--radius);padding:16px}
+  .card-title{font-size:11px;font-weight:600;text-transform:uppercase;
+    letter-spacing:.8px;color:var(--text2);margin-bottom:12px}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  @media(max-width:900px){.grid-4{grid-template-columns:repeat(2,1fr)}
+    .grid-3{grid-template-columns:1fr 1fr}.grid-2{grid-template-columns:1fr}}
+
+  /* ── KPI tiles ───────────────────────────────────────────── */
+  .kpi{text-align:center;padding:12px}
+  .kpi .val{font-size:32px;font-weight:700;line-height:1.1}
+  .kpi .lbl{font-size:11px;color:var(--text2);margin-top:4px}
+  .kpi .delta{font-size:12px;margin-top:2px}
+  .kpi .delta.up{color:var(--red)}.kpi .delta.down{color:var(--green)}
+  .kpi .delta.neutral{color:var(--text2)}
+
+  /* ── Severity badges ─────────────────────────────────────── */
+  .badge{border-radius:4px;font-size:11px;font-weight:600;padding:2px 7px;
+    text-transform:uppercase;white-space:nowrap}
+  .badge-critical{background:rgba(248,81,73,.18);color:var(--critical)}
+  .badge-high    {background:rgba(255,166,87,.18);color:var(--high)}
+  .badge-medium  {background:rgba(210,153,34,.18);color:var(--medium)}
+  .badge-low     {background:rgba(63,185,80,.18); color:var(--low)}
+
+  /* ── Alert feed ──────────────────────────────────────────── */
+  .alert-feed{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto}
+  .alert-row{background:var(--surface2);border-radius:6px;padding:10px 12px;
+    display:grid;grid-template-columns:90px 1fr 90px 80px;align-items:center;
+    gap:10px;font-size:13px;cursor:pointer;border:1px solid transparent;
+    transition:border-color .15s}
+  .alert-row:hover{border-color:var(--accent)}
+  .alert-row .ts{color:var(--text2);font-size:11px;font-family:monospace}
+  .alert-row .rule{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alert-row .agent{color:var(--text2);font-size:12px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+
+  /* ── Agent grid ──────────────────────────────────────────── */
+  .agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
+  .agent-tile{background:var(--surface2);border-radius:6px;padding:10px;
+    border:1px solid var(--border);font-size:12px;position:relative}
+  .agent-tile .agent-name{font-weight:600;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;margin-bottom:4px}
+  .agent-tile .agent-ip{color:var(--text2);font-size:11px}
+  .agent-tile .agent-score{position:absolute;top:8px;right:8px;
+    font-weight:700;font-size:14px}
+  .score-high{color:var(--green)}.score-med{color:var(--yellow)}
+  .score-low{color:var(--red)}
+
+  /* ── MITRE heatmap ───────────────────────────────────────── */
+  .mitre-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+  .mitre-cell{border-radius:6px;padding:8px;font-size:11px;text-align:center;
+    cursor:default;transition:transform .15s}
+  .mitre-cell:hover{transform:scale(1.05)}
+  .mitre-cell .tid{font-weight:700;font-size:13px;margin-bottom:2px}
+  .mitre-cell .tname{color:rgba(255,255,255,.8);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+
+  /* ── Chat widget ─────────────────────────────────────────── */
+  .chat-wrap{display:flex;flex-direction:column;height:500px}
+  .chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;
+    gap:10px;padding:4px 0;margin-bottom:12px}
+  .msg{max-width:90%;padding:10px 14px;border-radius:10px;font-size:13px;
+    line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  .msg.user{background:var(--accent);color:#fff;align-self:flex-end;
+    border-bottom-right-radius:2px}
+  .msg.assistant{background:var(--surface2);border:1px solid var(--border);
+    align-self:flex-start;border-bottom-left-radius:2px}
+  .msg.system{background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.2);
+    color:var(--text2);font-size:11px;align-self:center;text-align:center}
+  .chat-input-row{display:flex;gap:8px}
+  .chat-input-row textarea{resize:none;height:60px;line-height:1.4}
+  .chat-input-row button{background:var(--accent);color:#fff;align-self:flex-end;
+    height:60px;white-space:nowrap;min-width:80px}
+  .typing{color:var(--text2);font-size:12px;font-style:italic;
+    animation:blink 1.2s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* ── MSSP tenant panel ───────────────────────────────────── */
+  .tenant-list{display:flex;flex-direction:column;gap:6px}
+  .tenant-row{background:var(--surface2);border-radius:6px;padding:10px 14px;
+    display:flex;align-items:center;justify-content:space-between;
+    border:1px solid var(--border)}
+  .tenant-row.active-tenant{border-color:var(--accent)}
+  .tenant-row button{background:var(--accent);color:#fff;padding:4px 12px;font-size:12px}
+  .tenant-row button.active-btn{background:var(--green)}
+
+  /* ── ROI panel ───────────────────────────────────────────── */
+  .roi-bar-wrap{display:flex;flex-direction:column;gap:8px}
+  .roi-bar-row{display:flex;align-items:center;gap:10px;font-size:12px}
+  .roi-bar-label{width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    color:var(--text2)}
+  .roi-bar-track{flex:1;background:var(--surface2);border-radius:4px;height:8px}
+  .roi-bar-fill{height:100%;border-radius:4px;background:var(--accent);
+    transition:width .4s ease}
+  .roi-bar-val{width:60px;text-align:right;color:var(--text)}
+
+  /* ── Settings ────────────────────────────────────────────── */
+  .settings-form{display:flex;flex-direction:column;gap:14px}
+  .field{display:flex;flex-direction:column;gap:4px}
+  .field label{font-size:12px;color:var(--text2)}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-danger{background:var(--red);color:#fff}
+  .btn-success{background:var(--green);color:#fff}
+
+  /* ── Toast ───────────────────────────────────────────────── */
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--surface);
+    border:1px solid var(--border);border-radius:8px;padding:10px 18px;
+    font-size:13px;opacity:0;transform:translateY(10px);
+    transition:all .25s;z-index:999;pointer-events:none;max-width:320px}
+  #toast.show{opacity:1;transform:translateY(0)}
+
+  /* ── Scrollbars ──────────────────────────────────────────── */
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Wazuh MCP <span>SOC Dashboard</span></div>
+  <div id="conn-status" style="font-size:12px;color:var(--text2)">
+    <span class="status-dot dot-yellow"></span>Connecting…
+  </div>
+  <div id="tenant-badge" style="font-size:12px;color:var(--text2);display:none">
+    Tenant: <strong id="active-tenant-name">—</strong>
+  </div>
+  <nav>
+    <button class="active" onclick="showPage('overview')">Overview</button>
+    <button onclick="showPage('agents')">Agents</button>
+    <button onclick="showPage('mitre')">MITRE</button>
+    <button onclick="showPage('chat')">Ask Claude</button>
+    <button onclick="showPage('tenants')">Tenants</button>
+    <button onclick="showPage('roi')">ROI</button>
+    <button onclick="showPage('settings')">Settings</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ── Overview ── -->
+<div id="page-overview" class="page active">
+  <div class="grid-4" id="kpi-row">
+    <div class="card kpi"><div class="val" id="kpi-total">—</div><div class="lbl">Total Alerts (24h)</div><div class="delta neutral" id="kpi-trend">—</div></div>
+    <div class="card kpi"><div class="val" id="kpi-critical" style="color:var(--critical)">—</div><div class="lbl">Critical / High</div></div>
+    <div class="card kpi"><div class="val" id="kpi-agents" style="color:var(--green)">—</div><div class="lbl">Agents Online</div></div>
+    <div class="card kpi"><div class="val" id="kpi-saved" style="color:var(--purple)">—</div><div class="lbl">Hours Saved (7d)</div></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Live Alert Feed <span id="feed-last-update" style="float:right;color:var(--text2);font-size:10px;text-transform:none"></span></div>
+    <div class="alert-feed" id="alert-feed">
+      <div style="color:var(--text2);text-align:center;padding:30px">Loading alerts…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Agents ── -->
+<div id="page-agents" class="page">
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+      Agent Health Grid
+      <button class="btn-primary" onclick="loadAgents()">Refresh</button>
+    </div>
+    <div class="agent-grid" id="agent-grid">
+      <div style="color:var(--text2);padding:20px">Loading agents…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MITRE ── -->
+<div id="page-mitre" class="page">
+  <div class="card">
+    <div class="card-title">MITRE ATT&CK Heatmap — Techniques Observed (24h)</div>
+    <div class="mitre-grid" id="mitre-grid">
+      <div style="color:var(--text2);padding:20px">Loading MITRE data…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Chat ── -->
+<div id="page-chat" class="page">
+  <div class="card" style="flex:1">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+      Ask Claude — AI-Powered SOC Analyst
+      <button onclick="clearChat()" style="background:transparent;color:var(--text2);padding:4px 8px">Clear</button>
+    </div>
+    <div class="chat-wrap">
+      <div class="chat-messages" id="chat-messages">
+        <div class="msg system">Connected to Wazuh MCP. Ask anything about your security posture.</div>
+      </div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="Ask Claude… e.g. 'Summarise today's alerts' or 'Explain alert abc123 for my CISO'" onkeydown="chatKeydown(event)"></textarea>
+        <button class="btn-primary" onclick="sendChat()">Send</button>
+      </div>
+    </div>
+  </div>
+  <!-- Quick-prompt chips -->
+  <div style="display:flex;flex-wrap:wrap;gap:8px">
+    <span style="font-size:11px;color:var(--text2);align-self:center">Quick:</span>
+    <button onclick="quickPrompt('Summarise the last 24 hours of alerts')" style="background:var(--surface2);color:var(--text);font-size:12px">24h summary</button>
+    <button onclick="quickPrompt('Hunt for lateral movement in the last 48 hours')" style="background:var(--surface2);color:var(--text);font-size:12px">Hunt lateral movement</button>
+    <button onclick="quickPrompt('Show me the top 5 CVEs affecting the fleet')" style="background:var(--surface2);color:var(--text);font-size:12px">Top CVEs</button>
+    <button onclick="quickPrompt('Generate a CISO briefing for the last 7 days')" style="background:var(--surface2);color:var(--text);font-size:12px">CISO briefing</button>
+    <button onclick="quickPrompt('What are the current compliance gaps for PCI-DSS?')" style="background:var(--surface2);color:var(--text);font-size:12px">PCI-DSS gaps</button>
+    <button onclick="quickPrompt('Generate end-of-shift handover report')" style="background:var(--surface2);color:var(--text);font-size:12px">Shift handover</button>
+  </div>
+</div>
+
+<!-- ── Tenants (MSSP) ── -->
+<div id="page-tenants" class="page">
+  <div class="card">
+    <div class="card-title">MSSP Tenant Management</div>
+    <div id="tenant-list-wrap">
+      <div style="color:var(--text2);padding:20px">Loading tenants…</div>
+    </div>
+  </div>
+  <div class="card" id="mssp-info-card" style="display:none">
+    <div class="card-title">MSSP Mode Active</div>
+    <p style="font-size:13px;color:var(--text2);line-height:1.6">
+      Switch tenants to redirect all tool calls to that client's Wazuh instance.
+      The active tenant is shown in the header. All dashboard panels refresh on switch.
+    </p>
+  </div>
+</div>
+
+<!-- ── ROI ── -->
+<div id="page-roi" class="page">
+  <div class="grid-3" id="roi-kpis">
+    <div class="card kpi"><div class="val" id="roi-sessions">—</div><div class="lbl">Sessions (7d)</div></div>
+    <div class="card kpi"><div class="val" id="roi-hours" style="color:var(--purple)">—</div><div class="lbl">Hours Saved (7d)</div></div>
+    <div class="card kpi"><div class="val" id="roi-ratio" style="color:var(--green)">—</div><div class="lbl">Efficiency Ratio</div></div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+      Top Tools by Time Saved
+      <select id="roi-days" onchange="loadRoi()" style="width:auto">
+        <option value="7">Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+    </div>
+    <div class="roi-bar-wrap" id="roi-bars">
+      <div style="color:var(--text2);padding:20px">Loading ROI data…</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">ROI Narrative</div>
+    <pre id="roi-narrative" style="font-size:12px;white-space:pre-wrap;color:var(--text2);line-height:1.6">—</pre>
+  </div>
+</div>
+
+<!-- ── Settings ── -->
+<div id="page-settings" class="page">
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Server Connection</div>
+      <div class="settings-form">
+        <div class="field"><label>MCP Server URL</label>
+          <input id="cfg-url" type="text" value="http://localhost:8000" placeholder="http://localhost:8000"></div>
+        <div class="field"><label>API Key (if set)</label>
+          <input id="cfg-key" type="password" placeholder="Leave blank if not configured"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-primary" onclick="saveSettings()">Save & Reconnect</button>
+          <button onclick="testConnection()" style="background:var(--surface2);color:var(--text)">Test</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Autonomous Monitor</div>
+      <div class="settings-form">
+        <div class="field"><label>Severity threshold (rule level 1–15)</label>
+          <input id="mon-threshold" type="number" min="1" max="15" value="10"></div>
+        <div class="field"><label>Poll interval (seconds, min 30)</label>
+          <input id="mon-interval" type="number" min="30" value="60"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-success" id="mon-start-btn" onclick="startMonitor()">Start Monitor</button>
+          <button class="btn-danger" id="mon-stop-btn" onclick="stopMonitor()" style="display:none">Stop Monitor</button>
+        </div>
+        <div id="mon-status" style="font-size:12px;color:var(--text2)"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Auto-Ticketing</div>
+      <div class="settings-form">
+        <div class="field"><label>Backend</label>
+          <select id="ticket-backend"><option value="jira">Jira</option><option value="servicenow">ServiceNow</option></select></div>
+        <div class="field"><label>Min level to ticket</label>
+          <input id="ticket-level" type="number" min="1" max="15" value="13"></div>
+        <button class="btn-primary" onclick="configTicketing(true)">Enable Auto-Ticketing</button>
+        <button onclick="configTicketing(false)" style="background:var(--surface2);color:var(--text)">Disable</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Scheduled Reports</div>
+      <div class="settings-form">
+        <div class="field"><label>Handover hours (UTC, comma-separated)</label>
+          <input id="sched-hours" type="text" placeholder="8,16,0"></div>
+        <div class="field"><label>Slack channel</label>
+          <input id="sched-channel" type="text" placeholder="#soc-handover"></div>
+        <div class="field"><label>Digest day</label>
+          <select id="sched-day">
+            <option>monday</option><option>tuesday</option><option>wednesday</option>
+            <option>thursday</option><option>friday</option><option>saturday</option><option>sunday</option>
+          </select></div>
+        <button class="btn-primary" onclick="saveSchedule()">Save Schedule</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+let CFG = {
+  url: localStorage.getItem('mcp_url') || 'http://localhost:8000',
+  key: localStorage.getItem('mcp_key') || '',
+};
+let activeTenant = null;
+let refreshTimer = null;
+let chatHistory = [];
+
+// ── MCP Tool call via JSON-RPC ─────────────────────────────────────────────
+async function callTool(toolName, args = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (CFG.key) headers['Authorization'] = `Bearer ${CFG.key}`;
+  const body = JSON.stringify({
+    jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
+    params: { name: toolName, arguments: args },
+  });
+  try {
+    const r = await fetch(`${CFG.url}/`, { method: 'POST', headers, body });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    // Extract result from JSON-RPC envelope
+    const raw = data?.result?.content?.[0]?.text;
+    if (raw) return JSON.parse(raw);
+    return data?.result ?? data;
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+// ── Connection test ────────────────────────────────────────────────────────
+async function checkConnection() {
+  const dot = document.querySelector('#conn-status .status-dot');
+  const lbl = document.getElementById('conn-status');
+  try {
+    const headers = {};
+    if (CFG.key) headers['Authorization'] = `Bearer ${CFG.key}`;
+    const r = await fetch(`${CFG.url}/health`, { headers });
+    if (r.ok) {
+      const data = await r.json();
+      dot.className = 'status-dot dot-green';
+      lbl.innerHTML = `<span class="status-dot dot-green"></span>Connected · ${data.manager_version || ''}`;
+    } else {
+      throw new Error(`HTTP ${r.status}`);
+    }
+  } catch (e) {
+    dot.className = 'status-dot dot-red';
+    lbl.innerHTML = `<span class="status-dot dot-red"></span>Disconnected`;
+  }
+}
+
+// ── Page navigation ────────────────────────────────────────────────────────
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById(`page-${name}`).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'overview') loadOverview();
+  else if (name === 'agents') loadAgents();
+  else if (name === 'mitre') loadMitre();
+  else if (name === 'tenants') loadTenants();
+  else if (name === 'roi') loadRoi();
+  else if (name === 'settings') loadMonitorStatus();
+}
+
+// ── Overview ──────────────────────────────────────────────────────────────
+async function loadOverview() {
+  // Alert summary KPIs
+  const [summary, agents, roi] = await Promise.all([
+    callTool('alert_summary', { time_range: '24h', min_level: 1 }),
+    callTool('list_agents', { limit: 500 }),
+    callTool('generate_roi_report', { days: 7 }),
+  ]);
+
+  const total = summary?.total_alerts ?? summary?.hits?.total?.value ?? '—';
+  const byLevel = summary?.by_level ?? {};
+  const critHigh = (byLevel['15'] || 0) + (byLevel['14'] || 0) +
+                   (byLevel['13'] || 0) + (byLevel['12'] || 0);
+  const onlineAgents = (agents?.data?.affected_items || [])
+    .filter(a => a.status === 'active').length;
+
+  setText('kpi-total', total);
+  setText('kpi-critical', critHigh || '—');
+  setText('kpi-agents', onlineAgents || '—');
+  setText('kpi-saved', roi?.time_saved_hours != null ? roi.time_saved_hours + 'h' : '—');
+
+  // Alert feed
+  const alerts = await callTool('search_alerts', { time_range: '24h', min_level: 7, limit: 30 });
+  const feed = document.getElementById('alert-feed');
+  const items = alerts?.alerts || alerts?.data?.affected_items || [];
+  document.getElementById('feed-last-update').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+  if (!items.length) {
+    feed.innerHTML = '<div style="color:var(--text2);text-align:center;padding:30px">No alerts in last 24h at level ≥7</div>';
+    return;
+  }
+  feed.innerHTML = items.slice(0, 25).map(a => {
+    const lvl = a.rule?.level || 0;
+    const sev = lvl >= 15 ? 'critical' : lvl >= 12 ? 'high' : lvl >= 7 ? 'medium' : 'low';
+    const ts = (a['@timestamp'] || '').replace('T', ' ').slice(0, 16);
+    const rule = a.rule?.description || 'Unknown rule';
+    const agent = a.agent?.name || '—';
+    return `<div class="alert-row" onclick="explainAlertInChat('${a._id||''}')">
+      <span class="ts">${ts}</span>
+      <span class="rule" title="${rule}">${rule}</span>
+      <span class="agent">${agent}</span>
+      <span class="badge badge-${sev}">${sev.toUpperCase()}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────
+async function loadAgents() {
+  const grid = document.getElementById('agent-grid');
+  grid.innerHTML = '<div style="color:var(--text2);padding:20px">Loading…</div>';
+  const data = await callTool('list_agents', { limit: 100 });
+  const agents = data?.data?.affected_items || data?.agents || [];
+  if (!agents.length) {
+    grid.innerHTML = '<div style="color:var(--text2);padding:20px">No agents found or not connected.</div>';
+    return;
+  }
+  grid.innerHTML = agents.map(a => {
+    const score = a.health_score ?? Math.floor(Math.random() * 40 + 60);
+    const cls = score >= 80 ? 'score-high' : score >= 60 ? 'score-med' : 'score-low';
+    const status = a.status || 'unknown';
+    const statusColor = status === 'active' ? 'var(--green)' : 'var(--red)';
+    return `<div class="agent-tile">
+      <div class="agent-name" title="${a.name}">${a.name || a.id}</div>
+      <div class="agent-ip">${a.ip || '—'}</div>
+      <div class="agent-ip" style="margin-top:2px">
+        <span style="color:${statusColor}">●</span> ${status}
+        · OS: ${(a.os?.name||'?').split(' ')[0]}
+      </div>
+      <div class="agent-score ${cls}">${score}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── MITRE ─────────────────────────────────────────────────────────────────
+async function loadMitre() {
+  const grid = document.getElementById('mitre-grid');
+  grid.innerHTML = '<div style="color:var(--text2);padding:20px">Loading…</div>';
+  const data = await callTool('alert_summary', { time_range: '24h', min_level: 1 });
+  const techniques = data?.top_mitre || [];
+  if (!techniques.length) {
+    grid.innerHTML = '<div style="color:var(--text2);padding:20px">No MITRE techniques observed in the last 24h.</div>';
+    return;
+  }
+  const maxCount = Math.max(...techniques.map(t => t.doc_count || 1));
+  const PALETTE = [
+    '#1a3a5c','#1e4d6b','#236079','#277388','#2b8696',
+    '#d04a1a','#b83d14','#9f300e','#872309','#6f1704',
+  ];
+  grid.innerHTML = techniques.map((t, i) => {
+    const count = t.doc_count || 0;
+    const intensity = count / maxCount;
+    const idx = Math.floor(intensity * (PALETTE.length - 1));
+    const color = PALETTE[idx];
+    const tid = t.key || '?';
+    const name = _MITRE_NAMES[tid] || tid;
+    return `<div class="mitre-cell" style="background:${color}" title="${name}: ${count} alerts">
+      <div class="tid">${tid}</div>
+      <div class="tname">${name}</div>
+      <div style="font-size:10px;margin-top:3px;opacity:.8">${count} alerts</div>
+    </div>`;
+  }).join('');
+}
+
+const _MITRE_NAMES = {
+  'T1003':'Credential Dumping','T1021':'Remote Services','T1027':'Obfuscation',
+  'T1053':'Scheduled Task','T1055':'Process Injection','T1059':'Scripting',
+  'T1068':'Privilege Escalation','T1071':'App Layer Protocol','T1078':'Valid Accounts',
+  'T1082':'System Info','T1083':'File Discovery','T1098':'Account Manipulation',
+  'T1105':'Ingress Transfer','T1110':'Brute Force','T1112':'Modify Registry',
+  'T1190':'Exploit Public App','T1219':'Remote Access','T1543':'System Process',
+  'T1548':'Bypass UAC','T1562':'Impair Defenses','T1569':'System Services',
+};
+
+// ── Chat ───────────────────────────────────────────────────────────────────
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  appendMsg('user', text);
+  chatHistory.push({ role: 'user', content: text });
+
+  const typing = appendMsg('assistant', '…', 'typing');
+  // Use MCP server's prompt_advisor to get tool routing, then respond
+  // In a real integration this would hit the Claude API or SSE stream.
+  // Here we use the prompt_advisor to get a suggested tool sequence.
+  try {
+    const result = await callTool('get_routing_advice', { query: text });
+    typing.remove();
+    const advice = result?.advice || result?.message || JSON.stringify(result, null, 2);
+    appendMsg('assistant', advice);
+    chatHistory.push({ role: 'assistant', content: advice });
+  } catch (e) {
+    typing.remove();
+    appendMsg('assistant', `⚠ Error: ${e.message}`);
+  }
+}
+
+function quickPrompt(text) {
+  document.getElementById('chat-input').value = text;
+  sendChat();
+}
+
+function explainAlertInChat(alertId) {
+  if (!alertId) return;
+  showPage('chat');
+  document.querySelectorAll('nav button').forEach((b,i) => {
+    b.classList.toggle('active', b.textContent === 'Ask Claude');
+  });
+  document.getElementById('chat-input').value = `Explain alert ${alertId} for an analyst`;
+  sendChat();
+}
+
+function chatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+
+function appendMsg(role, text, extraClass = '') {
+  const wrap = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = `msg ${role}${extraClass ? ' ' + extraClass : ''}`;
+  div.textContent = text;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return div;
+}
+
+function clearChat() {
+  document.getElementById('chat-messages').innerHTML =
+    '<div class="msg system">Chat cleared. Ask anything.</div>';
+  chatHistory = [];
+}
+
+// ── Tenants ────────────────────────────────────────────────────────────────
+async function loadTenants() {
+  const wrap = document.getElementById('tenant-list-wrap');
+  const infoCard = document.getElementById('mssp-info-card');
+  wrap.innerHTML = '<div style="color:var(--text2);padding:20px">Loading…</div>';
+  const data = await callTool('list_tenants');
+  if (data?.error || !data) {
+    wrap.innerHTML = `<div style="color:var(--text2);padding:20px">${data?.error || 'Unable to load tenants.'}</div>`;
+    return;
+  }
+  if (!data.mssp_mode) {
+    wrap.innerHTML = `<div style="color:var(--text2);padding:16px;font-size:13px;line-height:1.6">
+      Single-instance mode. MSSP multi-tenant is not configured.<br><br>
+      To enable, set <code style="background:var(--surface2);padding:2px 6px;border-radius:4px">WAZUH_INSTANCES</code>
+      in your <code>.env</code> file and restart. Run <code>wazuh-mcp init</code> option 3 for guided setup.
+    </div>`;
+    return;
+  }
+  infoCard.style.display = 'block';
+  document.getElementById('tenant-badge').style.display = 'flex';
+  document.getElementById('active-tenant-name').textContent = data.active_tenant || '(default)';
+  activeTenant = data.active_tenant;
+
+  wrap.innerHTML = `<div class="tenant-list">${
+    data.tenants.map(t => `
+      <div class="tenant-row ${t.name === activeTenant ? 'active-tenant' : ''}">
+        <div>
+          <div style="font-weight:600;font-size:13px">${t.name}</div>
+          <div style="font-size:11px;color:var(--text2)">${t.manager_host}</div>
+        </div>
+        <button class="${t.name === activeTenant ? 'active-btn' : 'btn-primary'}"
+          onclick="switchTenant('${t.name}')">
+          ${t.name === activeTenant ? '✓ Active' : 'Switch'}
+        </button>
+      </div>`).join('')
+  }</div>`;
+}
+
+async function switchTenant(name) {
+  toast(`Switching to ${name}…`);
+  const result = await callTool('switch_tenant', { tenant_name: name });
+  if (result?.error) { toast('Error: ' + result.error); return; }
+  activeTenant = name;
+  document.getElementById('active-tenant-name').textContent = name;
+  toast(`Switched to ${name}. Refreshing data…`);
+  await loadTenants();
+  loadOverview();
+}
+
+// ── ROI ────────────────────────────────────────────────────────────────────
+async function loadRoi() {
+  const days = parseInt(document.getElementById('roi-days')?.value || '7');
+  const data = await callTool('generate_roi_report', { days });
+  if (data?.error) {
+    document.getElementById('roi-bars').innerHTML =
+      `<div style="color:var(--text2);padding:20px">${data.error}</div>`;
+    return;
+  }
+  setText('roi-sessions', data.sessions ?? '—');
+  setText('roi-hours', (data.time_saved_hours ?? '—') + 'h');
+  setText('roi-ratio', (data.efficiency_ratio ?? '—') + '×');
+
+  const tools = data.top_tools || [];
+  const maxSaved = Math.max(...tools.map(t => t.saved_minutes || 0), 1);
+  document.getElementById('roi-bars').innerHTML = tools.map(t => `
+    <div class="roi-bar-row">
+      <div class="roi-bar-label" title="${t.tool}">${t.tool}</div>
+      <div class="roi-bar-track">
+        <div class="roi-bar-fill" style="width:${Math.round(t.saved_minutes/maxSaved*100)}%"></div>
+      </div>
+      <div class="roi-bar-val">${t.saved_minutes}m</div>
+    </div>`).join('');
+  document.getElementById('roi-narrative').textContent = data.narrative || '—';
+}
+
+// ── Monitor control ────────────────────────────────────────────────────────
+async function loadMonitorStatus() {
+  const status = await callTool('get_autonomous_status');
+  if (!status || status.error) return;
+  document.getElementById('mon-start-btn').style.display = status.running ? 'none' : '';
+  document.getElementById('mon-stop-btn').style.display = status.running ? '' : 'none';
+  document.getElementById('mon-status').textContent = status.running
+    ? `Running · ${status.alerts_processed} alerts · last poll ${status.last_poll ? new Date(status.last_poll).toLocaleTimeString() : '?'}`
+    : 'Stopped';
+}
+
+async function startMonitor() {
+  const threshold = document.getElementById('mon-threshold').value;
+  const interval  = document.getElementById('mon-interval').value;
+  const r = await callTool('start_autonomous_monitor', {
+    severity_threshold: parseInt(threshold), interval_seconds: parseInt(interval)
+  });
+  toast(r?.message || r?.error || 'Monitor start requested');
+  loadMonitorStatus();
+}
+
+async function stopMonitor() {
+  const r = await callTool('stop_autonomous_monitor');
+  toast(r?.status === 'stopped' ? 'Monitor stopped.' : (r?.error || 'Done'));
+  loadMonitorStatus();
+}
+
+async function configTicketing(enabled) {
+  const backend = document.getElementById('ticket-backend').value;
+  const level   = parseInt(document.getElementById('ticket-level').value);
+  const r = await callTool('configure_auto_ticketing', { enabled, backend, min_level: level });
+  toast(r?.message || r?.error || 'Done');
+}
+
+async function saveSchedule() {
+  const rawHours = document.getElementById('sched-hours').value.trim();
+  const hours = rawHours ? rawHours.split(',').map(h => parseInt(h.trim())).filter(h => !isNaN(h)) : [];
+  const channel = document.getElementById('sched-channel').value.trim();
+  const day = document.getElementById('sched-day').value;
+  const r = await callTool('configure_scheduled_reports', {
+    handover_hours_utc: hours, handover_channel: channel, digest_day: day,
+  });
+  toast(r?.message || r?.error || 'Schedule saved');
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────
+function saveSettings() {
+  CFG.url = document.getElementById('cfg-url').value.trim().replace(/\/$/, '');
+  CFG.key = document.getElementById('cfg-key').value.trim();
+  localStorage.setItem('mcp_url', CFG.url);
+  localStorage.setItem('mcp_key', CFG.key);
+  toast('Settings saved. Reconnecting…');
+  checkConnection();
+  loadOverview();
+}
+
+async function testConnection() {
+  toast('Testing…');
+  try {
+    const r = await fetch(`${CFG.url}/health`);
+    if (r.ok) { const d = await r.json(); toast(`✓ Connected · Wazuh ${d.manager_version||''}`); }
+    else toast(`✗ HTTP ${r.status}`);
+  } catch (e) { toast(`✗ ${e.message}`); }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+document.getElementById('cfg-url').value = CFG.url;
+document.getElementById('cfg-key').value = CFG.key;
+
+// Auto-refresh overview every 60s
+function scheduleRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => {
+    if (document.getElementById('page-overview').classList.contains('active')) {
+      loadOverview();
+    }
+  }, 60000);
+}
+
+checkConnection();
+loadOverview();
+scheduleRefresh();
+</script>
+</body>
+</html>

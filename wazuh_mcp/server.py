@@ -123,8 +123,16 @@ def _sanitizing_tool_decorator(*args, **kwargs):
                         msg += " [session locked to VIEWER after repeated violations]"
                     return {"error": msg}
 
-            # ── Tool execution ────────────────────────────────────────────────
+            # ── Tool execution (with ROI timing) ─────────────────────────────
+            import time as _time
+            _t0 = _time.monotonic()
             result = await fn(*fn_args, **clean_kwargs)
+            _duration = _time.monotonic() - _t0
+            try:
+                from .core.roi_tracker import record_call
+                record_call(fn.__name__, _duration)
+            except Exception:
+                pass
 
             # ── OUTPUT sanitization ───────────────────────────────────────────
             if isinstance(result, dict):
@@ -219,6 +227,7 @@ from .tools import syslog_config as _syslog_config_module  # noqa: E402
 from .tools import health_check as _health_check_module  # noqa: E402
 from .tools import prompt_advisor as _prompt_advisor_module  # noqa: E402
 from .tools import explain_alert as _explain_alert_module  # noqa: E402
+from .tools import roi as _roi_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -385,6 +394,7 @@ _syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _health_check_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _explain_alert_module.register(mcp, wz, idx, cfg, _cap, _geoip_lookup)
+_roi_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 
 
 # ── Session identity tool (Gap 1) ─────────────────────────────────────────────
