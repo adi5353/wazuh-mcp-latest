@@ -4,6 +4,7 @@
 
 **121+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (PCI-DSS, HIPAA, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
+[![CI](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml/badge.svg)](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
@@ -12,6 +13,19 @@
 ---
 
 ## What's New
+
+### v2.2 — Phase 1 Foundation Improvements
+
+Infrastructure hardening and performance improvements. No breaking changes.
+
+| Area | Change | Details |
+|---|---|---|
+| **CI/CD** | GitHub Actions pipeline | Lint (ruff + mypy), security scan (bandit + pip-audit), pytest across Python 3.10/3.11/3.12 with 70% coverage gate, Docker build — runs on every push and PR |
+| **Performance** | HTTP connection pooling | `WazuhClient` and `WazuhIndexer` now share persistent `httpx.AsyncClient` pools (20 max connections, 10 keepalive) — eliminates per-request TCP handshake overhead |
+| **Security** | HTTPS GeoIP | `enrich_ip_geo` now uses **ipinfo.io over HTTPS** by default (was `http://ip-api.com`). Configurable via `WAZUH_GEOIP_PROVIDER`. Set `IPINFO_TOKEN` for 50k/mo free lookups |
+| **Operations** | Audit log rotation | `logs/audit.jsonl` now auto-rotates at 50 MB (configurable via `WAZUH_AUDIT_MAX_BYTES`), keeping 7 backups (`WAZUH_AUDIT_BACKUP_COUNT`) — prevents unbounded disk growth in production SOCs |
+
+---
 
 ### v2.1 — 7 high-impact tools (cross-fleet correlation, Sigma pipeline, IOC enrichment)
 
@@ -393,6 +407,10 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `WAZUH_MCP_RATE_LIMIT_RPM` | `60` | Max requests per minute per API-key identity |
 | `WAZUH_MCP_RATE_LIMIT_BURST` | `10` | Burst allowance above RPM limit |
 | `WAZUH_AUDIT_LOG` | `logs/audit.jsonl` | Path for structured JSONL audit trail |
+| `WAZUH_AUDIT_MAX_BYTES` | `52428800` | Audit log max size before rotation (default 50 MB) |
+| `WAZUH_AUDIT_BACKUP_COUNT` | `7` | Number of rotated audit log backups to keep |
+| `WAZUH_GEOIP_PROVIDER` | `ipinfo` | GeoIP provider: `ipinfo` (HTTPS, default) or `ip-api` (HTTPS fallback) |
+| `IPINFO_TOKEN` | — | ipinfo.io token for 50k/mo free lookups (optional — works without token at lower limits) |
 | `WAZUH_REQUEST_TIMEOUT` | `30` | Per-request API timeout in seconds |
 | `WAZUH_MAX_RESULTS_GLOBAL` | `500` | Hard cap on results from any list tool |
 
@@ -930,6 +948,9 @@ Available as `/` commands in Claude Code and prompt-aware clients.
 
 ```
 wazuh-mcp-latest/
+├── .github/
+│   └── workflows/
+│       └── ci.yml               # lint → security → test (py3.10/3.11/3.12) → docker build
 ├── wazuh_mcp/
 │   ├── __main__.py          # entry point — transport selection
 │   ├── server.py            # FastMCP app, shared helpers, MCP prompts
@@ -998,6 +1019,8 @@ The sliding-window rate limiter (`WAZUH_MCP_RATE_LIMIT_RPM=60`) prevents runaway
 
 Every tool call is logged to `WAZUH_AUDIT_LOG` (default `logs/audit.jsonl`) as a JSONL record containing timestamp, tool name, caller identity, scrubbed parameters, result code, and duration. Credential values are never written.
 
+The log is **automatically rotated** at 50 MB (7 backups, ~350 MB total). Override with `WAZUH_AUDIT_MAX_BYTES` and `WAZUH_AUDIT_BACKUP_COUNT`.
+
 ### Response sanitization
 
 Tool responses are sanitized before reaching the LLM client — prompt injection tokens (`<system>`, `[INST]`, `###System:`) and plaintext secrets are stripped from all string values in returned data.
@@ -1043,6 +1066,39 @@ All integrations are opt-in. Tools degrade gracefully if credentials are absent.
 - **Slack bot token** — `SLACK_BOT_TOKEN` + `SLACK_DEFAULT_CHANNEL` (multi-channel)
 - **Microsoft Teams** — `TEAMS_WEBHOOK_URL` — Teams channel → **…** → Connectors → Incoming Webhook → Create → copy URL
 - **Email (SMTP)** — `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `REPORT_EMAIL_FROM`, `REPORT_EMAIL_TO`
+
+---
+
+## Development & CI
+
+### Running tests locally
+
+```bash
+pip install -e ".[dev]"
+pytest -q                          # run all tests
+pytest --cov --cov-report=html     # with HTML coverage report in htmlcov/
+```
+
+### Lint & security scan
+
+```bash
+pip install ruff mypy bandit pip-audit
+ruff check wazuh_mcp               # linting
+mypy wazuh_mcp --ignore-missing-imports  # type checking
+bandit -r wazuh_mcp -c pyproject.toml    # SAST scan
+pip-audit --requirement requirements.txt # dependency CVE check
+```
+
+### CI pipeline
+
+Every push and pull request runs four GitHub Actions jobs automatically:
+
+| Job | What it checks |
+|---|---|
+| **lint** | `ruff check` + `mypy` on Python 3.11 |
+| **security** | `bandit` SAST + `pip-audit` dependency CVE scan |
+| **test** | `pytest --cov-fail-under=70` across Python 3.10, 3.11, 3.12 |
+| **docker** | Full `docker build` with layer cache |
 
 ---
 

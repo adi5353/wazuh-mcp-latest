@@ -152,8 +152,38 @@ _log = logging.getLogger("wazuh_mcp.audit")
 # Audit log path — override with WAZUH_AUDIT_LOG env var.
 _AUDIT_LOG_PATH = Path(os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
 
+# Rotation config — WAZUH_AUDIT_MAX_BYTES (default 50 MB) and WAZUH_AUDIT_BACKUP_COUNT (default 7).
+_AUDIT_MAX_BYTES:    int = int(os.getenv("WAZUH_AUDIT_MAX_BYTES",    str(50 * 1024 * 1024)))
+_AUDIT_BACKUP_COUNT: int = int(os.getenv("WAZUH_AUDIT_BACKUP_COUNT", "7"))
+
 # Optional HMAC signing key — set WAZUH_AUDIT_LOG_SIGNING_KEY to enable tamper detection.
 _SIGNING_KEY: str = os.getenv("WAZUH_AUDIT_LOG_SIGNING_KEY", "")
+
+# ── Rotating file handler (lazy-initialised on first write) ───────────────────
+import threading as _threading
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+
+_audit_handler: _RotatingFileHandler | None = None
+_audit_handler_lock = _threading.Lock()
+
+
+def _get_audit_handler() -> _RotatingFileHandler:
+    """Return (or initialise) the module-level rotating file handler."""
+    global _audit_handler
+    if _audit_handler is not None:
+        return _audit_handler
+    with _audit_handler_lock:
+        if _audit_handler is not None:
+            return _audit_handler
+        _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handler = _RotatingFileHandler(
+            str(_AUDIT_LOG_PATH),
+            maxBytes=_AUDIT_MAX_BYTES,
+            backupCount=_AUDIT_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        _audit_handler = handler
+        return handler
 
 
 def _sign_record(record: dict) -> dict:
@@ -190,11 +220,20 @@ def _params_fingerprint(params: dict) -> str:
 
 
 def _write_record(record: dict) -> None:
-    """Append a JSONL record to the audit log, creating the file/dir if needed."""
+    """Append a JSONL record to the rotating audit log."""
     try:
-        _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _AUDIT_LOG_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, default=str) + "\n")
+        handler = _get_audit_handler()
+        line = json.dumps(record, default=str) + "\n"
+        # RotatingFileHandler.emit() expects a LogRecord; bypass it and write
+        # directly to the stream so we control the exact byte layout.
+        handler.acquire()
+        try:
+            if handler.shouldRollover(None):  # type: ignore[arg-type]
+                handler.doRollover()
+            handler.stream.write(line)
+            handler.stream.flush()
+        finally:
+            handler.release()
     except Exception as exc:  # noqa: BLE001
         _log.error("audit_write_failed error=%s", exc)
 

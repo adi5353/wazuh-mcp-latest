@@ -4,6 +4,10 @@ Retry policy (Gap 12):
   3 attempts — delays of ~1s, ~2s, ~4s (capped at 10s) + randomised ±1s jitter.
   Retries on: network errors (httpx.RequestError) and transient 5xx responses.
   Does NOT retry 4xx client errors (except 429 Too Many Requests).
+
+Connection pooling:
+  A single httpx.AsyncClient is shared across all requests (20 max connections,
+  10 keepalive). Call aclose() / use as async context manager on server shutdown.
 """
 from __future__ import annotations
 import asyncio
@@ -26,6 +30,10 @@ TOKEN_TTL_SECONDS = 800
 _MAX_RETRIES  = 3
 _RETRY_BASE   = 1.0   # seconds — first delay before jitter
 _RETRY_CAP    = 10.0  # seconds — maximum delay before jitter
+
+# ── Connection pool limits ─────────────────────────────────────────────────────
+_POOL_MAX_CONNECTIONS       = 20
+_POOL_MAX_KEEPALIVE         = 10
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -54,21 +62,39 @@ class WazuhClient:
         self._login_lock = asyncio.Lock()
         # Use CA bundle when provided, otherwise fall back to verify_ssl flag.
         self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
+        # Persistent connection pool — reused across all requests.
+        self._client = httpx.AsyncClient(
+            verify=self._ssl,
+            limits=httpx.Limits(
+                max_connections=_POOL_MAX_CONNECTIONS,
+                max_keepalive_connections=_POOL_MAX_KEEPALIVE,
+            ),
+            timeout=httpx.Timeout(cfg.request_timeout),
+        )
+
+    async def aclose(self) -> None:
+        """Release the connection pool. Call on server shutdown."""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> "WazuhClient":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.aclose()
 
     async def _login(self) -> None:
         auth = base64.b64encode(
             f"{self.cfg.manager_user}:{self.cfg.manager_pass}".encode()
         ).decode()
-        async with httpx.AsyncClient(verify=self._ssl) as c:
-            r = await c.post(
-                f"{self.cfg.manager_host}/security/user/authenticate",
-                headers={"Authorization": f"Basic {auth}"},
-                timeout=10,
-            )
-            r.raise_for_status()
-            self._token = r.json()["data"]["token"]
-            self._token_expires = time.time() + TOKEN_TTL_SECONDS
-            log.info("Wazuh Manager: authenticated, token cached")
+        r = await self._client.post(
+            f"{self.cfg.manager_host}/security/user/authenticate",
+            headers={"Authorization": f"Basic {auth}"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        self._token = r.json()["data"]["token"]
+        self._token_expires = time.time() + TOKEN_TTL_SECONDS
+        log.info("Wazuh Manager: authenticated, token cached")
 
     async def request(self, method: str, path: str, **kwargs: Any) -> dict:
         last_exc: Exception | None = None
@@ -88,23 +114,23 @@ class WazuhClient:
                 if not self._token or time.time() > self._token_expires:
                     await self._login()
 
-        async def do_call(client: httpx.AsyncClient) -> httpx.Response:
-            return await client.request(
+        r = await self._client.request(
+            method,
+            f"{self.cfg.manager_host}{path}",
+            headers={"Authorization": f"Bearer {self._token}"},
+            **kwargs,
+        )
+        if r.status_code == 401:
+            log.info("Wazuh Manager: token rejected, re-authenticating")
+            await self._login()
+            r = await self._client.request(
                 method,
                 f"{self.cfg.manager_host}{path}",
                 headers={"Authorization": f"Bearer {self._token}"},
-                timeout=self.cfg.request_timeout,
                 **kwargs,
             )
-
-        async with httpx.AsyncClient(verify=self._ssl) as c:
-            r = await do_call(c)
-            if r.status_code == 401:
-                log.info("Wazuh Manager: token rejected, re-authenticating")
-                await self._login()
-                r = await do_call(c)
-            r.raise_for_status()
-            return r.json()
+        r.raise_for_status()
+        return r.json()
 
     async def upload_xml_file(self, path: str, xml_content: str, overwrite: bool = True) -> dict:  # noqa: E501
         """Upload a raw XML file to the Wazuh Manager (rules or decoders).
@@ -139,20 +165,19 @@ class WazuhClient:
             "Content-Type": "application/octet-stream",
         }
 
-        async def do_call(client: httpx.AsyncClient) -> httpx.Response:
-            return await client.put(
+        r = await self._client.put(
+            url,
+            content=xml_content.encode("utf-8"),
+            headers=headers,
+        )
+        if r.status_code == 401:
+            log.info("Wazuh Manager: token rejected, re-authenticating")
+            await self._login()
+            headers["Authorization"] = f"Bearer {self._token}"
+            r = await self._client.put(
                 url,
                 content=xml_content.encode("utf-8"),
                 headers=headers,
-                timeout=self.cfg.request_timeout,
             )
-
-        async with httpx.AsyncClient(verify=self._ssl) as c:
-            r = await do_call(c)
-            if r.status_code == 401:
-                log.info("Wazuh Manager: token rejected, re-authenticating")
-                await self._login()
-                headers["Authorization"] = f"Bearer {self._token}"
-                r = await do_call(c)
-            r.raise_for_status()
-            return r.json()
+        r.raise_for_status()
+        return r.json()

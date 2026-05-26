@@ -320,17 +320,45 @@ def _incident_recommendations(techniques: list, severity: str, src_ips: list) ->
 
 
 async def _geoip_lookup(ip: str) -> dict:
-    """Free GeoIP via ip-api.com — no key required, 45 req/min."""
+    """GeoIP enrichment via HTTPS.
+
+    Provider priority:
+      1. ipinfo.io (HTTPS, set IPINFO_TOKEN for higher rate limits — 50k/mo free)
+      2. ip-api.com HTTPS batch endpoint (no key, 45 req/min on free tier)
+
+    Override provider with WAZUH_GEOIP_PROVIDER=ipinfo|ip-api.
+    """
     try:
         parsed = ipaddress.ip_address(ip)
         if parsed.is_private or parsed.is_loopback:
             return {"ip": ip, "geo": "private/local"}
     except ValueError:
         return {"ip": ip, "geo": "invalid_ip"}
+
+    provider = os.getenv("WAZUH_GEOIP_PROVIDER", "ipinfo").lower()
+
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
+            # ── ipinfo.io (HTTPS, preferred) ──────────────────────────────
+            if provider != "ip-api":
+                token = os.getenv("IPINFO_TOKEN", "")
+                url = f"https://ipinfo.io/{ip}/json"
+                params = {"token": token} if token else {}
+                r = await client.get(url, params=params)
+                if r.status_code == 200:
+                    data = r.json()
+                    if "bogon" not in data:
+                        return {
+                            "ip": ip,
+                            "country": data.get("country", ""),
+                            "city": data.get("city", ""),
+                            "isp": data.get("org", ""),
+                            "asn": data.get("org", ""),
+                        }
+
+            # ── ip-api.com HTTPS fallback ─────────────────────────────────
             r = await client.get(
-                f"http://ip-api.com/json/{ip}",
+                f"https://ip-api.com/json/{ip}",
                 params={"fields": "status,country,city,isp,as"},
             )
             data = r.json()
@@ -1020,6 +1048,11 @@ def main() -> None:
             # Tell uvicorn to stop accepting new connections and drain
             if _uvicorn_server:
                 _uvicorn_server[0].should_exit = True
+            # Release HTTP connection pools
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(wz.aclose())
+                loop.create_task(idx.aclose())
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
