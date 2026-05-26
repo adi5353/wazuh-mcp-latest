@@ -25,8 +25,8 @@ dependencies = [
 wazuh-mcp = "wazuh_mcp.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/adi5353/wazuh-mcp"
-Issues = "https://github.com/adi5353/wazuh-mcp/issues"
+Homepage = "https://github.com/adi5353/wazuh-mcp-latest"
+Issues = "https://github.com/adi5353/wazuh-mcp-latest/issues"
 
 [project.optional-dependencies]
 dev = [
