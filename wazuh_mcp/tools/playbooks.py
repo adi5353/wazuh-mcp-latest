@@ -1,9 +1,10 @@
 """Automated playbook execution — F4.
 
 Pre-defined YAML playbooks that chain multiple Wazuh MCP tools in sequence
-with approval gates. Reduces MTTR and enforces consistent response procedures.
+with approval gates and step-level rollback. Reduces MTTR and enforces
+consistent response procedures.
 
-Tools: list_playbooks, run_playbook, get_playbook_status
+Tools: list_playbooks, run_playbook, get_playbook_status, resume_playbook
 """
 from __future__ import annotations
 
@@ -32,6 +33,8 @@ _BUILTIN_PLAYBOOKS = [
             {"name": "Health score", "tool": "get_agent_health_score", "params": {"agent_id": "{agent_id}"}},
         ],
         "approval_before_step": None,
+        # Read-only playbook — no rollback steps needed
+        "rollback_steps": [],
     },
     {
         "id": "brute-force-response",
@@ -47,6 +50,12 @@ _BUILTIN_PLAYBOOKS = [
              "params": {"list_name": "malicious-ips", "key": "{ip}", "value": "brute-force"}},
         ],
         "approval_before_step": 3,
+        # If blocklist add completed and needs rollback: remove the IP
+        "rollback_steps": [
+            {"name": "Remove IP from blocklist", "tool": "remove_from_cdb_list",
+             "params": {"list_name": "malicious-ips", "key": "{ip}"},
+             "rollback_for_step": 3},
+        ],
     },
     {
         "id": "cve-triage",
@@ -56,10 +65,11 @@ _BUILTIN_PLAYBOOKS = [
         "severity": "high",
         "steps": [
             {"name": "Search CVE details", "tool": "search_cve", "params": {"cve_id": "{cve_id}"}},
-            {"name": "Find affected agents", "tool": "get_watchlist_exposure", "params": {"cve_id": "{cve_id}"}},
+            {"name": "Find affected agents", "tool": "get_watchlist_exposure", "params": {}},
             {"name": "Prioritize patches", "tool": "prioritize_patches", "params": {"agent_id": "000"}},
         ],
         "approval_before_step": None,
+        "rollback_steps": [],
     },
     {
         "id": "incident-response",
@@ -75,6 +85,75 @@ _BUILTIN_PLAYBOOKS = [
              "params": {"alert_id": "{alert_id}"}},
         ],
         "approval_before_step": None,
+        "rollback_steps": [],
+    },
+    {
+        "id": "ransomware-containment",
+        "name": "Ransomware Containment",
+        "description": "Detect and contain ransomware activity: FIM + persistence + active response block.",
+        "required_params": ["agent_id"],
+        "severity": "critical",
+        "steps": [
+            {"name": "FIM changes last 2h", "tool": "get_recent_fim_changes",
+             "params": {"agent_id": "{agent_id}"}},
+            {"name": "Hunt persistence mechanisms", "tool": "hunt_persistence_mechanisms",
+             "params": {"time_range": "2h"}},
+            {"name": "Hunt lateral movement", "tool": "hunt_lateral_movement",
+             "params": {"time_range": "2h"}},
+            {"name": "Blast radius analysis", "tool": "blast_radius_analysis",
+             "params": {"agent_name": "{agent_id}", "time_range": "2h"}},
+            {"name": "Create incident report", "tool": "create_incident_report",
+             "params": {"alert_id": "", "severity": "critical",
+                        "title": "Ransomware Containment — {agent_id}"}},
+        ],
+        "approval_before_step": None,
+        "rollback_steps": [],
+    },
+    {
+        "id": "lateral-movement-containment",
+        "name": "Lateral Movement Containment",
+        "description": "Trace and contain lateral movement from a compromised source IP.",
+        "required_params": ["ip"],
+        "severity": "high",
+        "steps": [
+            {"name": "Search alerts by IP", "tool": "search_by_source_ip",
+             "params": {"ip": "{ip}", "hours": 24}},
+            {"name": "Hunt lateral movement", "tool": "hunt_lateral_movement",
+             "params": {"time_range": "24h"}},
+            {"name": "Blast radius analysis", "tool": "blast_radius_analysis",
+             "params": {"src_ip": "{ip}", "time_range": "24h"}},
+            {"name": "Enrich IP", "tool": "enrich_ip", "params": {"ip": "{ip}"}},
+            {"name": "Block IP in CDB", "tool": "add_to_cdb_list",
+             "params": {"list_name": "malicious-ips", "key": "{ip}", "value": "lateral-movement"}},
+        ],
+        "approval_before_step": 4,
+        "rollback_steps": [
+            {"name": "Remove lateral-movement IP from blocklist", "tool": "remove_from_cdb_list",
+             "params": {"list_name": "malicious-ips", "key": "{ip}"},
+             "rollback_for_step": 4},
+        ],
+    },
+    {
+        "id": "data-exfiltration-response",
+        "name": "Data Exfiltration Response",
+        "description": "Investigate and respond to suspected data exfiltration activity.",
+        "required_params": ["agent_id"],
+        "severity": "critical",
+        "steps": [
+            {"name": "Hunt data exfiltration", "tool": "hunt_data_exfiltration",
+             "params": {"time_range": "24h"}},
+            {"name": "FIM changes", "tool": "get_recent_fim_changes",
+             "params": {"agent_id": "{agent_id}"}},
+            {"name": "Open ports", "tool": "get_agent_open_ports",
+             "params": {"agent_id": "{agent_id}"}},
+            {"name": "Agent processes", "tool": "get_agent_processes",
+             "params": {"agent_id": "{agent_id}"}},
+            {"name": "Create incident report", "tool": "create_incident_report",
+             "params": {"alert_id": "", "severity": "critical",
+                        "title": "Data Exfiltration Investigation — {agent_id}"}},
+        ],
+        "approval_before_step": None,
+        "rollback_steps": [],
     },
 ]
 
@@ -103,6 +182,52 @@ def _load(run_id: str) -> dict | None:
     if run_id in _RUN_HISTORY:
         return _RUN_HISTORY[run_id]
     return load_run(run_id)
+
+
+async def _run_rollback(
+    pb: dict,
+    completed_step_indices: list[int],
+    variables: dict,
+    registry: dict,
+) -> list[dict]:
+    """Execute rollback steps for any completed steps that have rollback definitions.
+
+    Rollback steps are executed in reverse order (last completed first) and are
+    fire-and-forget — errors are recorded but do not raise.
+    """
+    rollback_defs = pb.get("rollback_steps") or []
+    if not rollback_defs or not completed_step_indices:
+        return []
+
+    results: list[dict] = []
+    # Rollback in reverse order of completion
+    for step_idx in reversed(completed_step_indices):
+        matching = [r for r in rollback_defs if r.get("rollback_for_step") == step_idx]
+        for rb in matching:
+            resolved = _resolve_params(rb["params"], variables)
+            rb_result: dict[str, Any] = {
+                "name": rb["name"],
+                "tool": rb["tool"],
+                "params": resolved,
+                "rollback_for_step": step_idx + 1,
+                "executed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            fn = registry.get(rb["tool"])
+            if fn is None:
+                rb_result["status"] = "skipped"
+                rb_result["note"] = f"Tool '{rb['tool']}' not in registry"
+            else:
+                try:
+                    output = await asyncio.wait_for(fn(**resolved), timeout=20)
+                    rb_result["status"] = "completed"
+                    rb_result["output"] = output
+                    log.info("Rollback step '%s' completed for step %d", rb["name"], step_idx + 1)
+                except Exception as exc:
+                    rb_result["status"] = "failed"
+                    rb_result["error"] = str(exc)
+                    log.warning("Rollback step '%s' failed: %s", rb["name"], exc)
+            results.append(rb_result)
+    return results
 
 
 def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
@@ -211,16 +336,19 @@ def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
             "variables": variables,
             "status": "running",
             "steps": [],
+            "rollback_steps": [],
         }
         _save(run_record)
 
         approval_gate = pb.get("approval_before_step")
         registry = tool_registry or {}
+        completed_step_indices: list[int] = []
 
         for i, step in enumerate(pb["steps"]):
             if approval_gate is not None and i == approval_gate:
                 run_record["status"] = "awaiting_approval"
                 run_record["paused_at_step"] = i
+                run_record["completed_step_indices"] = completed_step_indices
                 run_record["message"] = (
                     f"Paused at step {i+1} '{step['name']}' (approval gate). "
                     "Review results above then call resume_playbook(run_id, approved=True) to continue."
@@ -241,36 +369,48 @@ def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
             if fn is None:
                 step_result["status"] = "skipped"
                 step_result["note"] = f"Tool '{step['tool']}' not in registry — call manually."
-            else:
-                try:
-                    output = await asyncio.wait_for(fn(**resolved), timeout=30)
-                    step_result["status"] = "completed"
-                    step_result["output"] = output
-                    # Stop playbook if a step returns an error to prevent destructive follow-on steps
-                    if isinstance(output, dict) and "error" in output:
-                        step_result["status"] = "failed"
-                        run_record["steps"].append(step_result)
-                        run_record["status"] = "failed"
-                        run_record["failed_at_step"] = i + 1
-                        run_record["error"] = output["error"]
-                        _save(run_record)
-                        return run_record
-                except asyncio.TimeoutError:
-                    step_result["status"] = "timeout"
-                    step_result["error"] = f"Tool '{step['tool']}' timed out after 30s"
-                    run_record["steps"].append(step_result)
-                    run_record["status"] = "failed"
-                    run_record["failed_at_step"] = i + 1
-                    _save(run_record)
-                    return run_record
-                except Exception as exc:
+                run_record["steps"].append(step_result)
+                continue
+
+            try:
+                output = await asyncio.wait_for(fn(**resolved), timeout=30)
+                step_result["status"] = "completed"
+                step_result["output"] = output
+                # Stop playbook if a step returns an error; attempt rollback of completed steps
+                if isinstance(output, dict) and "error" in output:
                     step_result["status"] = "failed"
-                    step_result["error"] = str(exc)
                     run_record["steps"].append(step_result)
                     run_record["status"] = "failed"
                     run_record["failed_at_step"] = i + 1
+                    run_record["error"] = output["error"]
+                    run_record["rollback_steps"] = await _run_rollback(
+                        pb, completed_step_indices, variables, registry
+                    )
                     _save(run_record)
                     return run_record
+                completed_step_indices.append(i)
+            except asyncio.TimeoutError:
+                step_result["status"] = "timeout"
+                step_result["error"] = f"Tool '{step['tool']}' timed out after 30s"
+                run_record["steps"].append(step_result)
+                run_record["status"] = "failed"
+                run_record["failed_at_step"] = i + 1
+                run_record["rollback_steps"] = await _run_rollback(
+                    pb, completed_step_indices, variables, registry
+                )
+                _save(run_record)
+                return run_record
+            except Exception as exc:
+                step_result["status"] = "failed"
+                step_result["error"] = str(exc)
+                run_record["steps"].append(step_result)
+                run_record["status"] = "failed"
+                run_record["failed_at_step"] = i + 1
+                run_record["rollback_steps"] = await _run_rollback(
+                    pb, completed_step_indices, variables, registry
+                )
+                _save(run_record)
+                return run_record
 
             run_record["steps"].append(step_result)
 
@@ -326,6 +466,8 @@ def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
         registry = tool_registry or {}
         paused_at = record.get("paused_at_step", len(record["steps"]))
         variables = record.get("variables", {})
+        # Restore which steps completed before the approval gate
+        completed_step_indices: list[int] = record.pop("completed_step_indices", list(range(paused_at)))
         record["status"] = "running"
         record.pop("message", None)
         record.pop("paused_at_step", None)
@@ -345,25 +487,34 @@ def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
             if fn is None:
                 step_result["status"] = "skipped"
                 step_result["note"] = f"Tool '{step['tool']}' not in registry."
-            else:
-                try:
-                    output = await asyncio.wait_for(fn(**resolved), timeout=30)
-                    step_result["status"] = "completed"
-                    step_result["output"] = output
-                    if isinstance(output, dict) and "error" in output:
-                        step_result["status"] = "failed"
-                        record["steps"].append(step_result)
-                        record["status"] = "failed"
-                        record["error"] = output["error"]
-                        _save(record)
-                        return record
-                except Exception as exc:
+                record["steps"].append(step_result)
+                continue
+
+            try:
+                output = await asyncio.wait_for(fn(**resolved), timeout=30)
+                step_result["status"] = "completed"
+                step_result["output"] = output
+                if isinstance(output, dict) and "error" in output:
                     step_result["status"] = "failed"
-                    step_result["error"] = str(exc)
                     record["steps"].append(step_result)
                     record["status"] = "failed"
+                    record["error"] = output["error"]
+                    record["rollback_steps"] = await _run_rollback(
+                        pb, completed_step_indices, variables, registry
+                    )
                     _save(record)
                     return record
+                completed_step_indices.append(i)
+            except Exception as exc:
+                step_result["status"] = "failed"
+                step_result["error"] = str(exc)
+                record["steps"].append(step_result)
+                record["status"] = "failed"
+                record["rollback_steps"] = await _run_rollback(
+                    pb, completed_step_indices, variables, registry
+                )
+                _save(record)
+                return record
             record["steps"].append(step_result)
 
         record["status"] = "completed"

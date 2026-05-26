@@ -276,6 +276,128 @@ def register(mcp, wz, idx, cfg, _cap):
         }
 
     @mcp.tool()
+    async def get_peer_group_baseline(
+        agent_group: str,
+        hours: int = 168,
+    ) -> dict:
+        """Build a behavioral baseline for all agents in a Wazuh group (peer-group analysis).
+
+        Compares each agent's alert volume against the group average to detect
+        outliers — agents behaving significantly differently from their peers
+        are more likely to be compromised or misconfigured.
+
+        agent_group: Wazuh agent group name (e.g. 'linux-servers', 'windows-workstations').
+        hours:       Baseline window in hours (default 168 = 7 days).
+        """
+        now = datetime.now(timezone.utc)
+        gte = (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Step 1: Get agents in the group
+        try:
+            grp_resp = await wz.request("GET", f"/groups/{agent_group}/agents?limit=500")
+            group_agents = (grp_resp.get("data") or {}).get("affected_items") or []
+        except Exception as exc:
+            return {"error": f"Failed to fetch agents for group '{agent_group}': {exc}"}
+
+        if not group_agents:
+            return {"error": f"No agents found in group '{agent_group}'."}
+
+        agent_ids = [a.get("id", "") for a in group_agents if a.get("id")]
+        agent_names = {a.get("id", ""): a.get("name", a.get("id", "")) for a in group_agents}
+
+        # Step 2: Aggregate alert volume per agent over the baseline window
+        query = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"range": {"@timestamp": {"gte": gte}}},
+                        {"terms": {"agent.id": agent_ids}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_agent": {
+                    "terms": {"field": "agent.id", "size": len(agent_ids)},
+                    "aggs": {
+                        "critical_alerts": {
+                            "filter": {"range": {"rule.level": {"gte": 12}}}
+                        },
+                        "unique_rules": {"cardinality": {"field": "rule.id"}},
+                        "avg_level": {"avg": {"field": "rule.level"}},
+                    },
+                }
+            },
+        }
+        try:
+            raw = await idx.search(query, index="wazuh-alerts-*")
+        except Exception as exc:
+            return {"error": f"Indexer query failed: {exc}"}
+
+        buckets = ((raw.get("aggregations") or {}).get("by_agent") or {}).get("buckets") or []
+
+        if not buckets:
+            return {
+                "agent_group": agent_group,
+                "hours": hours,
+                "message": "No alert data for this group in the baseline window.",
+            }
+
+        # Step 3: Compute group-level statistics
+        volumes = [b["doc_count"] for b in buckets]
+        avg_volume = sum(volumes) / len(volumes)
+        import statistics as _stats
+        stdev = _stats.stdev(volumes) if len(volumes) > 1 else 0.0
+
+        agents_data = []
+        outliers = []
+        for b in buckets:
+            agent_id = b["key"]
+            volume = b["doc_count"]
+            critical = b.get("critical_alerts", {}).get("doc_count", 0)
+            unique_rules = b.get("unique_rules", {}).get("value", 0)
+            avg_lvl = round(b.get("avg_level", {}).get("value") or 0, 1)
+
+            # Z-score: how many standard deviations from group mean
+            z_score = round((volume - avg_volume) / stdev, 2) if stdev > 0 else 0.0
+            deviation_pct = round(((volume - avg_volume) / avg_volume * 100) if avg_volume else 0, 1)
+
+            is_outlier = abs(z_score) >= 2.0 or (avg_volume > 0 and volume > avg_volume * 3)
+            agent_record = {
+                "agent_id": agent_id,
+                "agent_name": agent_names.get(agent_id, agent_id),
+                "alert_volume": volume,
+                "critical_alerts": critical,
+                "unique_rules_triggered": unique_rules,
+                "avg_rule_level": avg_lvl,
+                "z_score": z_score,
+                "deviation_from_group_avg_pct": deviation_pct,
+                "is_outlier": is_outlier,
+            }
+            agents_data.append(agent_record)
+            if is_outlier:
+                outliers.append(agent_record)
+
+        agents_data.sort(key=lambda x: abs(x["z_score"]), reverse=True)
+        outliers.sort(key=lambda x: x["alert_volume"], reverse=True)
+
+        return {
+            "agent_group": agent_group,
+            "hours": hours,
+            "agents_in_group": len(group_agents),
+            "agents_with_alerts": len(buckets),
+            "group_avg_alerts": round(avg_volume, 1),
+            "group_stdev": round(stdev, 1),
+            "outlier_count": len(outliers),
+            "outliers": outliers,
+            "all_agents": agents_data[:50],
+            "tip": (
+                "Agents with |z_score| >= 2 are statistical outliers — "
+                "investigate with get_agent_health_score() and search_alerts()."
+            ),
+        }
+
+    @mcp.tool()
     async def list_privileged_escalations(hours: int = 24, limit: int = 50) -> dict:
         """List privilege escalation events (sudo, su, UAC) across all agents.
 

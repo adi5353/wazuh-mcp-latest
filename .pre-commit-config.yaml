@@ -30,3 +30,26 @@ repos:
     hooks:
       - id: ruff
         args: ["--select", "E,W,F,S"]
+
+  # Semgrep SAST — catches injection patterns, insecure crypto, hardcoded secrets
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.73.0
+    hooks:
+      - id: semgrep
+        name: semgrep-security
+        args:
+          - --config=p/python
+          - --config=p/secrets
+          - --config=p/owasp-top-ten
+          - --error
+          - --exclude=tests/
+          - --exclude=.venv/
+          - --exclude=venv/
+        pass_filenames: false
+
+  # Safety — check dependencies for known CVEs
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.7.3
+    hooks:
+      - id: pip-audit
+        args: ["--require-hashes=false", "--ignore-vuln=GHSA-0000-0000-0000"]

@@ -429,15 +429,39 @@ async def _enrich_and_notify(alert: dict, wz, idx, cfg,
     }
 
 
+# ── Adaptive polling interval ─────────────────────────────────────────────────
+
+def _adapt_interval(base_interval: int, new_alert_count: int) -> int:
+    """Dynamically adjust polling interval based on current alert volume.
+
+    High alert volume → shorter interval (more responsive).
+    No new alerts    → longer interval (less resource usage).
+
+    Returns the new interval in seconds (clamped between 15s and 5× base).
+    """
+    min_interval = max(15, base_interval // 4)
+    max_interval = base_interval * 5
+
+    if new_alert_count >= 5:
+        return min_interval          # surge: poll fast
+    elif new_alert_count >= 2:
+        return max(min_interval, base_interval // 2)
+    elif new_alert_count == 0:
+        return min(base_interval * 2, max_interval)   # quiet: back off
+    return base_interval             # normal cadence
+
+
 # ── Monitor loop ──────────────────────────────────────────────────────────────
 async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int,
                          tool_registry: dict | None = None) -> None:
     log.info("Autonomous SOC monitor started (interval=%ds, threshold=%d)",
              interval, severity_threshold)
+    current_interval = interval
+
     while _monitor_state["running"]:
         try:
             now = datetime.now(timezone.utc)
-            gte = (now - timedelta(seconds=interval * 2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            gte = (now - timedelta(seconds=current_interval * 2)).strftime("%Y-%m-%dT%H:%M:%SZ")
             query = {
                 "query": {
                     "bool": {
@@ -455,6 +479,7 @@ async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int,
             hits = (raw.get("hits") or {}).get("hits") or []
             _monitor_state["last_poll"] = now.isoformat()
 
+            new_alerts = 0
             for hit in hits:
                 if not _monitor_state["running"]:
                     break
@@ -466,6 +491,7 @@ async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int,
                     if len(_monitor_state["seen_alert_ids"]) > 500:
                         _monitor_state["seen_alert_ids"] = _monitor_state["seen_alert_ids"][-500:]
 
+                new_alerts += 1
                 _monitor_state["alerts_processed"] += 1
                 action_result = await _enrich_and_notify(
                     hit.get("_source") or {}, wz, idx, cfg,
@@ -476,6 +502,10 @@ async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int,
                 if len(_monitor_state["recent_actions"]) > 20:
                     _monitor_state["recent_actions"] = _monitor_state["recent_actions"][-20:]
 
+            # Adapt polling interval based on observed alert volume
+            current_interval = _adapt_interval(interval, new_alerts)
+            _monitor_state["current_interval_seconds"] = current_interval
+
             # Scheduled reports check (runs on every poll cycle)
             if tool_registry:
                 await _maybe_send_scheduled_reports(cfg, tool_registry)
@@ -485,7 +515,7 @@ async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int,
         except Exception as exc:
             log.warning("Autonomous SOC monitor poll error: %s", exc)
 
-        await asyncio.sleep(interval)
+        await asyncio.sleep(current_interval)
 
     log.info("Autonomous SOC monitor stopped")
 
@@ -593,7 +623,10 @@ def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
             "running": _monitor_state["running"],
             "started_at": _monitor_state["started_at"],
             "stopped_at": _monitor_state["stopped_at"],
-            "interval_seconds": _monitor_state["interval_seconds"],
+            "base_interval_seconds": _monitor_state["interval_seconds"],
+            "current_interval_seconds": _monitor_state.get(
+                "current_interval_seconds", _monitor_state["interval_seconds"]
+            ),
             "severity_threshold": _monitor_state["severity_threshold"],
             "alerts_processed": _monitor_state["alerts_processed"],
             "actions_taken": _monitor_state["actions_taken"],
@@ -602,6 +635,7 @@ def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
             "pending_suppressions": len(pending),
             "scheduled_handover_hours": _monitor_state["schedule"]["handover_hours_utc"],
             "recent_actions": _monitor_state["recent_actions"][-10:],
+            "adaptive_polling": "enabled — interval adjusts between base/4 and base×5 based on alert volume",
         }
 
     @mcp.tool()

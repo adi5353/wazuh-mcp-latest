@@ -27,3 +27,58 @@ wazuh-mcp = "wazuh_mcp.__main__:main"
 [project.urls]
 Homepage = "https://github.com/adi5353/wazuh-mcp"
 Issues = "https://github.com/adi5353/wazuh-mcp/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "pytest-benchmark>=4.0.0",
+]
+
+# ── pytest + coverage ─────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = [
+    "--cov=wazuh_mcp",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=70",   # fail build if coverage drops below 70%
+]
+
+[tool.coverage.run]
+source = ["wazuh_mcp"]
+omit = [
+    "wazuh_mcp/__pycache__/*",
+    "wazuh_mcp/tools/__pycache__/*",
+    "wazuh_mcp/core/__pycache__/*",
+]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+# ── Bandit SAST configuration ─────────────────────────────────────────────────
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = [
+    "B101",   # assert usage (acceptable in tests)
+    "B311",   # random — we use it for jitter, not crypto
+]
+severity = "medium"
+confidence = "medium"
+
+# ── Ruff linting ──────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F"]
+ignore = ["E501"]
