@@ -174,6 +174,8 @@ def _get_audit_handler() -> _RotatingFileHandler:
     if _audit_handler is not None and _audit_handler_path == _AUDIT_LOG_PATH:
         return _audit_handler
     with _audit_handler_lock:
+        # Double-check after acquiring the lock in case another thread
+        # initialized the handler while we were waiting.
         if _audit_handler is not None and _audit_handler_path == _AUDIT_LOG_PATH:
             return _audit_handler
         if _audit_handler is not None:
