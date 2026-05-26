@@ -1,11 +1,11 @@
 [project]
 name = "wazuh-mcp"
 version = "1.0.0"
-description = "Connect Wazuh SIEM to Claude AI via Model Context Protocol"
+description = "AI-native SOC co-pilot for Wazuh — investigate alerts 5x faster, automate Tier 1 triage, generate compliance reports in seconds. Supports self-hosted, Wazuh Cloud, and MSSP multi-tenant deployments."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-keywords = ["wazuh", "mcp", "siem", "security", "claude", "ai"]
+keywords = ["wazuh", "mcp", "siem", "security", "claude", "ai", "soc", "mssp", "threat-hunting", "compliance"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: System Administrators",

@@ -2,12 +2,19 @@
 
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
-**100+ tools** across 30+ domain modules — alerts, vulnerabilities, FIM, compliance, MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel, incidents, reporting, notifications, onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, and more.
+**100+ tools** across 30+ domain modules — alerts, vulnerabilities, FIM, compliance, MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel, incidents, reporting, notifications, onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, MSSP multi-tenant, Wazuh Cloud, and more.
+
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
+[![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
+[![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
 
 ---
 
 ## Table of Contents
 
+- [5-Minute Quickstart](#5-minute-quickstart)
+- [Wazuh Cloud Setup](#wazuh-cloud-setup)
+- [MSSP Multi-Tenant Setup](#mssp-multi-tenant-setup)
 - [Quick Start — Docker](#quick-start--docker)
 - [Quick Start — Local (systemd)](#quick-start--local-systemd)
 - [Quick Start — Open WebUI + Ollama (Air-Gapped)](#quick-start--open-webui--ollama-air-gapped)
@@ -20,6 +27,93 @@
 - [Security Hardening](#security-hardening)
 - [Optional Integrations](#optional-integrations)
 - [Common Issues](#common-issues)
+
+---
+
+## 5-Minute Quickstart
+
+The fastest path to a working Wazuh MCP server:
+
+```bash
+pip install wazuh-mcp
+wazuh-mcp init      # interactive wizard — writes .env in 2 minutes
+wazuh-mcp verify    # test connectivity to your Wazuh instance
+wazuh-mcp           # start the server
+```
+
+Then open Claude Desktop and ask:
+> *"Summarize the last 24 hours of alerts"*
+> *"Explain alert \<id\> for my CISO"*
+> *"Hunt for lateral movement in the last 48 hours"*
+
+---
+
+## Wazuh Cloud Setup
+
+If you are using [Wazuh Cloud](https://wazuh.com/cloud/) (SaaS), set:
+
+```env
+WAZUH_CLOUD=true
+WAZUH_CLOUD_URL=https://your-cloud-id.cloud.wazuh.com:55000
+WAZUH_CLOUD_API_KEY=your_api_key
+WAZUH_CLOUD_INDEXER_PASS=your_indexer_password
+```
+
+No `WAZUH_HOST`, `WAZUH_USER`, or `WAZUH_PASS` needed in Cloud mode.  
+Run `wazuh-mcp init` and choose option **2** for a guided setup.
+
+---
+
+## MSSP Multi-Tenant Setup
+
+MSSPs managing multiple client Wazuh instances can configure all tenants in one server:
+
+```env
+# Default connection (used until switch_tenant is called)
+WAZUH_HOST=https://client-a-wazuh:55000
+WAZUH_USER=wazuh-wui
+WAZUH_PASS=secret
+WAZUH_INDEXER_HOST=https://client-a-indexer:9200
+WAZUH_INDEXER_PASS=secret
+
+# All tenants
+WAZUH_INSTANCES=[
+  {"name":"client-a","host":"https://wazuh-a:55000","user":"u","pass":"p","indexer_host":"https://idx-a:9200","indexer_pass":"p"},
+  {"name":"client-b","host":"https://wazuh-b:55000","user":"u","pass":"p","indexer_host":"https://idx-b:9200","indexer_pass":"p"}
+]
+```
+
+Switch tenants at runtime using Claude:
+> *"Switch to client-b and show me their recent alerts"*
+
+This calls `switch_tenant("client-b")` and immediately redirects all tool calls to that Wazuh instance. Use `list_tenants()` to see all configured tenants.
+
+Run `wazuh-mcp init` and choose option **3** for a guided MSSP setup.
+
+---
+
+## MCP Registry
+
+This server is listed in the [MCP Registry](https://github.com/modelcontextprotocol/servers).  
+Claude Desktop users can discover and install it directly from the registry.
+
+To install via the registry:
+```json
+{
+  "mcpServers": {
+    "wazuh": {
+      "command": "wazuh-mcp",
+      "env": {
+        "WAZUH_HOST": "https://your-wazuh:55000",
+        "WAZUH_USER": "wazuh-wui",
+        "WAZUH_PASS": "your-password",
+        "WAZUH_INDEXER_HOST": "https://your-indexer:9200",
+        "WAZUH_INDEXER_PASS": "your-password"
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -696,14 +790,27 @@ Available as `/` commands in Claude Code and prompt-aware clients.
 
 | Prompt | What it does |
 |---|---|
+**Investigation workflows:**
+
+| Prompt | What it does |
+|---|---|
 | `investigate_brute_force` | 5-step guided brute force investigation |
 | `weekly_soc_briefing` | Executive briefing — trends, CVEs, patches, SCA, MITRE |
 | `triage_alert` | True/false positive triage for any alert ID |
 | `cve_emergency_response` | CVE impact assessment — scope, evidence, patch priority |
 | `threat_hunt_session` | Guided lateral movement and persistence hunt |
-| `compliance_audit` | Full compliance posture for a framework |
-| `incident_response` | Structured IR workflow for a compromised host |
-| `shift_handover` | End-of-shift summary and hand-off |
+| `morning_briefing` | Start-of-shift risk summary and recommended actions |
+| `incident_triage_full` | Full 48h IR chain for agent or source IP |
+| `end_of_shift_handover` | Structured handover with open incidents and watch list |
+
+**Role-optimized prompts** *(tailored output per audience)*:
+
+| Prompt | Audience | What it does |
+|---|---|---|
+| `tier1_analyst_guide` | Tier 1 / junior | Step-by-step walkthrough with explanations — builds analyst skill |
+| `tier2_analyst_deep_dive` | Tier 2 / IR | Evidence collection, lateral movement, MITRE mapping, containment |
+| `ciso_security_briefing` | CISO / leadership | Business-risk framing, no jargon, action items with owners |
+| `compliance_officer_review` | Compliance / audit | Framework control mapping, evidence export, audit trail |
 
 ---
 
