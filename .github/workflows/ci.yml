@@ -67,6 +67,9 @@ jobs:
           WAZUH_PASS: admin
           WAZUH_INDEXER_HOST: http://localhost:9200
           WAZUH_INDEXER_PASS: admin
+          # Redirect Docker-default paths to writable CI temp dirs
+          WAZUH_WORKSPACE_DIR: ${{ runner.temp }}/workspaces
+          WAZUH_AUDIT_LOG: ${{ runner.temp }}/audit.jsonl
 
   # ── 4. Docker build ───────────────────────────────────────────────────────
   docker:
