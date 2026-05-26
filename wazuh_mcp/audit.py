@@ -168,16 +168,24 @@ _audit_handler_lock = _threading.Lock()
 
 
 def _get_audit_handler() -> _RotatingFileHandler:
-    """Return (or initialise) the module-level rotating file handler."""
+    """Return (or initialise) the module-level rotating file handler.
+
+    Re-initialises if _AUDIT_LOG_PATH has changed (supports monkeypatching in tests).
+    """
     global _audit_handler
-    if _audit_handler is not None:
-        return _audit_handler
     with _audit_handler_lock:
-        if _audit_handler is not None:
+        current_path = str(_AUDIT_LOG_PATH)
+        if _audit_handler is not None and _audit_handler.baseFilename == current_path:
             return _audit_handler
+        # Path changed or first call — (re)create the handler.
+        if _audit_handler is not None:
+            try:
+                _audit_handler.close()
+            except Exception:
+                pass
         _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         handler = _RotatingFileHandler(
-            str(_AUDIT_LOG_PATH),
+            current_path,
             maxBytes=_AUDIT_MAX_BYTES,
             backupCount=_AUDIT_BACKUP_COUNT,
             encoding="utf-8",
