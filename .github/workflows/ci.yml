@@ -38,7 +38,7 @@ jobs:
       - name: bandit SAST
         run: bandit -r wazuh_mcp -c pyproject.toml
       - name: pip-audit
-        run: pip-audit --requirement requirements.txt --ignore-vuln PYSEC-2024-107
+        run: pip-audit --requirement requirements.txt
 
   # ── 3. Unit tests + coverage gate ─────────────────────────────────────────
   test:
