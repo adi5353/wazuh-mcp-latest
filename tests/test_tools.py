@@ -97,6 +97,7 @@ def test_audit_record_writes_file(tmp_path, monkeypatch):
     import wazuh_mcp.audit as audit_mod
     audit_path = tmp_path / "audit.jsonl"
     monkeypatch.setattr(audit_mod, "_AUDIT_LOG_PATH", audit_path)
+    monkeypatch.setattr(audit_mod, "_audit_handler", None)
 
     with audit_mod.audit_logger.record("test_tool", {"param": "value"}, identity="tester") as ctx:
         ctx.set_result_code("200")
@@ -115,6 +116,7 @@ def test_audit_redacts_sensitive_params(tmp_path, monkeypatch):
     import wazuh_mcp.audit as audit_mod
     audit_path = tmp_path / "audit.jsonl"
     monkeypatch.setattr(audit_mod, "_AUDIT_LOG_PATH", audit_path)
+    monkeypatch.setattr(audit_mod, "_audit_handler", None)
 
     with audit_mod.audit_logger.record(
         "some_tool", {"password": "s3cr3t", "user": "admin"}, identity="tester"
