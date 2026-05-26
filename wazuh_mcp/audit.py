@@ -224,14 +224,19 @@ def _write_record(record: dict) -> None:
     try:
         handler = _get_audit_handler()
         line = json.dumps(record, default=str) + "\n"
-        # RotatingFileHandler.emit() expects a LogRecord; bypass it and write
-        # directly to the stream so we control the exact byte layout.
+        encoded_len = len(line.encode("utf-8"))
+        # Write directly to the handler's stream so we control exact byte layout.
+        # Check for rollover manually — shouldRollover() requires a LogRecord object.
         handler.acquire()
         try:
-            if handler.shouldRollover(None):  # type: ignore[arg-type]
-                handler.doRollover()
-            handler.stream.write(line)
-            handler.stream.flush()
+            stream = handler.stream
+            if handler.maxBytes > 0:
+                stream.seek(0, 2)  # seek to end
+                if stream.tell() + encoded_len >= handler.maxBytes:
+                    handler.doRollover()
+                    stream = handler.stream  # doRollover reopens a fresh stream
+            stream.write(line)
+            stream.flush()
         finally:
             handler.release()
     except Exception as exc:  # noqa: BLE001
