@@ -332,4 +332,303 @@ def register(mcp, wz, idx, cfg, _cap):
             ),
         }
 
+    @mcp.tool()
+    async def nist_csf2_compliance_summary(
+        time_range: str = "30d",
+        min_level: int = 5,
+    ) -> dict:
+        """Generate a NIST Cybersecurity Framework 2.0 compliance posture report.
+
+        Maps Wazuh rule groups and NIST 800-53 fields to the six CSF 2.0 Functions:
+        GOVERN, IDENTIFY, PROTECT, DETECT, RESPOND, RECOVER.
+
+        Returns per-function status, alert counts, and control-level breakdown.
+        Pairs well with iso27001_compliance_summary() for multi-framework views.
+        """
+        # CSF 2.0 function → {categories, rule_groups, nist_800_53_controls}
+        CSF2_FUNCTIONS: list[dict] = [
+            {
+                "id": "GV", "name": "GOVERN",
+                "description": "Organizational context, risk management strategy, supply chain risk.",
+                "rule_groups": ["audit", "ossec", "policy_violation"],
+                "nist_controls": ["PM-1", "PM-9", "RA-1"],
+                "categories": ["GV.OC", "GV.RM", "GV.RR", "GV.PO", "GV.OV", "GV.SC"],
+            },
+            {
+                "id": "ID", "name": "IDENTIFY",
+                "description": "Asset management, risk assessment, improvement activities.",
+                "rule_groups": ["vulnerability", "cve", "syscheck", "ossec"],
+                "nist_controls": ["CA-2", "RA-3", "RA-5"],
+                "categories": ["ID.AM", "ID.RA", "ID.IM"],
+            },
+            {
+                "id": "PR", "name": "PROTECT",
+                "description": "Identity management, access control, awareness, data security.",
+                "rule_groups": [
+                    "authentication_failed", "authentication_success",
+                    "privilege_escalation", "pam", "sudo", "firewall",
+                    "access_control", "fim", "syscheck",
+                ],
+                "nist_controls": ["AC-2", "AC-3", "AC-6", "IA-5", "SC-28"],
+                "categories": ["PR.AA", "PR.AT", "PR.DS", "PR.IR", "PR.PS"],
+            },
+            {
+                "id": "DE", "name": "DETECT",
+                "description": "Continuous monitoring, adverse event analysis.",
+                "rule_groups": [
+                    "ids", "attack", "web_attack", "intrusion_detection",
+                    "network_scan", "brute_force", "malware", "rootkit",
+                ],
+                "nist_controls": ["AU-6", "CA-7", "SI-4"],
+                "categories": ["DE.CM", "DE.AE"],
+            },
+            {
+                "id": "RS", "name": "RESPOND",
+                "description": "Incident management, analysis, mitigation, reporting.",
+                "rule_groups": [
+                    "active_response", "block", "ids",
+                    "intrusion_detection", "incident_handling",
+                ],
+                "nist_controls": ["IR-4", "IR-5", "IR-6", "IR-8"],
+                "categories": ["RS.MA", "RS.AN", "RS.CO", "RS.MI", "RS.RP"],
+            },
+            {
+                "id": "RC", "name": "RECOVER",
+                "description": "Incident recovery, restoration, and communication.",
+                "rule_groups": ["backup", "restore", "recovery", "service_restart"],
+                "nist_controls": ["CP-2", "CP-10", "IR-4"],
+                "categories": ["RC.RP", "RC.CO"],
+            },
+        ]
+
+        body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "filter": [
+                        time_window(f"now-{time_range}"),
+                        {"range": {"rule.level": {"gte": min_level}}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_group": {
+                    "terms": {"field": "rule.groups", "size": 300},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+                    },
+                }
+            },
+        }
+        res = await idx.search(body)
+        group_counts: dict[str, dict] = {
+            b["key"]: {
+                "total":    b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+                "agents":   [a["key"] for a in b["top_agents"]["buckets"]],
+            }
+            for b in res["aggregations"]["by_group"]["buckets"]
+        }
+
+        function_results = []
+        for fn in CSF2_FUNCTIONS:
+            total = critical = 0
+            agents: set = set()
+            matched: list = []
+            for grp in fn["rule_groups"]:
+                if grp in group_counts:
+                    total    += group_counts[grp]["total"]
+                    critical += group_counts[grp]["critical"]
+                    agents.update(group_counts[grp]["agents"])
+                    matched.append(grp)
+            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            function_results.append({
+                "function_id":   fn["id"],
+                "function_name": fn["name"],
+                "description":   fn["description"],
+                "categories":    fn["categories"],
+                "nist_controls": fn["nist_controls"],
+                "total_alerts":  total,
+                "critical_alerts": critical,
+                "top_agents":    list(agents)[:3],
+                "matched_groups": matched,
+                "status":        status,
+            })
+
+        function_results.sort(key=lambda x: x["critical_alerts"], reverse=True)
+        failing = [f for f in function_results if f["status"] == "FAILING"]
+        warning = [f for f in function_results if f["status"] == "WARNING"]
+
+        return {
+            "report_type": "nist_csf_2.0",
+            "time_range":  time_range,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "summary": {
+                "total_functions":    len(function_results),
+                "failing":  len(failing),
+                "warning":  len(warning),
+                "ok":       len(function_results) - len(failing) - len(warning),
+                "posture": (
+                    "CRITICAL" if len(failing) >= 3
+                    else "HIGH"   if len(failing) >= 1
+                    else "MEDIUM" if len(warning) >= 2
+                    else "LOW"
+                ),
+            },
+            "failing_functions": failing,
+            "functions":         function_results,
+            "note": (
+                "NIST CSF 2.0 mapping is derived from Wazuh rule groups and NIST 800-53 fields. "
+                "For full NIST 800-53 detail use compliance_summary(framework='nist_800_53'). "
+                "Pair with iso27001_compliance_summary() for ISO 27001 cross-reference."
+            ),
+        }
+
+    @mcp.tool()
+    async def soc2_compliance_summary(
+        time_range: str = "30d",
+        min_level: int = 5,
+    ) -> dict:
+        """Generate a SOC 2 Type II compliance posture report.
+
+        Maps Wazuh rule groups to the five SOC 2 Trust Services Criteria (TSC):
+        Security (CC), Availability (A), Processing Integrity (PI),
+        Confidentiality (C), and Privacy (P).
+
+        Returns per-criterion status (OK / WARNING / FAILING), alert counts,
+        top agents, and a recommended remediation priority.
+        """
+        # SOC 2 TSC → Wazuh rule group mapping
+        SOC2_CRITERIA: list[dict] = [
+            {
+                "id": "CC", "name": "Common Criteria (Security)",
+                "description": "Logical and physical access controls, risk assessment, monitoring.",
+                "rule_groups": [
+                    "authentication_failed", "authentication_success",
+                    "brute_force", "privilege_escalation", "pam", "sudo",
+                    "access_control", "firewall", "ids", "attack",
+                ],
+                "key_controls": ["CC6.1 Logical access", "CC6.2 Authentication", "CC7.2 Security events"],
+            },
+            {
+                "id": "A", "name": "Availability",
+                "description": "System availability commitments and performance.",
+                "rule_groups": [
+                    "resource_exhaustion", "high_memory", "disk_full",
+                    "service_down", "service_restart", "system_error",
+                ],
+                "key_controls": ["A1.1 Capacity management", "A1.2 Environmental threats"],
+            },
+            {
+                "id": "PI", "name": "Processing Integrity",
+                "description": "Complete and accurate processing commitments.",
+                "rule_groups": [
+                    "syscheck", "fim", "configuration_changed",
+                    "file_modified", "integrity_checksum_changed",
+                ],
+                "key_controls": ["PI1.1 Processing accuracy", "PI1.2 Processing completeness"],
+            },
+            {
+                "id": "C", "name": "Confidentiality",
+                "description": "Confidential information protection and disposal.",
+                "rule_groups": [
+                    "data_exfiltration", "web_attack", "sqli", "injection",
+                    "sensitive_data", "encryption", "fim",
+                ],
+                "key_controls": ["C1.1 Confidential information identification", "C1.2 Disposal"],
+            },
+            {
+                "id": "P", "name": "Privacy",
+                "description": "Personal information collection, use, retention, and disposal.",
+                "rule_groups": [
+                    "gdpr", "pii", "data_exfiltration", "authentication_failed",
+                ],
+                "key_controls": ["P1.1 Privacy notice", "P4.1 Data access", "P8.1 Data quality"],
+            },
+        ]
+
+        body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "filter": [
+                        time_window(f"now-{time_range}"),
+                        {"range": {"rule.level": {"gte": min_level}}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_group": {
+                    "terms": {"field": "rule.groups", "size": 300},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+                    },
+                }
+            },
+        }
+        res = await idx.search(body)
+        group_counts: dict[str, dict] = {
+            b["key"]: {
+                "total":    b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+                "agents":   [a["key"] for a in b["top_agents"]["buckets"]],
+            }
+            for b in res["aggregations"]["by_group"]["buckets"]
+        }
+
+        criterion_results = []
+        for crit in SOC2_CRITERIA:
+            total = critical = 0
+            agents: set = set()
+            matched: list = []
+            for grp in crit["rule_groups"]:
+                if grp in group_counts:
+                    total    += group_counts[grp]["total"]
+                    critical += group_counts[grp]["critical"]
+                    agents.update(group_counts[grp]["agents"])
+                    matched.append(grp)
+            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            criterion_results.append({
+                "criterion_id":   crit["id"],
+                "criterion_name": crit["name"],
+                "description":    crit["description"],
+                "key_controls":   crit["key_controls"],
+                "total_alerts":   total,
+                "critical_alerts": critical,
+                "top_agents":     list(agents)[:3],
+                "matched_groups": matched,
+                "status":         status,
+                "remediation_priority": "P1-URGENT" if critical > 0 else "P2-HIGH" if total > 20 else "P3-MEDIUM" if total > 5 else "P4-LOW",
+            })
+
+        criterion_results.sort(key=lambda x: x["critical_alerts"], reverse=True)
+        failing = [c for c in criterion_results if c["status"] == "FAILING"]
+        warning = [c for c in criterion_results if c["status"] == "WARNING"]
+
+        return {
+            "report_type":  "soc2_type_ii",
+            "time_range":   time_range,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "summary": {
+                "total_criteria": len(criterion_results),
+                "failing": len(failing),
+                "warning": len(warning),
+                "ok":      len(criterion_results) - len(failing) - len(warning),
+                "audit_readiness": (
+                    "NOT AUDIT READY"     if len(failing) > 1
+                    else "CONDITIONAL"    if len(failing) == 1 or len(warning) > 2
+                    else "AUDIT READY"
+                ),
+            },
+            "failing_criteria":  failing,
+            "criteria":          criterion_results,
+            "note": (
+                "SOC 2 mapping derived from Wazuh rule groups. "
+                "P1-URGENT criteria require remediation before audit. "
+                "Pair with generate_compliance_report(framework='tsc') for native TSC field data."
+            ),
+        }
+
     return {"generate_compliance_report": generate_compliance_report}

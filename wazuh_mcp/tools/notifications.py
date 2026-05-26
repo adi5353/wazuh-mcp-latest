@@ -464,3 +464,230 @@ def register(
             return {"error": f"SMTP error: {e}"}
         except Exception as e:
             return {"error": str(e)}
+
+    # ── Microsoft Teams notifications ────────────────────────────────────────────
+    _TEAMS_WEBHOOK = os.getenv("TEAMS_WEBHOOK_URL", "")
+
+    async def _post_teams_card(card: dict) -> dict:
+        """Post an Adaptive Card payload to a Teams incoming webhook."""
+        if not _TEAMS_WEBHOOK:
+            return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
+        try:
+            async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                r = await client.post(
+                    _TEAMS_WEBHOOK,
+                    json=card,
+                    headers={"Content-Type": "application/json"},
+                )
+            r.raise_for_status()
+            return {"status": "ok", "method": "teams_webhook"}
+        except Exception as e:
+            return {"error": f"Teams webhook failed: {e}"}
+
+    @mcp.tool()
+    async def send_alert_to_teams(
+        message: str,
+        title: str | None = None,
+        severity: str = "info",
+        fields: dict | None = None,
+        ticket_url: str | None = None,
+    ) -> dict:
+        """Push a formatted message to Microsoft Teams via an incoming webhook.
+
+        Uses Adaptive Cards format for rich formatting.
+        severity: info | warning | critical  (controls accent colour)
+        fields:   dict of key→value pairs shown as a facts table
+        ticket_url: link to Jira/TheHive ticket if already created
+
+        Requires TEAMS_WEBHOOK_URL in .env.
+        Set via: Teams channel → Connectors → Incoming Webhook → copy URL.
+        """
+        if not _TEAMS_WEBHOOK:
+            return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
+
+        color_map = {"critical": "attention", "warning": "warning", "info": "good"}
+        accent = color_map.get(severity.lower(), "good")
+
+        body_items: list[dict] = [
+            {"type": "TextBlock", "text": message, "wrap": True, "size": "Small"},
+        ]
+
+        if fields:
+            facts = [{"title": str(k), "value": str(v)} for k, v in fields.items()]
+            body_items.append({"type": "FactSet", "facts": facts})
+
+        actions: list[dict] = []
+        if ticket_url:
+            actions.append({
+                "type": "Action.OpenUrl",
+                "title": "View Ticket",
+                "url": ticket_url,
+            })
+
+        card: dict = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": title or "Wazuh Security Alert",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "color": accent,
+                        },
+                        *body_items,
+                    ],
+                    **({"actions": actions} if actions else {}),
+                },
+            }],
+        }
+
+        result = await _post_teams_card(card)
+        log.info("Teams message sent severity=%s", severity)
+        return result
+
+    @mcp.tool()
+    async def send_critical_alert_to_teams(
+        alert_id: str,
+        rule_id: str,
+        rule_description: str,
+        agent_name: str,
+        severity_level: int,
+        source_ip: str | None = None,
+        ticket_url: str | None = None,
+    ) -> dict:
+        """Fire an instant Teams notification for a critical Wazuh alert.
+
+        Posts a rich Adaptive Card with alert details, severity badge, and
+        optional ticket link. severity_level >= 12 → CRITICAL, 9-11 → HIGH.
+
+        Requires TEAMS_WEBHOOK_URL in .env.
+        """
+        if not _TEAMS_WEBHOOK:
+            return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
+
+        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        if severity_level >= 12:
+            tier = "CRITICAL"; color = "attention"
+        elif severity_level >= 9:
+            tier = "HIGH";     color = "warning"
+        else:
+            tier = "MEDIUM";   color = "accent"
+
+        facts = [
+            {"title": "Rule ID",   "value": str(rule_id)},
+            {"title": "Level",     "value": str(severity_level)},
+            {"title": "Agent",     "value": agent_name},
+            {"title": "Source IP", "value": source_ip or "N/A"},
+            {"title": "Alert ID",  "value": alert_id},
+            {"title": "Time",      "value": ts_str},
+        ]
+        actions: list[dict] = []
+        if ticket_url:
+            actions.append({"type": "Action.OpenUrl", "title": "View Ticket", "url": ticket_url})
+
+        card = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": f"[{tier}] Wazuh Alert — {ts_str}",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "color": color,
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": rule_description,
+                            "wrap": True,
+                            "size": "Small",
+                        },
+                        {"type": "FactSet", "facts": facts},
+                    ],
+                    **({"actions": actions} if actions else {}),
+                },
+            }],
+        }
+
+        result = await _post_teams_card(card)
+        return {**result, "severity_tier": tier, "alert_id": alert_id}
+
+    @mcp.tool()
+    async def send_weekly_summary_to_teams(
+        week_offset: int = 0,
+    ) -> dict:
+        """Generate the weekly security summary and push it to Microsoft Teams.
+
+        week_offset: 0 = current week, 1 = last week.
+        Requires TEAMS_WEBHOOK_URL in .env.
+        """
+        if not _TEAMS_WEBHOOK:
+            return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
+
+        report = await generate_weekly_summary(week_offset=week_offset)
+        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        label = "This week" if week_offset == 0 else "Last week"
+
+        counts = report.get("alert_counts") or {}
+        total  = counts.get("this_week", "N/A")
+        delta  = counts.get("trend_pct")
+        delta_s = f"{delta:+.1f}%" if isinstance(delta, (int, float)) else "N/A"
+
+        top_rules = report.get("top_rules", [])[:5]
+        rules_text = "\n".join(
+            f"• Rule {r.get('rule')} — {r.get('count')} alerts" for r in top_rules
+        ) or "No significant rules"
+
+        top_mitre = report.get("top_mitre_techniques", [])[:3]
+        mitre_text = "\n".join(
+            f"• {t.get('id')} {t.get('name', '')} ({t.get('count', 0)})" for t in top_mitre
+        ) or "None observed"
+
+        facts = [
+            {"title": "Total alerts",    "value": str(total)},
+            {"title": "Week-on-week",    "value": delta_s},
+            {"title": "Top rules",       "value": rules_text},
+            {"title": "Top MITRE",       "value": mitre_text},
+        ]
+
+        card = {
+            "type": "message",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": f"Weekly Security Summary — {label} ({ts_str})",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                        },
+                        {"type": "FactSet", "facts": facts},
+                        {
+                            "type": "TextBlock",
+                            "text": "Posted by Wazuh MCP",
+                            "size": "Small",
+                            "color": "Default",
+                            "isSubtle": True,
+                        },
+                    ],
+                },
+            }],
+        }
+
+        result = await _post_teams_card(card)
+        return {**result, "week_offset": week_offset, "label": label}

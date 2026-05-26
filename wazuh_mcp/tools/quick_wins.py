@@ -445,3 +445,156 @@ def register(mcp, wz, idx, cfg, _cap):
             "needs_review":    needs,
             "false_positives": fp,
         }
+
+    @mcp.tool()
+    async def get_recent_alerts_7d(
+        min_level: int = 7,
+        limit: int = 100,
+        agent_name: str | None = None,
+    ) -> dict:
+        """Fetch the most recent alerts from the last 7 days.
+
+        Convenience wrapper around search_alerts for weekly review workflows.
+        min_level: minimum rule level (1-15, default 7)
+        limit:     max alerts to return (default 100, max 500)
+        agent_name: optional filter by agent name
+        """
+        from ..helpers import trim_alert, time_window
+        filters: list[dict] = [
+            time_window("now-7d"),
+            {"range": {"rule.level": {"gte": min_level}}},
+        ]
+        if agent_name:
+            filters.append({"term": {"agent.name": agent_name}})
+        body = {
+            "size": _cap(limit),
+            "sort": [{"@timestamp": "desc"}],
+            "query": {"bool": {"filter": filters}},
+        }
+        try:
+            res = await idx.search(body)
+            hits = res["hits"]["hits"]
+            return {
+                "time_range": "7d",
+                "min_level": min_level,
+                "total": res["hits"]["total"]["value"],
+                "returned": len(hits),
+                "alerts": [trim_alert(h) for h in hits],
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    @mcp.tool()
+    async def get_recent_alerts_30d(
+        min_level: int = 7,
+        limit: int = 200,
+        agent_name: str | None = None,
+    ) -> dict:
+        """Fetch the most recent alerts from the last 30 days.
+
+        Convenience wrapper around search_alerts for monthly review workflows.
+        min_level: minimum rule level (1-15, default 7)
+        limit:     max alerts to return (default 200, max 500)
+        agent_name: optional filter by agent name
+        """
+        from ..helpers import trim_alert, time_window
+        filters: list[dict] = [
+            time_window("now-30d"),
+            {"range": {"rule.level": {"gte": min_level}}},
+        ]
+        if agent_name:
+            filters.append({"term": {"agent.name": agent_name}})
+        body = {
+            "size": _cap(limit),
+            "sort": [{"@timestamp": "desc"}],
+            "query": {"bool": {"filter": filters}},
+        }
+        try:
+            res = await idx.search(body)
+            hits = res["hits"]["hits"]
+            return {
+                "time_range": "30d",
+                "min_level": min_level,
+                "total": res["hits"]["total"]["value"],
+                "returned": len(hits),
+                "alerts": [trim_alert(h) for h in hits],
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    @mcp.tool()
+    async def deduplicate_alerts(
+        time_range: str = "1h",
+        min_level: int = 7,
+        limit: int = 500,
+    ) -> dict:
+        """Collapse repeated identical alerts into deduplicated groups with counts.
+
+        Alerts with the same rule_id + agent_id within the time window are merged.
+        Returns deduplicated list sorted by occurrence count (noisiest first).
+
+        Useful before auto-triage or shift handover to remove alert fatigue noise.
+
+        time_range: lookback window (default 1h)
+        min_level:  minimum rule level (default 7)
+        limit:      raw alerts to scan before deduplication (default 500)
+        """
+        from ..helpers import trim_alert, time_window
+        body = {
+            "size": _cap(limit),
+            "sort": [{"@timestamp": "desc"}],
+            "query": {
+                "bool": {
+                    "filter": [
+                        time_window(f"now-{time_range}"),
+                        {"range": {"rule.level": {"gte": min_level}}},
+                    ]
+                }
+            },
+        }
+        try:
+            res = await idx.search(body)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        hits = res["hits"]["hits"]
+        total_raw = res["hits"]["total"]["value"]
+
+        # Group by (rule_id, agent_id) key
+        groups: dict[str, dict] = {}
+        for h in hits:
+            a = trim_alert(h)
+            key = f"{a.get('rule_id', '')}::{a.get('agent_id', '')}"
+            if key not in groups:
+                groups[key] = {
+                    "rule_id":          a.get("rule_id"),
+                    "rule_level":       a.get("rule_level"),
+                    "rule_description": a.get("rule_description"),
+                    "agent_id":         a.get("agent_id"),
+                    "agent_name":       a.get("agent_name"),
+                    "srcip":            a.get("srcip"),
+                    "mitre":            a.get("mitre"),
+                    "first_seen":       a.get("timestamp"),
+                    "last_seen":        a.get("timestamp"),
+                    "count":            0,
+                }
+            groups[key]["count"] += 1
+            # Track time span
+            ts = a.get("timestamp", "")
+            if ts < groups[key]["first_seen"]:
+                groups[key]["first_seen"] = ts
+            if ts > groups[key]["last_seen"]:
+                groups[key]["last_seen"] = ts
+
+        deduped = sorted(groups.values(), key=lambda x: x["count"], reverse=True)
+        return {
+            "time_range":   time_range,
+            "min_level":    min_level,
+            "total_raw":    total_raw,
+            "scanned":      len(hits),
+            "unique_groups": len(deduped),
+            "deduplication_ratio": (
+                f"{(1 - len(deduped) / len(hits)) * 100:.1f}%" if hits else "0%"
+            ),
+            "alerts": deduped,
+        }
