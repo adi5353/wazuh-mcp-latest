@@ -2,16 +2,33 @@
 
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
-**100+ tools** across 30+ domain modules — alerts, vulnerabilities, FIM, compliance, MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel, incidents, reporting, notifications, onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, MSSP multi-tenant, Wazuh Cloud, and more.
+**114+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (PCI-DSS, HIPAA, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
+[![Tools](https://img.shields.io/badge/tools-114%2B-brightgreen)](#tool-reference)
+
+---
+
+## What's New
+
+### v2.0 — 18 new tools across 6 areas
+
+| Area | New Tools | Details |
+|---|---|---|
+| **Quick wins** | `get_recent_alerts_7d`, `get_recent_alerts_30d`, `deduplicate_alerts` | 7-day/30-day alert windows; collapse repeated alerts into groups with occurrence counts and dedup ratio |
+| **Export formats** | `export_alerts_json`, `export_alerts_ndjson`, `export_report_html` | JSON array, NDJSON (Logstash/Vector/Fluent Bit), and print-ready HTML reports (open in browser → Ctrl+P → PDF) |
+| **Threat intel** | `enrich_domain`, `enrich_url`, `bulk_enrich_iocs` | Domain & URL reputation via VirusTotal; batch up to 20 mixed IOCs (IP/domain/hash/URL) with auto-type detection |
+| **Compliance** | `nist_csf2_compliance_summary`, `soc2_compliance_summary` | Full NIST CSF 2.0 (6 functions) and SOC 2 Type II (5 trust service criteria) with audit readiness verdict |
+| **Notifications** | `send_alert_to_teams`, `send_critical_alert_to_teams`, `send_weekly_summary_to_teams` | Microsoft Teams Adaptive Cards — mirrors all existing Slack tools |
+| **Server metrics** | `get_mcp_server_metrics`, `get_tool_usage_stats`, `get_slow_queries` | Uptime, per-tool p50/p95/p99 latency, error rates, circuit breaker states, Prometheus text output |
 
 ---
 
 ## Table of Contents
 
+- [What's New](#whats-new)
 - [5-Minute Quickstart](#5-minute-quickstart)
 - [Wazuh Cloud Setup](#wazuh-cloud-setup)
 - [MSSP Multi-Tenant Setup](#mssp-multi-tenant-setup)
@@ -426,6 +443,7 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook |
 | `SLACK_BOT_TOKEN` | Slack bot token (alternative to webhook) |
 | `SLACK_DEFAULT_CHANNEL` | Default Slack channel, e.g. `#soc-alerts` |
+| `TEAMS_WEBHOOK_URL` | **New** — Microsoft Teams incoming webhook (channel → Connectors → Incoming Webhook) |
 | `SMTP_HOST` | SMTP server for email reports |
 | `SMTP_PORT` | SMTP port (default `587`) |
 | `SMTP_USER` | SMTP username |
@@ -482,7 +500,7 @@ Composite 0–100 health score per agent across five dimensions: connectivity, e
 |---|---|
 | `get_agent_health_score` | Composite health score with per-dimension breakdown |
 
-### Alerts (9 tools)
+### Alerts (12 tools)
 
 | Tool | Description |
 |---|---|
@@ -495,6 +513,9 @@ Composite 0–100 health score per agent across five dimensions: connectivity, e
 | `get_alert_by_id` | Full alert detail by document ID |
 | `compare_alert_volume` | This period vs last period — volume deltas |
 | `detect_rule_anomalies` | NEW, SPIKE, DROP, GONE rules vs baseline |
+| `get_recent_alerts_7d` | **New** — Last 7 days of alerts; optional agent filter |
+| `get_recent_alerts_30d` | **New** — Last 30 days of alerts for monthly review |
+| `deduplicate_alerts` | **New** — Collapse repeated rule+agent pairs into groups with counts and dedup ratio |
 
 ### Vulnerabilities (4 tools)
 
@@ -534,14 +555,19 @@ Persistent watchlist of SOC-critical CVEs stored in a Wazuh CDB list. Continuous
 | `fim_summary` | Aggregated FIM activity by agent, event type, path |
 | `critical_file_changes` | FIM events on sensitive paths only |
 
-### Compliance (4 tools)
+### Compliance (7 tools)
+
+Supported frameworks: PCI-DSS, HIPAA, GDPR, NIST 800-53, TSC, ISO 27001:2022, **NIST CSF 2.0**, **SOC 2 Type II**.
 
 | Tool | Description |
 |---|---|
 | `compliance_summary` | Alerts by control for PCI-DSS, HIPAA, GDPR, NIST 800-53, TSC |
 | `compliance_control_details` | Drill into alerts for one specific control |
 | `generate_compliance_report` | Full compliance report for a framework |
-| `email_compliance_report` | Email the compliance report *(requires SMTP config)* |
+| `iso27001_compliance_summary` | ISO 27001:2022 Annex A posture report (derived from rule groups) |
+| `nist_csf2_compliance_summary` | **New** — NIST CSF 2.0: GOVERN / IDENTIFY / PROTECT / DETECT / RESPOND / RECOVER with NIST 800-53 cross-references |
+| `soc2_compliance_summary` | **New** — SOC 2 Type II: Common Criteria / Availability / Processing Integrity / Confidentiality / Privacy; includes audit readiness verdict (AUDIT READY / CONDITIONAL / NOT AUDIT READY) and P1–P4 remediation priorities |
+| `email_compliance_report` | Email the compliance report as HTML *(requires SMTP config)* |
 
 ### Fleet Inventory (7 tools)
 
@@ -606,13 +632,19 @@ AI-assisted tool for creating, validating, and deploying Wazuh XML detection rul
 | `validate_rule_xml` | Parse and validate rule XML before upload |
 | `push_custom_rule` | Push validated rule XML to Manager's custom_rules.xml *(admin)* |
 
-### Threat Intelligence (3 tools)
+### Threat Intelligence (7 tools)
+
+All enrichment tools degrade gracefully when API keys are absent and use a shared circuit breaker to protect free-tier daily quotas.
 
 | Tool | Description |
 |---|---|
 | `enrich_ip` | VirusTotal + AbuseIPDB verdict for an IP |
 | `enrich_file_hash` | VirusTotal lookup for MD5/SHA1/SHA256 |
-| `enrich_ip_geo` | GeoIP lookup (ASN, country, city) |
+| `enrich_ip_geo` | GeoIP lookup — ASN, country, city (no key required) |
+| `enrich_domain` | **New** — Domain reputation via VirusTotal (creation date, registrar, categories, verdict) |
+| `enrich_url` | **New** — URL reputation via VirusTotal with redirect tracking and HTTP response code |
+| `bulk_enrich_iocs` | **New** — Batch enrich up to 20 mixed IOCs (IP/domain/hash/URL) in one call with auto-type detection; parallel enrichment |
+| `get_threat_intel_status` | Daily quota usage and circuit breaker state for all TI providers |
 
 ### Extended GeoIP & Infrastructure (2 tools)
 
@@ -723,14 +755,32 @@ Cron-style background jobs that auto-run reporting tools and deliver via Slack o
 | `create_thehive_case` | Create a TheHive case |
 | `update_ticket_status` | Update a Jira ticket status |
 
-### Notifications (4 tools)
+### Notifications (8 tools)
+
+Slack and Microsoft Teams are both fully supported with equivalent feature sets.
+
+**Slack (4 tools)**
 
 | Tool | Description |
 |---|---|
-| `send_alert_to_slack` | Send a formatted alert to Slack |
+| `send_alert_to_slack` | Send a formatted alert to Slack (webhook or bot token) |
 | `send_shift_handover_to_slack` | Post shift handover report to Slack |
 | `send_weekly_summary_to_slack` | Post weekly summary to Slack |
-| `send_critical_alert_notify` | Immediate critical alert notification |
+| `send_critical_alert_notify` | Immediate critical alert Slack notification |
+
+**Microsoft Teams (3 tools) — New**
+
+| Tool | Description |
+|---|---|
+| `send_alert_to_teams` | Send a formatted Adaptive Card to Teams (severity colour, fields, ticket link) |
+| `send_critical_alert_to_teams` | Immediate critical alert Teams card with CRITICAL/HIGH/MEDIUM tier |
+| `send_weekly_summary_to_teams` | Weekly security summary card with alert counts and MITRE breakdown |
+
+**Email (1 tool)**
+
+| Tool | Description |
+|---|---|
+| `email_compliance_report` | Email compliance report as HTML *(requires SMTP config)* |
 
 ### Agent Onboarding (3 tools)
 
@@ -774,6 +824,41 @@ Background asyncio loop that polls for high-severity alerts, automatically chain
 | `start_autonomous_monitor` | Start the background alert monitor *(admin)* |
 | `stop_autonomous_monitor` | Stop the monitor *(admin)* |
 | `get_autonomous_status` | Current monitor state, alert count, recent actions |
+
+### Quick Wins & NL Query (5 tools)
+
+| Tool | Description |
+|---|---|
+| `get_abac_status` | Show current Attribute-Based Access Control configuration |
+| `nl_to_opensearch_query` | Translate natural-language queries to OpenSearch DSL; optional `execute=true` |
+| `auto_triage_alert` | Heuristic True Positive / False Positive / Needs Review classification for one alert |
+| `batch_auto_triage` | Auto-triage all alerts in a time window — morning triage in one call |
+| `deduplicate_alerts` | **New** — Collapse repeated rule+agent alert groups with dedup ratio reporting |
+
+### Data Export (6 tools)
+
+Export alert, vulnerability, and compliance data in multiple formats for offline analysis, SIEM ingestion, or audit evidence.
+
+| Tool | Format | Description |
+|---|---|---|
+| `export_alerts_csv` | CSV | Alerts with timestamp, agent, rule, srcip, MITRE tactics |
+| `export_alerts_json` | **JSON** | **New** — JSON array; optional `pretty=true` for human readability |
+| `export_alerts_ndjson` | **NDJSON** | **New** — Newline-delimited JSON for Logstash, Fluent Bit, Vector bulk import |
+| `export_report_html` | **HTML** | **New** — Print-ready self-contained HTML with inline CSS; open in browser → Ctrl+P → Save as PDF. Supports `report_type='compliance'` or `'vulnerabilities'` |
+| `export_vulnerabilities_csv` | CSV | Vulnerability findings with CVE, severity, CVSS, package, version |
+| `export_compliance_csv` | CSV | Compliance alerts with control mappings for auditor evidence packages |
+
+> **PDF tip:** `export_report_html` generates HTML with `@media print` CSS. Open the returned HTML in any browser and press **Ctrl+P → Save as PDF** for a formatted compliance/vulnerability PDF report.
+
+### Server Metrics (3 tools) — New
+
+Self-monitoring tools for production observability of the MCP server itself. The Prometheus text output is also available at the HTTP `GET /metrics` endpoint.
+
+| Tool | Description |
+|---|---|
+| `get_mcp_server_metrics` | Uptime, total calls, per-tool p50/p95/p99 latency, error rates, circuit breaker states, Prometheus-format text |
+| `get_tool_usage_stats` | Sortable usage table (by calls/errors/latency/error_rate); shows never-called tools |
+| `get_slow_queries` | Tools exceeding a configurable p95 latency threshold with remediation suggestions |
 
 ### Credential Management (2 tools)
 
@@ -863,7 +948,8 @@ wazuh-mcp-latest/
 │       ├── agent_health.py  ├── cve_watchlist.py   ├── rule_wizard.py
 │       ├── geo_intel.py     ├── threat_feeds.py    ├── playbooks.py
 │       ├── scheduler.py     ├── autonomous_soc.py  ├── workspaces.py
-│       └── credential_mgmt.py
+│       ├── credential_mgmt.py  ├── quick_wins.py  ├── export.py
+│       └── metrics.py       # NEW — server self-monitoring (uptime, latency, usage)
 ├── docs/
 │   ├── open-webui-integration.md
 │   └── testing-guide.md
@@ -947,6 +1033,7 @@ All integrations are opt-in. Tools degrade gracefully if credentials are absent.
 
 - **Slack webhook** — `SLACK_WEBHOOK_URL` (simpler, single channel)
 - **Slack bot token** — `SLACK_BOT_TOKEN` + `SLACK_DEFAULT_CHANNEL` (multi-channel)
+- **Microsoft Teams** — `TEAMS_WEBHOOK_URL` — Teams channel → **…** → Connectors → Incoming Webhook → Create → copy URL
 - **Email (SMTP)** — `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `REPORT_EMAIL_FROM`, `REPORT_EMAIL_TO`
 
 ---

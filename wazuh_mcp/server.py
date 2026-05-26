@@ -133,6 +133,11 @@ def _sanitizing_tool_decorator(*args, **kwargs):
                 record_call(fn.__name__, _duration)
             except Exception:
                 pass
+            try:
+                from .tools.metrics import record_tool_call
+                record_tool_call(fn.__name__, _duration)
+            except Exception:
+                pass
 
             # ── OUTPUT sanitization ───────────────────────────────────────────
             if isinstance(result, dict):
@@ -229,6 +234,7 @@ from .tools import prompt_advisor as _prompt_advisor_module  # noqa: E402
 from .tools import explain_alert as _explain_alert_module  # noqa: E402
 from .tools import roi as _roi_module  # noqa: E402
 from .tools import quick_wins as _quick_wins_module  # noqa: E402
+from .tools import metrics as _metrics_module  # noqa: E402
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -397,6 +403,7 @@ _prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _explain_alert_module.register(mcp, wz, idx, cfg, _cap, _geoip_lookup)
 _roi_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 _quick_wins_module.register(mcp, wz, idx, cfg, _cap)
+_metrics_module.register(mcp, wz, idx, cfg, _cap, _truncate)
 
 
 # ── Session identity tool (Gap 1) ─────────────────────────────────────────────
