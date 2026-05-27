@@ -144,6 +144,7 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         time_range: str = "24h",
         min_level: int = 7,
         agent_id: str | None = None,
+        agent_name: str | None = None,
         rule_groups: list | None = None,
         group_filter: str = "",
         limit: int = 50,
@@ -152,12 +153,14 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
     ) -> dict:
         """Search Wazuh alerts in the Indexer.
 
-        time_range: relative time like '15m', '1h', '24h', '7d'
-        min_level: minimum rule level (default 7)
-        agent_id: optional agent filter
+        time_range:  relative time like '15m', '1h', '24h', '7d'
+        min_level:   minimum rule level (default 7)
+        agent_id:    optional filter by numeric agent ID (e.g. '001')
+        agent_name:  optional filter by agent name string (e.g. 'web-server-01')
+                     — prefer this over agent_id when you know the hostname
         rule_groups: optional rule-group filter (e.g. ['authentication_failed', 'ssh'])
-        page_token: opaque cursor from a previous response's next_page_token for pagination
-        sort_by: sort order — one of:
+        page_token:  opaque cursor from a previous response's next_page_token for pagination
+        sort_by:     sort order — one of:
             'timestamp_desc'  (default) newest first
             'level_desc'      highest severity first
             'agent_name_asc'  alphabetical by agent name
@@ -173,6 +176,8 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
             _, err = safe_validate(validate_agent_id, agent_id)
             if err:
                 return err
+        if agent_name and (len(agent_name) > 64 or not agent_name.replace("-", "").replace("_", "").replace(".", "").isalnum()):
+            return {"error": "agent_name must be a valid hostname (max 64 chars, alphanumeric/dash/underscore/dot)"}
         limit, err = safe_validate(validate_limit, limit)
         if err:
             return err
@@ -183,6 +188,8 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         ]
         if agent_id:
             filters.append({"term": {"agent.id": agent_id}})
+        if agent_name:
+            filters.append({"term": {"agent.name": agent_name}})
         if rule_groups:
             filters.append({"terms": {"rule.groups": rule_groups}})
         if group_filter:

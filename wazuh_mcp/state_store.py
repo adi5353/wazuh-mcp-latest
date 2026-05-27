@@ -160,3 +160,28 @@ def delete_kv(key: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def list_kv(prefix: str = "") -> list[str]:
+    """Return all stored key names, optionally filtered by prefix.
+
+    The returned names are the original logical key names (without the .json
+    suffix) sorted alphabetically.  Use this instead of globbing _kv_dir()
+    directly — it keeps callers decoupled from the storage layout.
+
+    Examples:
+        list_kv()                        # all keys
+        list_kv("agent_baseline_")       # all per-agent baselines
+        list_kv("compliance_baseline_")  # all compliance drift baselines
+        list_kv("rule_backup_")          # all rule pre-push backups
+    """
+    safe_prefix = _safe_key(prefix) if prefix else ""
+    try:
+        pattern = f"{safe_prefix}*.json" if safe_prefix else "*.json"
+        return sorted(
+            f.stem  # filename without .json == the safe key name
+            for f in _kv_dir().glob(pattern)
+            if f.is_file()
+        )
+    except Exception:
+        return []

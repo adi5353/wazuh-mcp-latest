@@ -55,7 +55,6 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
             return f"ERROR: {e}"
 
         from ..helpers import time_window, trim_alert
-        import json as _json  # noqa: F401
 
         query = {
             "bool": {

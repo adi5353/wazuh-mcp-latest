@@ -19,12 +19,15 @@ log = logging.getLogger("wazuh-mcp")
 _BASELINES: dict[str, dict] = {}
 
 
+_BASELINES_LOADED_FROM_DISK = False  # lazy startup flag
+
+
 def _baseline_key(agent_id: str) -> str:
     return f"agent_baseline_{agent_id}"
 
 
 def _load_baseline(agent_id: str) -> dict | None:
-    """Load a baseline from persistent store into the in-memory cache."""
+    """Load a single baseline from persistent store into the in-memory cache."""
     from ..state_store import load_kv
     data = load_kv(_baseline_key(agent_id))
     if data:
@@ -37,6 +40,32 @@ def _save_baseline(agent_id: str, baseline: dict) -> None:
     from ..state_store import save_kv
     _BASELINES[agent_id] = baseline
     save_kv(_baseline_key(agent_id), baseline)
+
+
+def _load_all_baselines_from_disk() -> None:
+    """Populate _BASELINES from every persisted baseline on disk.
+
+    Called once at module registration time so list_anomalous_agents
+    doesn't pay a glob-scan cost on every invocation.
+    """
+    global _BASELINES_LOADED_FROM_DISK
+    if _BASELINES_LOADED_FROM_DISK:
+        return
+    _BASELINES_LOADED_FROM_DISK = True
+    try:
+        from ..state_store import list_kv, load_kv
+        keys = list_kv("agent_baseline_")
+        for safe_key in keys:
+            # safe_key == "agent_baseline_<agent_id>" (the filesystem stem)
+            agent_id = safe_key.removeprefix("agent_baseline_")
+            if agent_id and agent_id not in _BASELINES:
+                data = load_kv(safe_key)
+                if data:
+                    _BASELINES[agent_id] = data
+        if _BASELINES:
+            log.info("baseline: loaded %d persisted baselines from disk", len(_BASELINES))
+    except Exception as exc:
+        log.warning("baseline: failed to load persisted baselines: %s", exc)
 
 _SCORE_WEIGHTS = {
     "alert_volume": 0.35,
@@ -132,6 +161,7 @@ def _mean_std(values: list[float]) -> tuple[float, float]:
 
 
 def register(mcp, wz, idx, cfg, _cap):
+    _load_all_baselines_from_disk()  # populate cache once at startup
 
     @mcp.tool()
     async def compute_agent_baseline(agent_id: str, days: int = 7) -> dict:
@@ -303,16 +333,6 @@ def register(mcp, wz, idx, cfg, _cap):
         threshold: minimum deviation score to flag (0-100, default 40)
         window_hours: current observation window (default 24h)
         """
-        # Populate in-memory cache from disk for any agents not yet loaded this session
-        from ..state_store import _kv_dir
-        try:
-            for f in _kv_dir().glob("agent_baseline_*.json"):
-                aid = f.stem.removeprefix("agent_baseline_")
-                if aid and aid not in _BASELINES:
-                    _load_baseline(aid)
-        except Exception:
-            pass
-
         if not _BASELINES:
             return {
                 "error": "No baselines computed yet.",
