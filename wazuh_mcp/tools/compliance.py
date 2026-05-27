@@ -631,4 +631,460 @@ def register(mcp, wz, idx, cfg, _cap):
             ),
         }
 
-    return {"generate_compliance_report": generate_compliance_report}
+    # ── PCI-DSS dedicated summary ─────────────────────────────────────────────
+
+    @mcp.tool()
+    async def pci_dss_compliance_summary(
+        time_range: str = "30d",
+        min_level: int = 5,
+    ) -> dict:
+        """Generate a PCI-DSS v4.0 compliance posture report.
+
+        Maps Wazuh's native rule.pci_dss field to the 12 PCI-DSS requirements,
+        then adds rule-group heuristics for requirements not directly tagged.
+
+        Returns per-requirement status (OK / WARNING / FAILING), alert counts,
+        top violating agents, and a prioritised remediation list.
+        """
+        PCI_REQUIREMENTS: list[dict] = [
+            {"id": "1",  "title": "Network Security Controls",
+             "rule_groups": ["firewall", "iptables", "network", "port_scan"]},
+            {"id": "2",  "title": "Secure Configurations",
+             "rule_groups": ["syscheck", "configuration_changed", "fim"]},
+            {"id": "3",  "title": "Account Data Protection",
+             "rule_groups": ["sensitive_data", "data_exfiltration", "fim"]},
+            {"id": "4",  "title": "Encryption in Transit",
+             "rule_groups": ["ssl", "tls", "encryption"]},
+            {"id": "5",  "title": "Malware Protection",
+             "rule_groups": ["malware", "ransomware", "rootkit", "virus"]},
+            {"id": "6",  "title": "Secure System & Software Development",
+             "rule_groups": ["web_attack", "exploit", "injection", "sqli", "xss"]},
+            {"id": "7",  "title": "Restrict Access by Business Need",
+             "rule_groups": ["access_control", "privilege_escalation", "sudo", "su"]},
+            {"id": "8",  "title": "Identify Users & Authenticate Access",
+             "rule_groups": ["authentication_failed", "brute_force", "pam", "sshd"]},
+            {"id": "9",  "title": "Restrict Physical Access",
+             "rule_groups": ["physical_access", "removable_media", "usb"]},
+            {"id": "10", "title": "Log All Access to System Components",
+             "rule_groups": ["audit", "auditd", "ossec", "syslog"]},
+            {"id": "11", "title": "Test Security of Systems & Networks",
+             "rule_groups": ["vulnerability", "cve", "network_scan", "ids"]},
+            {"id": "12", "title": "Support Information Security with Policies",
+             "rule_groups": ["policy_violation", "ossec", "audit"]},
+        ]
+
+        # Query native pci_dss field + rule groups simultaneously
+        body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "filter": [
+                        time_window(f"now-{time_range}"),
+                        {"range": {"rule.level": {"gte": min_level}}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_pci_control": {
+                    "terms": {"field": "rule.pci_dss", "size": 100},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+                    },
+                },
+                "by_group": {
+                    "terms": {"field": "rule.groups", "size": 300},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+                    },
+                },
+            },
+        }
+        res = await idx.search(body)
+
+        pci_control_counts: dict[str, dict] = {
+            b["key"]: {
+                "total": b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
+            }
+            for b in res["aggregations"]["by_pci_control"]["buckets"]
+        }
+        group_counts: dict[str, dict] = {
+            b["key"]: {
+                "total": b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
+            }
+            for b in res["aggregations"]["by_group"]["buckets"]
+        }
+
+        req_results = []
+        for req in PCI_REQUIREMENTS:
+            req_id = req["id"]
+            # Merge native PCI field hits (controls starting with req_id.)
+            total = critical = 0
+            agents: set = set()
+            native_controls = [
+                k for k in pci_control_counts if k.startswith(f"{req_id}.")
+            ]
+            for ctrl in native_controls:
+                total    += pci_control_counts[ctrl]["total"]
+                critical += pci_control_counts[ctrl]["critical"]
+                agents.update(pci_control_counts[ctrl]["agents"])
+            # Add rule-group heuristic counts
+            for grp in req["rule_groups"]:
+                if grp in group_counts:
+                    total    += group_counts[grp]["total"]
+                    critical += group_counts[grp]["critical"]
+                    agents.update(group_counts[grp]["agents"])
+
+            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            req_results.append({
+                "requirement": req_id,
+                "title": req["title"],
+                "total_alerts": total,
+                "critical_alerts": critical,
+                "top_agents": list(agents)[:5],
+                "native_controls_hit": native_controls[:10],
+                "status": status,
+                "remediation_priority": (
+                    "P0-CRITICAL" if critical > 20
+                    else "P1-URGENT" if critical > 0
+                    else "P2-HIGH" if total > 50
+                    else "P3-MEDIUM" if total > 10
+                    else "P4-LOW"
+                ),
+            })
+
+        req_results.sort(key=lambda x: (x["critical_alerts"], x["total_alerts"]), reverse=True)
+        failing = [r for r in req_results if r["status"] == "FAILING"]
+        warning = [r for r in req_results if r["status"] == "WARNING"]
+
+        return {
+            "report_type":  "pci_dss_v4.0",
+            "time_range":   time_range,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "summary": {
+                "total_requirements": len(req_results),
+                "failing": len(failing),
+                "warning": len(warning),
+                "ok":      len(req_results) - len(failing) - len(warning),
+                "audit_readiness": (
+                    "NOT AUDIT READY" if len(failing) > 2
+                    else "CONDITIONAL" if len(failing) > 0
+                    else "AUDIT READY"
+                ),
+            },
+            "failing_requirements": failing,
+            "requirements":         req_results,
+            "note": (
+                "PCI-DSS mapping combines native rule.pci_dss field data with "
+                "rule-group heuristics. For control-level drill-down use "
+                "compliance_control_details(framework='pci_dss', control_id='10.2.1')."
+            ),
+        }
+
+    # ── HIPAA dedicated summary ───────────────────────────────────────────────
+
+    @mcp.tool()
+    async def hipaa_compliance_summary(
+        time_range: str = "30d",
+        min_level: int = 5,
+    ) -> dict:
+        """Generate a HIPAA Security Rule compliance posture report.
+
+        Maps Wazuh's native rule.hipaa field to HIPAA Security Rule safeguard
+        categories (Administrative, Physical, Technical), with rule-group heuristics.
+
+        Returns per-safeguard status, alert counts, and remediation priorities.
+        """
+        HIPAA_SAFEGUARDS: list[dict] = [
+            {
+                "id": "164.308", "category": "Administrative Safeguards",
+                "rule_groups": ["audit", "policy_violation", "ossec", "auditd"],
+                "controls": ["164.308(a)(1)", "164.308(a)(3)", "164.308(a)(4)",
+                             "164.308(a)(5)", "164.308(a)(6)", "164.308(a)(8)"],
+            },
+            {
+                "id": "164.310", "category": "Physical Safeguards",
+                "rule_groups": ["physical_access", "removable_media", "usb"],
+                "controls": ["164.310(a)(1)", "164.310(b)", "164.310(c)", "164.310(d)(1)"],
+            },
+            {
+                "id": "164.312", "category": "Technical Safeguards",
+                "rule_groups": [
+                    "authentication_failed", "brute_force", "pam",
+                    "access_control", "encryption", "ssl", "tls",
+                    "audit", "auditd", "syscheck", "fim",
+                ],
+                "controls": ["164.312(a)(1)", "164.312(a)(2)", "164.312(b)",
+                             "164.312(c)(1)", "164.312(d)", "164.312(e)(1)"],
+            },
+            {
+                "id": "164.314", "category": "Organizational Requirements",
+                "rule_groups": ["policy_violation", "ossec"],
+                "controls": ["164.314(a)(1)", "164.314(b)(1)"],
+            },
+            {
+                "id": "164.316", "category": "Policies and Procedures",
+                "rule_groups": ["policy_violation", "configuration_changed", "audit"],
+                "controls": ["164.316(a)", "164.316(b)(1)"],
+            },
+        ]
+
+        body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "filter": [
+                        time_window(f"now-{time_range}"),
+                        {"range": {"rule.level": {"gte": min_level}}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_hipaa_control": {
+                    "terms": {"field": "rule.hipaa", "size": 100},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+                    },
+                },
+                "by_group": {
+                    "terms": {"field": "rule.groups", "size": 300},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+                    },
+                },
+            },
+        }
+        res = await idx.search(body)
+
+        hipaa_control_counts: dict[str, dict] = {
+            b["key"]: {
+                "total": b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
+            }
+            for b in res["aggregations"]["by_hipaa_control"]["buckets"]
+        }
+        group_counts: dict[str, dict] = {
+            b["key"]: {
+                "total": b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
+            }
+            for b in res["aggregations"]["by_group"]["buckets"]
+        }
+
+        safeguard_results = []
+        for sg in HIPAA_SAFEGUARDS:
+            total = critical = 0
+            agents: set = set()
+            native_hits = [
+                ctrl for ctrl in sg["controls"] if ctrl in hipaa_control_counts
+            ]
+            for ctrl in native_hits:
+                total    += hipaa_control_counts[ctrl]["total"]
+                critical += hipaa_control_counts[ctrl]["critical"]
+                agents.update(hipaa_control_counts[ctrl]["agents"])
+            for grp in sg["rule_groups"]:
+                if grp in group_counts:
+                    total    += group_counts[grp]["total"]
+                    critical += group_counts[grp]["critical"]
+                    agents.update(group_counts[grp]["agents"])
+
+            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            safeguard_results.append({
+                "safeguard_id":   sg["id"],
+                "category":       sg["category"],
+                "total_alerts":   total,
+                "critical_alerts": critical,
+                "top_agents":     list(agents)[:5],
+                "native_controls_hit": native_hits,
+                "status": status,
+                "remediation_priority": (
+                    "P0-CRITICAL" if critical > 20
+                    else "P1-URGENT" if critical > 0
+                    else "P2-HIGH"   if total > 50
+                    else "P3-MEDIUM" if total > 10
+                    else "P4-LOW"
+                ),
+            })
+
+        safeguard_results.sort(key=lambda x: (x["critical_alerts"], x["total_alerts"]), reverse=True)
+        failing = [s for s in safeguard_results if s["status"] == "FAILING"]
+        warning = [s for s in safeguard_results if s["status"] == "WARNING"]
+
+        return {
+            "report_type":  "hipaa_security_rule",
+            "time_range":   time_range,
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "summary": {
+                "total_safeguards": len(safeguard_results),
+                "failing": len(failing),
+                "warning": len(warning),
+                "ok":      len(safeguard_results) - len(failing) - len(warning),
+                "audit_readiness": (
+                    "NOT AUDIT READY" if len(failing) > 1
+                    else "CONDITIONAL" if len(failing) > 0
+                    else "AUDIT READY"
+                ),
+            },
+            "failing_safeguards": failing,
+            "safeguards":         safeguard_results,
+            "note": (
+                "HIPAA mapping combines native rule.hipaa field data with rule-group heuristics. "
+                "For control-level drill-down use compliance_control_details(framework='hipaa', control_id='164.312(b)'). "
+                "HIPAA Breach Notification Rule events require manual review."
+            ),
+        }
+
+    # ── Compliance drift detection ────────────────────────────────────────────
+
+    # In-memory baseline store: (framework, time_range) → baseline snapshot
+    _compliance_baselines: dict[str, dict] = {}
+
+    @mcp.tool()
+    async def compliance_drift(
+        framework: str = "pci_dss",
+        time_range: str = "30d",
+        min_level: int = 5,
+        save_baseline: bool = False,
+    ) -> dict:
+        """Detect compliance posture drift by comparing current state to a saved baseline.
+
+        On first call (or with save_baseline=True), saves the current compliance
+        summary as the baseline.  On subsequent calls, diffs current vs baseline
+        and returns controls that have worsened, improved, or are newly failing.
+
+        framework:     pci_dss | hipaa | gdpr | nist_800_53 | tsc
+        time_range:    lookback window for the current snapshot (default 30d)
+        save_baseline: If True, overwrite the stored baseline with current state.
+        """
+        field = COMPLIANCE_FIELDS.get(framework)
+        if not field:
+            return {"error": f"Unknown framework '{framework}'", "supported": list(COMPLIANCE_FIELDS)}
+
+        # Get current snapshot
+        current_body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "filter": [
+                        time_window(f"now-{time_range}"),
+                        {"range": {"rule.level": {"gte": min_level}}},
+                        {"exists": {"field": field}},
+                    ]
+                }
+            },
+            "aggs": {
+                "by_control": {
+                    "terms": {"field": field, "size": 50},
+                    "aggs": {
+                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+                    },
+                }
+            },
+        }
+        res = await idx.search(current_body)
+        current_snapshot: dict[str, dict] = {
+            b["key"]: {
+                "total":    b["doc_count"],
+                "critical": b["critical"]["doc_count"],
+            }
+            for b in res["aggregations"]["by_control"]["buckets"]
+        }
+
+        baseline_key = f"{framework}::{time_range}"
+
+        if save_baseline or baseline_key not in _compliance_baselines:
+            _compliance_baselines[baseline_key] = {
+                "snapshot": current_snapshot,
+                "saved_at": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            return {
+                "status": "baseline_saved",
+                "framework": framework,
+                "saved_at": _compliance_baselines[baseline_key]["saved_at"],
+                "controls_tracked": len(current_snapshot),
+                "message": (
+                    "Baseline saved. Call compliance_drift() again (without save_baseline=True) "
+                    "to detect drift against this baseline."
+                ),
+            }
+
+        baseline_data = _compliance_baselines[baseline_key]
+        baseline_snapshot: dict[str, dict] = baseline_data["snapshot"]
+
+        # Diff current vs baseline
+        worsened: list[dict] = []
+        improved: list[dict] = []
+        new_failing: list[dict] = []
+        all_controls = set(current_snapshot) | set(baseline_snapshot)
+
+        for ctrl in sorted(all_controls):
+            cur  = current_snapshot.get(ctrl,  {"total": 0, "critical": 0})
+            base = baseline_snapshot.get(ctrl, {"total": 0, "critical": 0})
+
+            delta_total    = cur["total"]    - base["total"]
+            delta_critical = cur["critical"] - base["critical"]
+
+            if ctrl not in baseline_snapshot and cur["critical"] > 0:
+                new_failing.append({
+                    "control": ctrl,
+                    "current_total": cur["total"],
+                    "current_critical": cur["critical"],
+                    "note": "New control — not in baseline",
+                })
+            elif delta_critical > 0 or (delta_total > 0 and cur["critical"] > 0):
+                worsened.append({
+                    "control": ctrl,
+                    "baseline_total": base["total"],
+                    "current_total":  cur["total"],
+                    "delta_total":    delta_total,
+                    "baseline_critical": base["critical"],
+                    "current_critical":  cur["critical"],
+                    "delta_critical":    delta_critical,
+                })
+            elif delta_critical < 0 or delta_total < -5:
+                improved.append({
+                    "control": ctrl,
+                    "baseline_total": base["total"],
+                    "current_total":  cur["total"],
+                    "delta_total":    delta_total,
+                    "baseline_critical": base["critical"],
+                    "current_critical":  cur["critical"],
+                    "delta_critical":    delta_critical,
+                })
+
+        worsened.sort(key=lambda x: x["delta_critical"], reverse=True)
+
+        overall_drift = (
+            "DEGRADED"   if len(worsened) > 3 or len(new_failing) > 0
+            else "SLIGHT_DEGRADATION" if len(worsened) > 0
+            else "IMPROVED"  if len(improved) > 0
+            else "STABLE"
+        )
+
+        return {
+            "framework": framework,
+            "drift_status": overall_drift,
+            "baseline_saved_at": baseline_data["saved_at"],
+            "compared_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "summary": {
+                "worsened_controls":  len(worsened),
+                "improved_controls":  len(improved),
+                "new_failing":        len(new_failing),
+            },
+            "worsened_controls":  worsened[:20],
+            "improved_controls":  improved[:10],
+            "new_failing_controls": new_failing,
+            "tip": (
+                "Call compliance_drift(save_baseline=True) after a remediation sprint "
+                "to reset the baseline. Use compliance_control_details() to drill into worsened controls."
+            ),
+        }

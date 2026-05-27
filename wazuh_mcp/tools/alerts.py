@@ -132,6 +132,7 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         rule_groups: list | None = None,
         group_filter: str = "",
         limit: int = 50,
+        page_token: str | None = None,
     ) -> dict:
         """Search Wazuh alerts in the Indexer.
 
@@ -139,7 +140,9 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         min_level: minimum rule level (default 7)
         agent_id: optional agent filter
         rule_groups: optional rule-group filter (e.g. ['authentication_failed', 'ssh'])
+        page_token: opaque cursor from a previous response's next_page_token for pagination
         """
+        import base64 as _b64, json as _json
         _, err = safe_validate(validate_time_range, time_range)
         if err:
             return err
@@ -165,15 +168,33 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         if group_filter:
             filters.append({"term": {"agent.groups": group_filter}})
 
-        body = {
+        body: dict = {
             "size": _cap(limit),
-            "sort": [{"@timestamp": "desc"}],
+            "sort": [{"@timestamp": "desc"}, {"_id": "asc"}],
             "query": {"bool": {"filter": filters}},
         }
+
+        if page_token:
+            try:
+                search_after = _json.loads(_b64.b64decode(page_token).decode())
+                body["search_after"] = search_after
+            except Exception:
+                return {"error": "Invalid page_token — use the next_page_token from a previous response."}
+
         res = await idx.search(body)
+        hits = res["hits"]["hits"]
+        next_token = None
+        if len(hits) == _cap(limit):
+            last_sort = hits[-1].get("sort")
+            if last_sort:
+                next_token = _b64.b64encode(_json.dumps(last_sort).encode()).decode()
+
         return {
             "total": res["hits"]["total"]["value"],
-            "alerts": [trim_alert(h) for h in res["hits"]["hits"]],
+            "returned": len(hits),
+            "alerts": [trim_alert(h) for h in hits],
+            "next_page_token": next_token,
+            "has_more": next_token is not None,
         }
 
     @mcp.tool()

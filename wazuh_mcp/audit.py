@@ -303,3 +303,81 @@ class _AuditContext:
 
 # Module-level singleton for import convenience.
 audit_logger = AuditLogger()
+
+
+def verify_audit_log_integrity(log_path: str | None = None) -> dict:
+    """Verify HMAC signatures on every record in the audit log.
+
+    Reads the log file line-by-line and re-computes each record's expected HMAC,
+    then compares it to the stored value. Returns a summary of verified, tampered,
+    and unsigned records.
+
+    Only meaningful when WAZUH_AUDIT_LOG_SIGNING_KEY is configured.
+    If no signing key is set, all records appear as 'unsigned' which is expected.
+
+    log_path: path to the JSONL audit log (defaults to WAZUH_AUDIT_LOG env var).
+    """
+    import hmac as _hmac
+
+    path = Path(log_path or str(_AUDIT_LOG_PATH))
+    if not path.exists():
+        return {"error": f"Audit log not found: {path}"}
+
+    verified = 0
+    tampered: list[dict] = []
+    unsigned = 0
+    unreadable = 0
+    total = 0
+
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                total += 1
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    unreadable += 1
+                    continue
+
+                stored_hmac = record.pop("hmac", None)
+                if stored_hmac is None:
+                    unsigned += 1
+                    continue
+
+                if not _SIGNING_KEY:
+                    unsigned += 1
+                    continue
+
+                canonical = json.dumps(record, sort_keys=True, default=str)
+                expected = _hmac.new(_SIGNING_KEY.encode(), canonical.encode(), "sha256").hexdigest()
+
+                if _hmac.compare_digest(expected, stored_hmac):
+                    verified += 1
+                else:
+                    tampered.append({
+                        "line":    lineno,
+                        "ts":      record.get("ts"),
+                        "tool":    record.get("tool"),
+                        "stored":  stored_hmac[:16] + "…",
+                        "expected": expected[:16] + "…",
+                    })
+    except Exception as exc:
+        return {"error": f"Failed to read audit log: {exc}"}
+
+    return {
+        "log_path":       str(path),
+        "total_records":  total,
+        "verified":       verified,
+        "tampered":       len(tampered),
+        "unsigned":       unsigned,
+        "unreadable":     unreadable,
+        "integrity":      "OK" if len(tampered) == 0 else "COMPROMISED",
+        "tampered_records": tampered[:20],
+        "note": (
+            "Set WAZUH_AUDIT_LOG_SIGNING_KEY to enable HMAC signing. "
+            "Without a signing key all records appear as 'unsigned' — this is expected."
+        ) if not _SIGNING_KEY else None,
+    }

@@ -81,6 +81,9 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incid
                 "dst_ips": {"terms": {"field": "data.dstip", "size": 20}},
                 "techniques": {"terms": {"field": "rule.mitre.id", "size": 20}},
                 "rules": {"terms": {"field": "rule.id", "size": 20}},
+                # Pivot: shared usernames indicate credential reuse / lateral movement
+                "target_users": {"terms": {"field": "data.win.eventdata.targetUserName", "size": 20}},
+                "dst_users":    {"terms": {"field": "data.dstuser", "size": 20}},
                 "by_15min": {
                     "date_histogram": {
                         "field": "@timestamp",
@@ -93,20 +96,39 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incid
         res = await idx.search(body)
         aggs = res["aggregations"]
         agents = aggs["agents_affected"]["buckets"]
+
+        # Merge Windows targetUserName + generic dstuser into one set
+        pivot_users: list[str] = list({
+            b["key"] for b in aggs.get("target_users", {}).get("buckets", [])
+            if b["key"] not in ("", None)
+        } | {
+            b["key"] for b in aggs.get("dst_users", {}).get("buckets", [])
+            if b["key"] not in ("", None)
+        })
+
+        # Lateral movement requires either 3+ agents touched OR the same user seen on
+        # multiple distinct agents (credential reuse across the fleet)
+        lateral_movement_suspected = len(agents) >= 3 or bool(pivot_users and len(agents) >= 2)
+
         return {
             "indicator": {"src_ip": src_ip, "agent_id": agent_id},
             "time_range": time_range,
             "total_alerts": res["hits"]["total"]["value"],
-            "lateral_movement_suspected": len(agents) >= 3,
+            "lateral_movement_suspected": lateral_movement_suspected,
             "agents_affected": [{"agent": b["key"], "count": b["doc_count"]} for b in agents],
             "source_ips": [b["key"] for b in aggs["src_ips"]["buckets"]],
             "destination_ips": [b["key"] for b in aggs["dst_ips"]["buckets"]],
+            "pivot_usernames": pivot_users[:10],
             "techniques": [b["key"] for b in aggs["techniques"]["buckets"]],
             "top_rules": [{"rule_id": b["key"], "count": b["doc_count"]} for b in aggs["rules"]["buckets"][:10]],
             "activity_histogram": [
                 {"time": b["key_as_string"], "count": b["doc_count"]}
                 for b in aggs["by_15min"]["buckets"]
             ],
+            "lateral_movement_tip": (
+                f"Pivot username(s) {pivot_users[:3]} seen across multiple agents — "
+                "investigate with get_user_activity_profile() and hunt_lateral_movement()."
+            ) if pivot_users and len(agents) >= 2 else None,
         }
 
     @mcp.tool()

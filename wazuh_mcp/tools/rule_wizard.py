@@ -261,6 +261,15 @@ def register(mcp, wz, cfg):
                 ),
             }
 
+        # Save current content as backup before overwriting (enables rollback_custom_rule)
+        from .rules import _rule_backups
+        try:
+            existing = await wz.request("GET", f"/rules/files/{filename}?raw=true")
+            if isinstance(existing, str) and existing.strip():
+                _rule_backups[filename] = existing
+        except Exception:
+            pass  # No existing file to back up — first push
+
         # Push to Manager using dedicated file-upload method
         try:
             result = await wz.upload_xml_file(
@@ -274,11 +283,13 @@ def register(mcp, wz, cfg):
         return {
             "success": True,
             "target_file": filename,
+            "backup_saved": filename in _rule_backups,
             "warnings": validation.get("warnings", []),
             "rules_found": validation.get("rules_found", 0),
             "manager_response": result,
             "next_step": (
-                "The rule is now active. Use search_rules or test_rule_coverage to verify detection."
+                "The rule is now active. Use search_rules or test_rule_coverage to verify detection. "
+                "Use rollback_custom_rule() to restore the previous version if needed."
             ),
         }
 

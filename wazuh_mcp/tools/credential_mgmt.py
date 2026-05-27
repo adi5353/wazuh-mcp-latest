@@ -134,13 +134,39 @@ def register(mcp, wz, cfg, _require_writes):
         except Exception as exc:
             login_status = f"WARNING: re-login failed ({exc}) — restart the server manually"
 
+        # 4. Post-rotation connectivity verification
+        connectivity_ok = False
+        connectivity_error = None
+        try:
+            probe = await wz.request("GET", "/manager/info")
+            if probe and (probe.get("data") or probe.get("error") is None):
+                connectivity_ok = True
+        except Exception as exc:
+            connectivity_error = str(exc)
+
+        if not connectivity_ok:
+            return {
+                "success": False,
+                "user": cfg.manager_user,
+                "user_id": user_id,
+                "login_status": login_status,
+                "connectivity_verified": False,
+                "connectivity_error": connectivity_error,
+                "warning": (
+                    "Password was updated but post-rotation connectivity check failed. "
+                    "Update WAZUH_PASS in your .env file and restart the server."
+                ),
+                "api_result": result,
+            }
+
         return {
             "success": True,
             "user": cfg.manager_user,
             "user_id": user_id,
             "login_status": login_status,
+            "connectivity_verified": True,
             "next_step": (
-                f"Update WAZUH_PASS in your .env file to '{new_password}' "
+                f"Update WAZUH_PASS in your .env file to the new password "
                 "and set WAZUH_CRED_CREATED_AT to the current timestamp."
             ),
             "api_result": result,

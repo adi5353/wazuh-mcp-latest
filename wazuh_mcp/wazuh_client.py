@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import random
 import time
 from typing import Any, Optional
@@ -31,9 +32,9 @@ _MAX_RETRIES  = 3
 _RETRY_BASE   = 1.0   # seconds — first delay before jitter
 _RETRY_CAP    = 10.0  # seconds — maximum delay before jitter
 
-# ── Connection pool limits ─────────────────────────────────────────────────────
-_POOL_MAX_CONNECTIONS       = 20
-_POOL_MAX_KEEPALIVE         = 10
+# ── Connection pool limits (override via env vars) ────────────────────────────
+_POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_HTTP_POOL_SIZE", "20"))
+_POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_HTTP_MAX_KEEPALIVE", "10"))
 
 
 def _is_retryable(exc: Exception) -> bool:

@@ -2,17 +2,63 @@
 
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
-**121+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (PCI-DSS, HIPAA, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules, threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
+**130+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
 [![CI](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml/badge.svg)](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
-[![Tools](https://img.shields.io/badge/tools-121%2B-brightgreen)](#tool-reference)
+[![Tools](https://img.shields.io/badge/tools-130%2B-brightgreen)](#tool-reference)
 
 ---
 
 ## What's New
+
+### v2.3 — Existing Feature Improvements
+
+Targeted improvements across performance, alert quality, rules, compliance, and security hardening. No breaking changes.
+
+#### Performance & Reliability
+
+| Area | Change | Details |
+|---|---|---|
+| **Connection pool** | Configurable via env vars | `WAZUH_HTTP_POOL_SIZE` (default 20) and `WAZUH_HTTP_MAX_KEEPALIVE` (default 10) — tune for high-throughput SOC deployments |
+| **Cache observability** | Hit/miss counters | `cache_stats()` now returns `hits`, `misses`, `hit_ratio` — see actual cache effectiveness. New `invalidate_tool(name)` flushes a single tool's cache without clearing everything |
+| **Alert pagination** | Cursor-based paging | `search_alerts` now accepts `page_token` (opaque base64 cursor using `search_after`) and returns `next_page_token` + `has_more` — safe to walk millions of alerts without memory spikes |
+
+#### Alert & Investigation Quality
+
+| Area | Change | Details |
+|---|---|---|
+| **Deduplication** | Smarter fingerprinting | `deduplicate_alerts` now keys on `rule_id + agent_id + srcip + target_user + 5-min bucket` — prevents merging events from different users or separate attack waves into the same group |
+| **Auto-triage** | Float confidence | `auto_triage_alert` now returns `confidence: 0.0–1.0` float alongside `confidence_pct` string — downstream tools can filter and sort numerically |
+| **NL query** | DSL validation | `nl_to_opensearch_query` with `execute=True` now dry-runs the generated DSL via `/_validate/query` before executing — returns a clear error instead of a cryptic OpenSearch exception on malformed queries |
+| **Blast radius** | Lateral movement pivot | `blast_radius_analysis` now aggregates `data.win.eventdata.targetUserName` and `data.dstuser` — detects credential-reuse lateral movement even when source IPs differ. Returns `pivot_usernames` and auto-generated tip |
+
+#### Rule & Decoder Management
+
+| Area | Change | Details |
+|---|---|---|
+| **Log testing** | Batch mode | `test_log_against_rules` now accepts `log_samples: list` — tests up to 20 lines in one call and returns per-line results plus overall coverage % |
+| **Rule rollback** | New tool: `rollback_custom_rule` | `push_custom_rule` now auto-saves the existing file before overwriting. Call `rollback_custom_rule(filename)` to restore — no need to manually re-upload |
+| **Decoder testing** | New tool: `test_decoder` | Shows which decoder fired, the parent chain, and every extracted field for a sample log line. Optionally asserts the expected decoder name matched |
+
+#### Compliance
+
+| Area | Change | Details |
+|---|---|---|
+| **PCI-DSS v4.0** | New tool: `pci_dss_compliance_summary` | Dedicated PCI-DSS report across all 12 requirements — combines native `rule.pci_dss` field data with rule-group heuristics. Returns per-requirement status and audit readiness verdict |
+| **HIPAA** | New tool: `hipaa_compliance_summary` | HIPAA Security Rule report across Administrative, Physical, Technical, and Organizational safeguards — combines native `rule.hipaa` field with heuristics |
+| **Drift detection** | New tool: `compliance_drift` | Saves a point-in-time baseline, then diffs current vs baseline on subsequent calls. Returns worsened/improved/new-failing controls with delta counts. Call `save_baseline=True` after a remediation sprint to reset |
+
+#### Security Hardening
+
+| Area | Change | Details |
+|---|---|---|
+| **Credential rotation** | Post-rotation verification | `rotate_wazuh_api_password` now probes `GET /manager/info` after rotation to confirm the new token works. Returns `connectivity_verified: true/false` and fails safely if the probe fails |
+| **Audit log integrity** | New function: `verify_audit_log_integrity` | Re-computes HMAC-SHA256 on every audit log record and compares to stored value. Returns `integrity: OK/COMPROMISED` and a list of tampered lines. Works with the existing `WAZUH_AUDIT_LOG_SIGNING_KEY` env var |
+
+---
 
 ### v2.2 — Phase 1 Foundation Improvements
 
@@ -413,6 +459,9 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `IPINFO_TOKEN` | — | ipinfo.io token for 50k/mo free lookups (optional — works without token at lower limits) |
 | `WAZUH_REQUEST_TIMEOUT` | `30` | Per-request API timeout in seconds |
 | `WAZUH_MAX_RESULTS_GLOBAL` | `500` | Hard cap on results from any list tool |
+| `WAZUH_HTTP_POOL_SIZE` | `20` | Max simultaneous HTTP connections to Wazuh Manager |
+| `WAZUH_HTTP_MAX_KEEPALIVE` | `10` | Max keepalive connections in the pool |
+| `WAZUH_AUDIT_LOG_SIGNING_KEY` | — | HMAC-SHA256 signing key for audit log tamper detection (enables `verify_audit_log_integrity`) |
 
 ### TLS for the MCP Endpoint
 
@@ -531,7 +580,7 @@ Composite 0–100 health score per agent across five dimensions: connectivity, e
 | Tool | Description |
 |---|---|
 | `alert_summary` | Aggregated overview — top rules, agents, MITRE, groups |
-| `search_alerts` | Filtered alert search with trimmed payloads |
+| `search_alerts` | Filtered alert search with trimmed payloads; supports cursor-based `page_token` pagination |
 | `search_by_mitre` | Alerts mapped to a specific ATT&CK technique |
 | `search_by_source_ip` | All alerts from a given IP — IoC pivoting |
 | `search_authentication_failures` | Brute-force candidate sources |
@@ -539,9 +588,9 @@ Composite 0–100 health score per agent across five dimensions: connectivity, e
 | `get_alert_by_id` | Full alert detail by document ID |
 | `compare_alert_volume` | This period vs last period — volume deltas |
 | `detect_rule_anomalies` | NEW, SPIKE, DROP, GONE rules vs baseline |
-| `get_recent_alerts_7d` | **New** — Last 7 days of alerts; optional agent filter |
-| `get_recent_alerts_30d` | **New** — Last 30 days of alerts for monthly review |
-| `deduplicate_alerts` | **New** — Collapse repeated rule+agent pairs into groups with counts and dedup ratio |
+| `get_recent_alerts_7d` | Last 7 days of alerts; optional agent filter |
+| `get_recent_alerts_30d` | Last 30 days of alerts for monthly review |
+| `deduplicate_alerts` | Collapse repeated alerts into groups — keyed on rule+agent+srcip+target_user+5min bucket |
 
 ### Vulnerabilities (4 tools)
 
@@ -581,9 +630,9 @@ Persistent watchlist of SOC-critical CVEs stored in a Wazuh CDB list. Continuous
 | `fim_summary` | Aggregated FIM activity by agent, event type, path |
 | `critical_file_changes` | FIM events on sensitive paths only |
 
-### Compliance (7 tools)
+### Compliance (10 tools)
 
-Supported frameworks: PCI-DSS, HIPAA, GDPR, NIST 800-53, TSC, ISO 27001:2022, **NIST CSF 2.0**, **SOC 2 Type II**.
+Supported frameworks: **PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, TSC, ISO 27001:2022, **NIST CSF 2.0**, **SOC 2 Type II**. Plus compliance drift detection across all frameworks.
 
 | Tool | Description |
 |---|---|
@@ -591,8 +640,11 @@ Supported frameworks: PCI-DSS, HIPAA, GDPR, NIST 800-53, TSC, ISO 27001:2022, **
 | `compliance_control_details` | Drill into alerts for one specific control |
 | `generate_compliance_report` | Full compliance report for a framework |
 | `iso27001_compliance_summary` | ISO 27001:2022 Annex A posture report (derived from rule groups) |
-| `nist_csf2_compliance_summary` | **New** — NIST CSF 2.0: GOVERN / IDENTIFY / PROTECT / DETECT / RESPOND / RECOVER with NIST 800-53 cross-references |
-| `soc2_compliance_summary` | **New** — SOC 2 Type II: Common Criteria / Availability / Processing Integrity / Confidentiality / Privacy; includes audit readiness verdict (AUDIT READY / CONDITIONAL / NOT AUDIT READY) and P1–P4 remediation priorities |
+| `nist_csf2_compliance_summary` | NIST CSF 2.0: GOVERN / IDENTIFY / PROTECT / DETECT / RESPOND / RECOVER with NIST 800-53 cross-references |
+| `soc2_compliance_summary` | SOC 2 Type II: Common Criteria / Availability / Processing Integrity / Confidentiality / Privacy; includes audit readiness verdict and P1–P4 remediation priorities |
+| `pci_dss_compliance_summary` | **v2.3** — Dedicated PCI-DSS v4.0 report across all 12 requirements; combines native `rule.pci_dss` field + rule-group heuristics; per-requirement status and audit readiness |
+| `hipaa_compliance_summary` | **v2.3** — Dedicated HIPAA Security Rule report across Administrative / Physical / Technical / Organizational safeguards; combines native `rule.hipaa` field + heuristics |
+| `compliance_drift` | **v2.3** — Saves a compliance baseline, then diffs current vs baseline on subsequent calls — returns worsened, improved, and new-failing controls with delta counts |
 | `email_compliance_report` | Email the compliance report as HTML *(requires SMTP config)* |
 
 ### Fleet Inventory (7 tools)
@@ -636,7 +688,7 @@ Live network map built from Wazuh agent inventory — agents grouped by subnet, 
 | `add_to_cdb_list` | Add an IP, domain, or hash *(responder)* |
 | `remove_from_cdb_list` | Remove an entry *(responder)* |
 
-### Rules & Decoders (7 tools)
+### Rules & Decoders (9 tools)
 
 | Tool | Description |
 |---|---|
@@ -645,8 +697,10 @@ Live network map built from Wazuh agent inventory — agents grouped by subnet, 
 | `get_custom_rules` | Rules from custom files only |
 | `list_decoders` | All loaded decoders |
 | `get_rule_details` | Full metadata for a rule ID |
-| `test_log_against_rules` | Test a raw log line against the rule engine |
+| `test_log_against_rules` | Test one log line or a batch of up to 20 lines (`log_samples: list`) against the rule engine — returns per-line results and overall coverage % |
 | `test_rule_coverage` | Test up to 20 log samples, report detection % |
+| `test_decoder` | **v2.3** — Shows which decoder fired, parent chain, and all extracted fields for a sample log line; optionally asserts the expected decoder name matched |
+| `rollback_custom_rule` | **v2.3** — Restore a custom rule file to its previous version (auto-backed-up by `push_custom_rule`) *(admin)* |
 
 ### Detection Rule Wizard (3 tools)
 
@@ -656,7 +710,7 @@ AI-assisted tool for creating, validating, and deploying Wazuh XML detection rul
 |---|---|
 | `generate_rule_xml` | Generate Wazuh XML rule from a natural language description |
 | `validate_rule_xml` | Parse and validate rule XML before upload |
-| `push_custom_rule` | Push validated rule XML to Manager's custom_rules.xml *(admin)* |
+| `push_custom_rule` | Push validated rule XML to Manager's custom_rules.xml; auto-saves backup for `rollback_custom_rule` *(admin)* |
 
 ### Threat Intelligence (7 tools)
 

@@ -182,6 +182,24 @@ def register(mcp, wz, idx, cfg, _cap):
         }
 
         if execute:
+            # Dry-run validation: check DSL syntax via OpenSearch _validate/query before executing
+            try:
+                validate_body = {"query": dsl["query"]}
+                validate_url = f"{cfg.indexer_host}/{cfg.alerts_index}/_validate/query"
+                import httpx as _httpx
+                async with _httpx.AsyncClient(
+                    verify=cfg.verify_ssl,
+                    auth=(cfg.indexer_user, cfg.indexer_pass),
+                    timeout=8,
+                ) as _client:
+                    vr = await _client.get(validate_url, json=validate_body)
+                    vdata = vr.json()
+                    if not vdata.get("valid", True):
+                        result["execute_error"] = f"Query validation failed: {vdata.get('error', 'invalid DSL')}"
+                        return result
+            except Exception:
+                pass  # validation is best-effort; proceed to execute anyway
+
             try:
                 from ..helpers import trim_alert
                 res = await idx.search(dsl)
@@ -356,7 +374,8 @@ def register(mcp, wz, idx, cfg, _cap):
         return {
             "alert_id":    alert_id,
             "disposition": disposition,
-            "confidence":  f"{confidence}%",
+            "confidence":  round(confidence / 100, 2),   # 0.0–1.0 float for downstream filtering
+            "confidence_pct": f"{confidence}%",
             "urgency":     urgency,
             "rule_id":     rule_id,
             "rule_level":  level,
@@ -560,11 +579,31 @@ def register(mcp, wz, idx, cfg, _cap):
         hits = res["hits"]["hits"]
         total_raw = res["hits"]["total"]["value"]
 
-        # Group by (rule_id, agent_id) key
+        # Group by (rule_id, agent_id, srcip, target_user, 5-min bucket) key
+        # The timestamp bucket prevents merging events hours apart into one group
+        def _ts_bucket(ts: str) -> str:
+            """Truncate ISO timestamp to 5-minute bucket for grouping."""
+            try:
+                return ts[:15] + "0:00Z"  # e.g. 2024-01-15T10:35:xxZ → 10:30 bucket
+            except Exception:
+                return ts[:10]
+
         groups: dict[str, dict] = {}
         for h in hits:
             a = trim_alert(h)
-            key = f"{a.get('rule_id', '')}::{a.get('agent_id', '')}"
+            src = h.get("_source", {})
+            target_user = (
+                src.get("data", {}).get("win", {}).get("eventdata", {}).get("targetUserName", "")
+                or src.get("data", {}).get("dstuser", "")
+            )
+            ts_bucket = _ts_bucket(a.get("timestamp", ""))
+            key = "::".join([
+                str(a.get("rule_id", "")),
+                str(a.get("agent_id", "")),
+                str(a.get("srcip", "") or ""),
+                str(target_user or ""),
+                ts_bucket,
+            ])
             if key not in groups:
                 groups[key] = {
                     "rule_id":          a.get("rule_id"),
@@ -573,6 +612,7 @@ def register(mcp, wz, idx, cfg, _cap):
                     "agent_id":         a.get("agent_id"),
                     "agent_name":       a.get("agent_name"),
                     "srcip":            a.get("srcip"),
+                    "target_user":      target_user or None,
                     "mitre":            a.get("mitre"),
                     "first_seen":       a.get("timestamp"),
                     "last_seen":        a.get("timestamp"),
