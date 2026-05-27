@@ -179,6 +179,16 @@ for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
         continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
+        # Dynamic role-based tool registration: skip modules the session role
+        # cannot access. This keeps LLM context lean — a VIEWER session sees
+        # ~60 tools instead of 130+, reducing hallucinated tool selection.
+        _required = getattr(_mod, "REQUIRED_ROLE", ROLE.VIEWER)
+        if _current_role() < _required:
+            log.info(
+                "Skipping tool module '%s' (requires %s, current session role is lower)",
+                _modname, _ROLE_NAMES.get(_required, str(_required)),
+            )
+            continue
         try:
             _mod.register(_ctx)
         except Exception as _e:
@@ -1279,6 +1289,19 @@ def main() -> None:
         )
         mcp_asgi = mcp.sse_app()
 
+        # ── Lifespan: start/stop background AlertPrecomputer ──────────────
+        from contextlib import asynccontextmanager as _asynccontextmanager
+        from .background import init_precomputer as _init_precomputer
+
+        @_asynccontextmanager
+        async def _lifespan(app):
+            _pc = _init_precomputer(_idx_proxy, cfg)
+            _pc.start()
+            log.info("Background AlertPrecomputer started")
+            yield
+            _pc.stop()
+            log.info("Background AlertPrecomputer stopped")
+
         from .ws_alerts import ws_alerts_handler
         from starlette.routing import WebSocketRoute
         from starlette.websockets import WebSocket as _WS
@@ -1293,7 +1316,8 @@ def main() -> None:
                 Route("/openapi.json",     openapi_endpoint),
                 WebSocketRoute("/ws/alerts", endpoint=_ws_alerts_endpoint),
                 Mount("/",                 app=mcp_asgi),
-            ]
+            ],
+            lifespan=_lifespan,
         )
 
         # Middleware stack ordering (outermost runs FIRST on request, LAST on response):

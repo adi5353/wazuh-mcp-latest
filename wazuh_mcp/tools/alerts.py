@@ -456,3 +456,33 @@ def register(ctx: ToolContext) -> None:
             }
         except Exception as e:
             return {"error": str(e)}
+
+    @mcp.tool()
+    async def get_precomputed_summary(alert_id: str) -> dict:
+        """Return a pre-computed summary for a critical alert if one is available.
+
+        The background AlertPrecomputer polls every 60 seconds for level-12+ alerts
+        and caches compact summaries. Calling this before explain_alert avoids
+        redundant live API calls for recently-seen critical alerts.
+
+        Args:
+            alert_id: Wazuh alert document ID.
+
+        Returns a summary dict with precomputed=True when available, or
+        {"available": False} when the alert is not in the cache.
+        """
+        from ..background import get_precomputer
+        pc = get_precomputer()
+        if pc is None:
+            return {
+                "available": False,
+                "message":   "Background pre-computation not running (HTTP transport only).",
+            }
+        summary = pc.get_summary(alert_id)
+        if summary is None:
+            return {
+                "available": False,
+                "alert_id":  alert_id,
+                "message":   "No pre-computed summary for this alert. Call explain_alert for full analysis.",
+            }
+        return {"available": True, **summary}

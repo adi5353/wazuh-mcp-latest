@@ -21,6 +21,7 @@ from typing import Any, Optional
 import httpx
 
 from .config import Config
+from .circuit_breaker import opensearch_breaker
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +81,23 @@ class WazuhIndexer:
         await self.aclose()
 
     async def search(self, body: dict, index: Optional[str] = None) -> dict:
-        """Run an OpenSearch query with automatic retry on transient failures."""
+        """Run an OpenSearch query with circuit breaker + automatic retry on transient failures."""
+        if not opensearch_breaker.allow():
+            s = opensearch_breaker.status()
+            raise RuntimeError(
+                f"OpenSearch circuit breaker open — backend unavailable. "
+                f"Retry in {s['circuit_resets_in_seconds']}s."
+            )
+        try:
+            result = await self._search_impl(body, index)
+            opensearch_breaker.record_success()
+            return result
+        except Exception:
+            opensearch_breaker.record_failure()
+            raise
+
+    async def _search_impl(self, body: dict, index: Optional[str] = None) -> dict:
+        """Internal search with retry logic (no circuit breaker — called by search())."""
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_search"
         last_exc: Exception = RuntimeError("No attempts made")
@@ -98,7 +115,23 @@ class WazuhIndexer:
         raise last_exc  # unreachable but satisfies type checker
 
     async def count(self, query: dict, index: Optional[str] = None) -> int:
-        """Count matching documents with automatic retry on transient failures."""
+        """Count matching documents with circuit breaker + automatic retry on transient failures."""
+        if not opensearch_breaker.allow():
+            s = opensearch_breaker.status()
+            raise RuntimeError(
+                f"OpenSearch circuit breaker open — backend unavailable. "
+                f"Retry in {s['circuit_resets_in_seconds']}s."
+            )
+        try:
+            result = await self._count_impl(query, index)
+            opensearch_breaker.record_success()
+            return result
+        except Exception:
+            opensearch_breaker.record_failure()
+            raise
+
+    async def _count_impl(self, query: dict, index: Optional[str] = None) -> int:
+        """Internal count with retry logic (no circuit breaker — called by count())."""
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_count"
         last_exc: Exception = RuntimeError("No attempts made")

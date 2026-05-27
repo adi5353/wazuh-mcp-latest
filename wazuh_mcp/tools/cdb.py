@@ -3,9 +3,12 @@ and backup/restore CDB lists for disaster recovery.
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
 
 import json
 import os
+
+REQUIRED_ROLE = ROLE.RESPONDER
 from datetime import datetime, timezone
 from pathlib import Path
 

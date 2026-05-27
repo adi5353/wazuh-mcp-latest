@@ -3,7 +3,9 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 import json as _json
 
-from ..rbac import analyst_only, admin_only
+from ..rbac import analyst_only, admin_only, ROLE
+
+REQUIRED_ROLE = ROLE.RESPONDER
 
 
 # In-memory rule backup store: filename → previous XML content

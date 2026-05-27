@@ -1,8 +1,17 @@
-"""Active response tools — list AR actions, correlate with alerts, audit effectiveness."""
+"""Active response tools — list AR actions, correlate with alerts, audit effectiveness,
+and human-in-the-loop approval workflow for proposed active responses.
+"""
 from __future__ import annotations
-from ..tool_context import ToolContext
 
+import asyncio
+import os
+
+from ..tool_context import ToolContext
+from ..rbac import ROLE
 from ..validators import safe_validate, validate_time_range
+
+# Minimum role required to see these tools (enforced at registration time by server.py)
+REQUIRED_ROLE = ROLE.RESPONDER
 
 AR_RULE_IDS = ["601", "602", "603", "651", "652"]
 AR_GROUPS = ["active_response", "ar"]
@@ -192,4 +201,164 @@ def register(ctx: ToolContext) -> None:
                 else None
             ),
             "ineffective_block_details": ineffective[:20],
+        }
+
+    # ── Human-in-the-loop approval workflow ───────────────────────────────────
+
+    @mcp.tool()
+    async def propose_active_response(
+        command: str,
+        agent_id: str,
+        src_ip: str | None = None,
+    ) -> dict:
+        """Propose an active response for human approval before execution.
+
+        Instead of firing immediately, this tool creates an approval token and
+        (if SLACK_WEBHOOK_URL is set) sends a Slack message to the SOC channel
+        so a human can approve or deny.
+
+        Workflow:
+          1. Call propose_active_response(command, agent_id, src_ip)
+             → returns a token and instructions
+          2. Human reviews the proposal in Slack and calls:
+             approve_response(token)  — executes the active response
+             deny_response(token)     — cancels it
+          3. Tokens expire after 5 minutes.
+
+        Args:
+            command:  Wazuh active-response command name (e.g. 'firewall-drop').
+            agent_id: Target agent ID (e.g. '001').
+            src_ip:   Source IP to block (passed as argument to the AR command).
+
+        Requires ANALYST role or above.
+        """
+        from ..rbac import require_role, ROLE as _ROLE
+        err = require_role(_ROLE.ANALYST)
+        if err:
+            return err
+
+        from ..approval import approval_store
+
+        params = {"command": command, "agent_id": agent_id, "src_ip": src_ip}
+        token  = approval_store.create("run_active_response", params, ttl=300)
+
+        # Auto-expire: schedule cleanup via asyncio (best-effort, approval_store
+        # already tracks expire_at so approve() will reject stale tokens)
+        loop = asyncio.get_event_loop()
+        loop.call_later(300, approval_store.expire_stale)
+
+        # Slack notification (best-effort — never fail the tool call if Slack is down)
+        slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
+        slack_sent    = False
+        if slack_webhook:
+            import httpx as _httpx
+            action_desc = f"`{command}` on agent `{agent_id}`"
+            if src_ip:
+                action_desc += f", blocking IP `{src_ip}`"
+            msg = (
+                f":bell: *Wazuh AI proposes active response*\n"
+                f"Action: {action_desc}\n"
+                f"Approval token: `{token}`\n"
+                f"To proceed: call `approve_response('{token}')` in Wazuh MCP\n"
+                f"To cancel:  call `deny_response('{token}')`\n"
+                f"_Token expires in 5 minutes._"
+            )
+            try:
+                async with _httpx.AsyncClient(timeout=10) as client:
+                    r = await client.post(slack_webhook, json={"text": msg})
+                slack_sent = r.status_code == 200
+            except Exception:
+                pass
+
+        return {
+            "status":       "pending_approval",
+            "token":        token,
+            "action":       "run_active_response",
+            "params":       params,
+            "slack_notified": slack_sent,
+            "message": (
+                f"Approval required. Token: {token}. "
+                f"Call approve_response('{token}') to execute "
+                f"or deny_response('{token}') to cancel. "
+                f"Expires in 5 minutes."
+            ),
+        }
+
+    @mcp.tool()
+    async def approve_response(token: str) -> dict:
+        """Approve a pending active response proposal and execute it immediately.
+
+        Looks up the proposal by token, executes the stored active-response command
+        against the Wazuh Manager, and returns the result.
+
+        Args:
+            token: The opaque token returned by propose_active_response.
+
+        Requires RESPONDER role or above.
+        """
+        from ..rbac import require_role, ROLE as _ROLE
+        err = require_role(_ROLE.RESPONDER)
+        if err:
+            return err
+
+        from ..approval import approval_store
+        entry = approval_store.approve(token)
+        if entry is None:
+            return {
+                "error": (
+                    f"Token '{token}' not found, already used, or expired. "
+                    f"Call propose_active_response again to create a new proposal."
+                )
+            }
+
+        params   = entry["params"]
+        command  = params.get("command", "")
+        agent_id = params.get("agent_id", "")
+        src_ip   = params.get("src_ip")
+
+        ar_body: dict = {"command": command, "arguments": [src_ip] if src_ip else []}
+        try:
+            res = await wz.request(
+                "PUT",
+                f"/active-response?agents_list={agent_id}",
+                json=ar_body,
+            )
+            return {
+                "status":   "executed",
+                "token":    token,
+                "command":  command,
+                "agent_id": agent_id,
+                "src_ip":   src_ip,
+                "result":   res,
+            }
+        except Exception as exc:
+            return {"error": f"Active response execution failed: {exc}", "token": token}
+
+    @mcp.tool()
+    async def deny_response(token: str) -> dict:
+        """Deny and cancel a pending active response proposal.
+
+        Args:
+            token: The opaque token returned by propose_active_response.
+
+        Requires ANALYST role or above.
+        """
+        from ..rbac import require_role, ROLE as _ROLE
+        err = require_role(_ROLE.ANALYST)
+        if err:
+            return err
+
+        from ..approval import approval_store
+        denied = approval_store.deny(token)
+        if not denied:
+            return {
+                "error": (
+                    f"Token '{token}' not found or already used. "
+                    f"It may have expired or been approved/denied already."
+                )
+            }
+        return {
+            "status":  "denied",
+            "token":   token,
+            "message": "Active response proposal cancelled.",
         }

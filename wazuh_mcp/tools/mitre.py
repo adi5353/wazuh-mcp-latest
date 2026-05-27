@@ -1,8 +1,11 @@
 """MITRE ATT&CK tools — ruleset coverage analysis and gap detection."""
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
 
 from ..helpers import time_window
+
+REQUIRED_ROLE = ROLE.ANALYST
 
 
 def register(ctx: ToolContext) -> None:

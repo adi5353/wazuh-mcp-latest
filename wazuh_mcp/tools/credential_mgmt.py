@@ -10,9 +10,12 @@ Requires:
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
 
 import os
 import time
+
+REQUIRED_ROLE = ROLE.ADMIN
 
 from ..rbac import admin_only
 from ..validators import safe_validate, validate_free_text

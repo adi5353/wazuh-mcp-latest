@@ -150,3 +150,65 @@ class CircuitBreakerRegistry:
 
 # Module-level singleton
 breaker = CircuitBreakerRegistry()
+
+
+# ── Backend circuit breaker (failure-count only, no daily quota) ──────────────
+
+class BackendCircuitBreaker:
+    """Circuit breaker for internal backends (OpenSearch, Wazuh Manager).
+
+    Opens after *fail_threshold* consecutive failures and stays open for
+    *reset_seconds*.  Unlike _APIState there is no daily quota — only the
+    failure counter matters.
+
+    Configuration env vars (override defaults per-backend):
+        OPENSEARCH_CIRCUIT_FAIL_THRESHOLD / OPENSEARCH_CIRCUIT_RESET_SECONDS
+        WAZUH_CIRCUIT_FAIL_THRESHOLD     / WAZUH_CIRCUIT_RESET_SECONDS
+    """
+
+    def __init__(self, name: str, fail_threshold: int = 5, reset_seconds: int = 60) -> None:
+        self.name           = name
+        self._fail_threshold = fail_threshold
+        self._reset_seconds  = reset_seconds
+        self._failures      = 0
+        self._open_until    = 0.0   # epoch; 0 = circuit closed
+
+    @property
+    def is_open(self) -> bool:
+        return time.time() < self._open_until
+
+    def allow(self) -> bool:
+        """Return True when the circuit is closed and the call may proceed."""
+        return not self.is_open
+
+    def record_success(self) -> None:
+        self._failures = 0
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        if self._failures >= self._fail_threshold:
+            self._open_until = time.time() + self._reset_seconds
+            self._failures   = 0
+
+    def status(self) -> dict:
+        return {
+            "backend":                    self.name,
+            "circuit_open":               self.is_open,
+            "circuit_resets_in_seconds":  (
+                max(0, round(self._open_until - time.time())) if self.is_open else 0
+            ),
+        }
+
+
+# Singletons — imported by wazuh_indexer.py and wazuh_client.py
+opensearch_breaker = BackendCircuitBreaker(
+    name="opensearch",
+    fail_threshold=int(os.getenv("OPENSEARCH_CIRCUIT_FAIL_THRESHOLD", "5")),
+    reset_seconds=int(os.getenv("OPENSEARCH_CIRCUIT_RESET_SECONDS", "60")),
+)
+
+wazuh_manager_breaker = BackendCircuitBreaker(
+    name="wazuh_manager",
+    fail_threshold=int(os.getenv("WAZUH_CIRCUIT_FAIL_THRESHOLD", "3")),
+    reset_seconds=int(os.getenv("WAZUH_CIRCUIT_RESET_SECONDS", "30")),
+)

@@ -245,7 +245,7 @@ def register(ctx: ToolContext) -> None:
     async def export_alerts_json(
         time_range: str = "24h",
         min_level: int = 7,
-        limit: int = 500,
+        limit: int = 50,
         pretty: bool = False,
     ) -> str:
         """Export alerts as JSON for programmatic processing or SIEM ingestion.
@@ -253,10 +253,15 @@ def register(ctx: ToolContext) -> None:
         Returns a JSON array string. Each element contains the same fields
         as export_alerts_csv plus the raw mitre object.
 
+        For bulk exports (> 200 rows) use export_alerts_csv(stream=True) instead —
+        it paginates without buffering the entire result set in memory.
+
         Args:
             time_range: Lookback window (e.g. '24h', '7d').
             min_level:  Minimum Wazuh rule level (1-15, default 7).
-            limit:      Maximum rows to export (max 500).
+            limit:      Maximum rows to export (default 50, max 500).
+                        Values above 200 risk context-window overflow for LLM consumers;
+                        use export_alerts_csv(stream=True) for large exports.
             pretty:     If True, indent JSON for human readability.
         """
         import json as _json

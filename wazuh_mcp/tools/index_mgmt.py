@@ -4,6 +4,9 @@ Query index health, statistics, aliases, and ISM policies.
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ADMIN
 
 
 def register(ctx: ToolContext) -> None:

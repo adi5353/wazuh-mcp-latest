@@ -5,6 +5,9 @@ Requires ADMIN role.
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ADMIN
 
 import json
 import os
