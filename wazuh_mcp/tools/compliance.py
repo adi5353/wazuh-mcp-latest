@@ -1090,3 +1090,5 @@ def register(mcp, wz, idx, cfg, _cap):
                 "to reset the baseline. Use compliance_control_details() to drill into worsened controls."
             ),
         }
+
+    return {"generate_compliance_report": generate_compliance_report}
