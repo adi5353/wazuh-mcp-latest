@@ -23,8 +23,10 @@ Usage in a tool module::
 """
 from __future__ import annotations
 
+import functools
 import os
 from enum import IntEnum
+from typing import Callable
 
 
 class ROLE(IntEnum):
@@ -79,6 +81,32 @@ def require_role(minimum: ROLE) -> dict | None:
             "current_role":  _ROLE_NAMES.get(current, str(current)),
         }
     return None
+
+
+# ── Decorator form (preferred for new tools) ──────────────────────────────────
+
+def require(minimum: ROLE) -> Callable:
+    """Decorator that enforces a minimum role before the tool body runs.
+
+    Use this on new tools so RBAC can never be forgotten::
+
+        @mcp.tool()
+        @rbac.require(ROLE.RESPONDER)
+        async def run_active_response(...) -> dict:
+            ...
+
+    Returns the same error dict shape as require_role() on rejection,
+    so the LLM receives a structured error rather than an exception.
+    """
+    def decorator(fn: Callable) -> Callable:
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            err = require_role(minimum)
+            if err:
+                return err
+            return await fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 # ── Convenience aliases ───────────────────────────────────────────────────────

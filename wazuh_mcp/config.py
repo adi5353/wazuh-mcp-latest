@@ -93,11 +93,20 @@ class Config:
             # Wazuh Cloud uses a single API URL + API key mapped to user:pass
             cloud_url = required("WAZUH_CLOUD_URL")
             cloud_key = required("WAZUH_CLOUD_API_KEY")
-            # Cloud indexer is co-located — derive from cloud URL hostname
-            cloud_indexer = os.getenv(
-                "WAZUH_CLOUD_INDEXER_URL",
-                cloud_url.replace(":55000", ":9200"),
-            )
+            # Cloud indexer is co-located — derive from cloud URL by swapping port.
+            # Explicit override via WAZUH_CLOUD_INDEXER_URL always takes precedence.
+            _explicit_indexer = os.getenv("WAZUH_CLOUD_INDEXER_URL", "")
+            if _explicit_indexer:
+                cloud_indexer = _explicit_indexer
+            elif ":55000" in cloud_url:
+                cloud_indexer = cloud_url.replace(":55000", ":9200")
+            else:
+                raise RuntimeError(
+                    "Cloud mode: cannot derive Indexer URL from WAZUH_CLOUD_URL "
+                    f"({cloud_url!r}) — the URL must include ':55000', e.g. "
+                    "'https://your-cluster.wazuh.io:55000'. "
+                    "Alternatively, set WAZUH_CLOUD_INDEXER_URL explicitly."
+                )
             manager_host = cloud_url
             manager_user = "wazuh-wui"
             manager_pass = cloud_key

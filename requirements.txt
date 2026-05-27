@@ -1,4 +1,24 @@
-mcp>=1.2.0
-httpx>=0.27.0
+# ── Installation ──────────────────────────────────────────────────────────────
+# Do NOT install from this file directly — it is intentionally minimal and will
+# produce a broken environment missing structlog, uvicorn, starlette, and
+# python-dotenv.
+#
+# Correct install (development / production):
+#
+#   pip install -e .               # installs all deps from pyproject.toml
+#   pip install -e ".[dev]"        # also installs pytest, coverage tools
+#
+# Docker: the Dockerfile already uses `pip install -e .` — no changes needed.
+#
+# This file is retained only for tools that require requirements.txt to exist
+# (e.g. some CI scanners). All authoritative dependency specs live in pyproject.toml.
+#
+# Runtime deps (from pyproject.toml):
+mcp>=1.0.0
+httpx>=0.28.0
+python-dotenv>=1.0.0
+uvicorn>=0.30.0
+starlette>=0.40.0
+structlog>=24.0.0
 prometheus-client>=0.20.0
 PyYAML>=6.0

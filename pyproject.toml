@@ -1,6 +1,6 @@
 [project]
 name = "wazuh-mcp"
-version = "1.0.0"
+dynamic = ["version"]
 description = "AI-native SOC co-pilot for Wazuh — investigate alerts 5x faster, automate Tier 1 triage, generate compliance reports in seconds. Supports self-hosted, Wazuh Cloud, and MSSP multi-tenant deployments."
 readme = "README.md"
 license = { text = "MIT" }
@@ -69,6 +69,9 @@ exclude_lines = [
 # ── Bandit SAST configuration ─────────────────────────────────────────────────
 [tool.setuptools.packages.find]
 include = ["wazuh_mcp*"]   # prevents setuptools discovering dashboard/ as a package
+
+[tool.setuptools.dynamic]
+version = {attr = "wazuh_mcp.__version__"}
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]

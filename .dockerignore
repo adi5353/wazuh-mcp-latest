@@ -1,0 +1,51 @@
+# ── Version control ───────────────────────────────────────────────────────────
+.git
+.gitignore
+.github
+
+# ── Secrets and local config ──────────────────────────────────────────────────
+.env
+.env.*
+env.example
+*.env
+
+# ── Development and test artifacts ────────────────────────────────────────────
+tests/
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+__pycache__/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ── Documentation and project metadata ────────────────────────────────────────
+docs/
+dashboard/
+scripts/
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+LICENSE
+
+# ── Compose files (infra config — not needed inside the image) ────────────────
+compose.yaml
+docker-compose*.yaml
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+.claude/
+
+# ── CI and pre-commit ─────────────────────────────────────────────────────────
+.pre-commit-config.yaml
+Makefile
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/

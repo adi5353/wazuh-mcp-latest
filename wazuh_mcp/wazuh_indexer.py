@@ -1,11 +1,21 @@
 """Wazuh Indexer (OpenSearch) client. Used for alerts and vulnerability state.
 
+Retry policy (mirrors WazuhClient):
+  3 attempts — delays of ~1s, ~2s, ~4s (capped at 10s) + randomised ±1s jitter.
+  Retries on: network errors (httpx.RequestError) and transient 5xx / 429 responses.
+  Does NOT retry 4xx client errors (except 429).
+
 Connection pooling:
-  A single httpx.AsyncClient is shared across all requests (20 max connections,
-  10 keepalive). Call aclose() / use as async context manager on server shutdown.
+  A single httpx.AsyncClient is shared across all requests. Pool size is configurable
+  via WAZUH_INDEXER_POOL_SIZE and WAZUH_INDEXER_MAX_KEEPALIVE env vars.
+  Call aclose() / use as async context manager on server shutdown.
 """
 from __future__ import annotations
+
+import asyncio
 import logging
+import os
+import random
 from typing import Any, Optional
 
 import httpx
@@ -14,17 +24,40 @@ from .config import Config
 
 log = logging.getLogger(__name__)
 
-# ── Connection pool limits ─────────────────────────────────────────────────────
-_POOL_MAX_CONNECTIONS   = 20
-_POOL_MAX_KEEPALIVE     = 10
+# ── Retry configuration (same policy as WazuhClient) ─────────────────────────
+_MAX_RETRIES = 3
+_RETRY_BASE  = 1.0   # seconds — first delay before jitter
+_RETRY_CAP   = 10.0  # seconds — maximum delay before jitter
+
+# ── Connection pool limits (override via env vars) ────────────────────────────
+_POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_INDEXER_POOL_SIZE",    "20"))
+_POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_INDEXER_MAX_KEEPALIVE", "10"))
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True when the exception warrants a retry."""
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status >= 500 or status == 429
+    return False
+
+
+async def _retry_sleep(attempt: int) -> None:
+    """Exponential backoff with ±1s uniform jitter."""
+    delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP) + random.uniform(0, 1)
+    log.warning(
+        "Wazuh Indexer: transient error on attempt %d/%d — retrying in %.1fs",
+        attempt + 1, _MAX_RETRIES, delay,
+    )
+    await asyncio.sleep(delay)
 
 
 class WazuhIndexer:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        # Use CA bundle when provided, otherwise fall back to verify_ssl flag.
         self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
-        # Persistent connection pool with Basic auth set at client level.
         self._client = httpx.AsyncClient(
             verify=self._ssl,
             auth=(cfg.indexer_user, cfg.indexer_pass),
@@ -47,19 +80,37 @@ class WazuhIndexer:
         await self.aclose()
 
     async def search(self, body: dict, index: Optional[str] = None) -> dict:
+        """Run an OpenSearch query with automatic retry on transient failures."""
         idx = index or self.cfg.alerts_index
-        r = await self._client.post(
-            f"{self.cfg.indexer_host}/{idx}/_search",
-            json=body,
-        )
-        r.raise_for_status()
-        return r.json()
+        url = f"{self.cfg.indexer_host}/{idx}/_search"
+        last_exc: Exception = RuntimeError("No attempts made")
+        for attempt in range(_MAX_RETRIES):
+            try:
+                r = await self._client.post(url, json=body)
+                r.raise_for_status()
+                return r.json()
+            except Exception as exc:
+                last_exc = exc
+                if _is_retryable(exc) and attempt < _MAX_RETRIES - 1:
+                    await _retry_sleep(attempt)
+                    continue
+                raise
+        raise last_exc  # unreachable but satisfies type checker
 
     async def count(self, query: dict, index: Optional[str] = None) -> int:
+        """Count matching documents with automatic retry on transient failures."""
         idx = index or self.cfg.alerts_index
-        r = await self._client.post(
-            f"{self.cfg.indexer_host}/{idx}/_count",
-            json={"query": query},
-        )
-        r.raise_for_status()
-        return r.json()["count"]
+        url = f"{self.cfg.indexer_host}/{idx}/_count"
+        last_exc: Exception = RuntimeError("No attempts made")
+        for attempt in range(_MAX_RETRIES):
+            try:
+                r = await self._client.post(url, json={"query": query})
+                r.raise_for_status()
+                return r.json()["count"]
+            except Exception as exc:
+                last_exc = exc
+                if _is_retryable(exc) and attempt < _MAX_RETRIES - 1:
+                    await _retry_sleep(attempt)
+                    continue
+                raise
+        raise last_exc  # unreachable but satisfies type checker

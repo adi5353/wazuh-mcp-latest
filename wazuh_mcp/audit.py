@@ -181,6 +181,14 @@ _AUDIT_BACKUP_COUNT: int = int(os.getenv("WAZUH_AUDIT_BACKUP_COUNT", "7"))
 # Optional HMAC signing key — set WAZUH_AUDIT_LOG_SIGNING_KEY to enable tamper detection.
 _SIGNING_KEY: str = os.getenv("WAZUH_AUDIT_LOG_SIGNING_KEY", "")
 
+if not _SIGNING_KEY:
+    logging.getLogger("wazuh_mcp.audit").warning(
+        "WAZUH_AUDIT_LOG_SIGNING_KEY is not set — audit records will be written "
+        "WITHOUT HMAC signatures. Tamper detection is disabled. "
+        "Set this env var to a random secret (e.g. `openssl rand -hex 32`) "
+        "to enable integrity verification for compliance and forensic audit trails."
+    )
+
 # ── Rotating file handler (lazy-initialised on first write) ───────────────────
 import threading as _threading
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
