@@ -945,9 +945,6 @@ def register(mcp, wz, idx, cfg, _cap):
 
     # ── Compliance drift detection ────────────────────────────────────────────
 
-    # In-memory baseline store: (framework, time_range) → baseline snapshot
-    _compliance_baselines: dict[str, dict] = {}
-
     @mcp.tool()
     async def compliance_drift(
         framework: str = "pci_dss",
@@ -999,25 +996,30 @@ def register(mcp, wz, idx, cfg, _cap):
             for b in res["aggregations"]["by_control"]["buckets"]
         }
 
-        baseline_key = f"{framework}::{time_range}"
+        baseline_key = f"compliance_baseline_{framework}_{time_range}"
 
-        if save_baseline or baseline_key not in _compliance_baselines:
-            _compliance_baselines[baseline_key] = {
+        from ..state_store import save_kv as _save_kv, load_kv as _load_kv
+
+        existing_baseline = _load_kv(baseline_key)
+
+        if save_baseline or existing_baseline is None:
+            saved_at = datetime.datetime.utcnow().isoformat() + "Z"
+            _save_kv(baseline_key, {
                 "snapshot": current_snapshot,
-                "saved_at": datetime.datetime.utcnow().isoformat() + "Z",
-            }
+                "saved_at": saved_at,
+            })
             return {
                 "status": "baseline_saved",
                 "framework": framework,
-                "saved_at": _compliance_baselines[baseline_key]["saved_at"],
+                "saved_at": saved_at,
                 "controls_tracked": len(current_snapshot),
                 "message": (
-                    "Baseline saved. Call compliance_drift() again (without save_baseline=True) "
-                    "to detect drift against this baseline."
+                    "Baseline saved to persistent store. Call compliance_drift() again "
+                    "(without save_baseline=True) to detect drift against this baseline."
                 ),
             }
 
-        baseline_data = _compliance_baselines[baseline_key]
+        baseline_data = existing_baseline
         baseline_snapshot: dict[str, dict] = baseline_data["snapshot"]
 
         # Diff current vs baseline

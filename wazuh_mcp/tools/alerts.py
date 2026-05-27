@@ -68,6 +68,11 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
                 }
             },
         }
+        # Also aggregate per-rule counts for the prior period to compute per-rule delta
+        prior_body["aggs"] = {
+            "top_rules_prior": {"terms": {"field": "rule.id", "size": 10}},
+        }
+
         try:
             prior_res = await idx.search(prior_body)
             prior_total = prior_res["hits"]["total"]["value"]
@@ -81,10 +86,15 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
                 else "↓" if (trend_pct or 0) < -5
                 else "="
             )
+            prior_rule_counts: dict[str, int] = {
+                b["key"]: b["doc_count"]
+                for b in prior_res.get("aggregations", {}).get("top_rules_prior", {}).get("buckets", [])
+            }
         except Exception:
             prior_total = None
             trend_pct = None
             trend_arrow = "?"
+            prior_rule_counts = {}
 
         raw_techniques = [b["key"] for b in aggs["top_mitre"]["buckets"]]
         enriched_techniques = _enrich_mitre_ids(raw_techniques)
@@ -106,10 +116,15 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
             ],
             "top_rules": [
                 {
-                    "rule_id": b["key"],
-                    "count": b["doc_count"],
+                    "rule_id":     b["key"],
+                    "count":       b["doc_count"],
                     "description": b["detail"]["hits"]["hits"][0]["_source"]["rule"]["description"],
-                    "level": b["detail"]["hits"]["hits"][0]["_source"]["rule"]["level"],
+                    "level":       b["detail"]["hits"]["hits"][0]["_source"]["rule"]["level"],
+                    "delta_pct": (
+                        round((b["doc_count"] - prior_rule_counts[b["key"]]) / prior_rule_counts[b["key"]] * 100, 1)
+                        if prior_rule_counts.get(b["key"])
+                        else None
+                    ),
                 }
                 for b in aggs["top_rules"]["buckets"]
             ],
@@ -133,6 +148,7 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         group_filter: str = "",
         limit: int = 50,
         page_token: str | None = None,
+        sort_by: str = "timestamp_desc",
     ) -> dict:
         """Search Wazuh alerts in the Indexer.
 
@@ -141,6 +157,10 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         agent_id: optional agent filter
         rule_groups: optional rule-group filter (e.g. ['authentication_failed', 'ssh'])
         page_token: opaque cursor from a previous response's next_page_token for pagination
+        sort_by: sort order — one of:
+            'timestamp_desc'  (default) newest first
+            'level_desc'      highest severity first
+            'agent_name_asc'  alphabetical by agent name
         """
         import base64 as _b64, json as _json
         _, err = safe_validate(validate_time_range, time_range)
@@ -168,9 +188,16 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
         if group_filter:
             filters.append({"term": {"agent.groups": group_filter}})
 
+        _SORT_MAP = {
+            "timestamp_desc":  [{"@timestamp": "desc"}, {"_id": "asc"}],
+            "level_desc":      [{"rule.level": "desc"}, {"@timestamp": "desc"}, {"_id": "asc"}],
+            "agent_name_asc":  [{"agent.name": "asc"},  {"@timestamp": "desc"}, {"_id": "asc"}],
+        }
+        sort_clause = _SORT_MAP.get(sort_by, _SORT_MAP["timestamp_desc"])
+
         body: dict = {
             "size": _cap(limit),
-            "sort": [{"@timestamp": "desc"}, {"_id": "asc"}],
+            "sort": sort_clause,
             "query": {"bool": {"filter": filters}},
         }
 

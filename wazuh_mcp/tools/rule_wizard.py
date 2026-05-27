@@ -262,11 +262,19 @@ def register(mcp, wz, cfg):
             }
 
         # Save current content as backup before overwriting (enables rollback_custom_rule)
-        from .rules import _rule_backups
+        # Persisted to state_store so backups survive server restarts.
+        from ..state_store import save_kv as _save_kv
+        backup_saved = False
         try:
             existing = await wz.request("GET", f"/rules/files/{filename}?raw=true")
             if isinstance(existing, str) and existing.strip():
-                _rule_backups[filename] = existing
+                import time as _time
+                _save_kv(f"rule_backup_{filename}", {
+                    "content": existing,
+                    "filename": filename,
+                    "backed_up_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+                })
+                backup_saved = True
         except Exception:
             pass  # No existing file to back up — first push
 
@@ -283,7 +291,7 @@ def register(mcp, wz, cfg):
         return {
             "success": True,
             "target_file": filename,
-            "backup_saved": filename in _rule_backups,
+            "backup_saved": backup_saved,
             "warnings": validation.get("warnings", []),
             "rules_found": validation.get("rules_found", 0),
             "manager_response": result,

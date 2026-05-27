@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any  # noqa: F401 – re-exported for kv helpers
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -110,3 +110,53 @@ def clear_monitor_state() -> None:
             p.unlink()
     except Exception:
         pass
+
+
+# ── Generic key-value persistence ─────────────────────────────────────────────
+
+def _kv_dir() -> Path:
+    d = _state_dir() / "kv"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_key(key: str) -> str:
+    """Sanitize an arbitrary key to a safe filename (alphanumeric + dash/underscore)."""
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in key)
+
+
+def save_kv(key: str, data: Any) -> None:
+    """Persist an arbitrary JSON-serialisable value under the given key.
+
+    Survives server restarts. Used by compliance_drift for baselines and
+    rule_wizard for pre-push rule backups.
+    """
+    p = _kv_dir() / f"{_safe_key(key)}.json"
+    try:
+        p.write_text(json.dumps(data, indent=2, default=str))
+    except Exception as exc:
+        log.warning("state_store: failed to save kv '%s': %s", key, exc)
+
+
+def load_kv(key: str) -> Any | None:
+    """Load a previously saved key-value entry.  Returns None if not found."""
+    p = _kv_dir() / f"{_safe_key(key)}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except Exception as exc:
+        log.warning("state_store: failed to load kv '%s': %s", key, exc)
+        return None
+
+
+def delete_kv(key: str) -> bool:
+    """Delete a stored key-value entry. Returns True if it existed."""
+    p = _kv_dir() / f"{_safe_key(key)}.json"
+    try:
+        if p.exists():
+            p.unlink()
+            return True
+    except Exception:
+        pass
+    return False

@@ -146,10 +146,11 @@ def register(mcp, wz, idx, cfg, _cap):
     async def rollback_custom_rule(
         filename: str = "custom_rules.xml",
     ) -> dict:
-        """Restore the previous version of a custom rule file from the in-memory backup.
+        """Restore the previous version of a custom rule file from the persistent backup.
 
-        push_custom_rule automatically saves the existing content before overwriting.
-        This tool restores that saved version — useful when a pushed rule causes issues.
+        push_custom_rule automatically saves the existing content to persistent storage
+        before overwriting. This tool restores that saved version — useful when a pushed
+        rule causes issues. Backups survive server restarts.
 
         filename: rule filename under etc/rules/ that was previously pushed.
         Requires role: admin.
@@ -158,23 +159,37 @@ def register(mcp, wz, idx, cfg, _cap):
         if err:
             return err
 
-        backup = _rule_backups.get(filename)
-        if not backup:
-            return {
-                "error": f"No backup found for '{filename}'.",
-                "tip": "Backups are saved in memory when push_custom_rule is called. They are lost on server restart.",
-            }
+        from ..state_store import load_kv as _load_kv, delete_kv as _delete_kv
+        backup_data = _load_kv(f"rule_backup_{filename}")
+
+        # Fall back to legacy in-memory backup if persistent one is absent
+        if not backup_data:
+            legacy = _rule_backups.get(filename)
+            if legacy:
+                backup_content = legacy
+            else:
+                return {
+                    "error": f"No backup found for '{filename}'.",
+                    "tip": "Backups are created when push_custom_rule is called (with dry_run=False).",
+                }
+        else:
+            backup_content = backup_data.get("content", "")
+
+        if not backup_content:
+            return {"error": f"Backup for '{filename}' is empty — cannot restore."}
 
         try:
-            result = await wz.upload_xml_file(f"/rules/files/{filename}", backup, overwrite=True)
+            result = await wz.upload_xml_file(f"/rules/files/{filename}", backup_content, overwrite=True)
         except Exception as exc:
             return {"error": f"Rollback push failed: {exc}"}
 
-        # Clear backup after successful restore
-        del _rule_backups[filename]
+        # Remove backup after successful restore
+        _delete_kv(f"rule_backup_{filename}")
+        _rule_backups.pop(filename, None)
         return {
             "success": True,
             "rolled_back_file": filename,
+            "backed_up_at": (backup_data or {}).get("backed_up_at"),
             "manager_response": result,
             "message": f"'{filename}' has been restored to its previous version.",
         }

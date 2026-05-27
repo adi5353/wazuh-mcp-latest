@@ -14,6 +14,23 @@
 
 ## What's New
 
+### v2.4 — Quick Wins: Depth & Persistence
+
+Eight targeted improvements across triage quality, export scalability, and persistent storage. No breaking changes.
+
+| Area | Change | Details |
+|---|---|---|
+| **KEV triage boost** | `auto_triage_alert` checks CISA KEV | If the alert's `data.cve` field matches a CISA Known Exploited Vulnerability, confidence score is raised +25 — nearly guarantees TRUE_POSITIVE classification for exploited CVEs |
+| **Pre-fetched batch triage** | `batch_auto_triage` accepts `alert_ids` | Pass a list of alert document IDs to skip the indexer search step — useful when chaining with `search_alerts` page results |
+| **Persistent compliance baselines** | `compliance_drift` survives restarts | Baselines are now saved to `state_store` (JSON file on disk) rather than in-memory — survives server restarts and container redeploys |
+| **Persistent rule backups** | `rollback_custom_rule` reads from disk | `push_custom_rule` now persists the pre-push backup to `state_store`. `rollback_custom_rule` loads from disk with fallback to legacy in-memory backup |
+| **Attacker IP enrichment** | `blast_radius_analysis` auto-enriches IPs | When `WAZUH_VT_API_KEY` is set, discovered source IPs are auto-enriched via VirusTotal (capped at 5 IPs to protect quota). Returns `attacker_ip_enrichment` with malicious count, country, ASN |
+| **Sortable alert search** | `search_alerts` `sort_by` param | New `sort_by` option: `timestamp_desc` (default), `level_desc` (highest severity first), `agent_name_asc` (alphabetical by agent) |
+| **Per-rule trend** | `alert_summary` per-rule `delta_pct` | Each entry in `top_rules` now includes `delta_pct` — percentage change vs the prior equivalent period (same logic as the fleet-level trend arrow) |
+| **Streaming CSV export** | `export_alerts_csv` `stream=True` | New `stream=True` mode uses `search_after` cursor pagination to export all matching alerts page-by-page — avoids OOM on large exports. Prepends a metadata comment row with total row count |
+
+---
+
 ### v2.3 — Existing Feature Improvements
 
 Targeted improvements across performance, alert quality, rules, compliance, and security hardening. No breaking changes.

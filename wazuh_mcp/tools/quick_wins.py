@@ -331,6 +331,26 @@ def register(mcp, wz, idx, cfg, _cap):
             score += 5
             tp_signals.append(f"Rule fired {recurrence_count} times in last hour — sustained activity")
 
+        # ── KEV catalog check ────────────────────────────────────────────────
+        # If the alert contains a CVE reference and that CVE is in CISA's Known
+        # Exploited Vulnerabilities (KEV) catalog, it is almost certainly a TP.
+        alert_cve = data.get("cve") or data.get("vulnerability", {}).get("cve", "")
+        if alert_cve:
+            try:
+                import httpx as _httpx
+                kev_url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+                async with _httpx.AsyncClient(timeout=6) as _kev:
+                    kr = await _kev.get(kev_url)
+                    kev_data = kr.json()
+                kev_ids = {v.get("cveID", "") for v in kev_data.get("vulnerabilities", [])}
+                if alert_cve.upper() in kev_ids:
+                    score += 25
+                    tp_signals.append(
+                        f"CVE {alert_cve} is in CISA Known Exploited Vulnerabilities (KEV) catalog — high TP confidence"
+                    )
+            except Exception:
+                pass  # KEV check is best-effort
+
         # ── Source IP check ──────────────────────────────────────────────────
         if src_ip:
             import ipaddress as _ip
@@ -400,18 +420,49 @@ def register(mcp, wz, idx, cfg, _cap):
         time_range: str = "1h",
         min_level: int = 7,
         limit: int = 20,
+        alert_ids: list | None = None,
     ) -> dict:
         """Auto-triage the top recent alerts and return a disposition for each.
 
         Useful for morning triage workflows — get a classified list of alerts
         with True Positive / False Positive / Needs Review labels in one call.
 
-        time_range: how far back to look (default: 1h)
-        min_level:  minimum rule level (default: 7)
-        limit:      max alerts to triage (default 20, max 50)
+        time_range: how far back to look (default: 1h) — ignored when alert_ids is set
+        min_level:  minimum rule level (default: 7) — ignored when alert_ids is set
+        limit:      max alerts to triage (default 20, max 50) — ignored when alert_ids is set
+        alert_ids:  optional list of alert document IDs to triage directly (skips the search
+                    step — pass IDs from a previous search_alerts call for efficiency)
         """
         from ..helpers import trim_alert
 
+        # ── Fast path: caller supplied pre-fetched IDs ────────────────────────
+        if alert_ids:
+            alert_ids = alert_ids[:50]
+            results = []
+            for aid in alert_ids:
+                try:
+                    triage = await auto_triage_alert(str(aid))
+                    results.append(triage)
+                except Exception as exc:
+                    results.append({"alert_id": aid, "error": str(exc)})
+
+            tp    = [r for r in results if r.get("disposition") == "TRUE_POSITIVE"]
+            fp    = [r for r in results if r.get("disposition") == "FALSE_POSITIVE"]
+            needs = [r for r in results if r.get("disposition") == "NEEDS_REVIEW"]
+            return {
+                "mode": "pre_fetched",
+                "triaged": len(results),
+                "summary": {
+                    "true_positive":  len(tp),
+                    "false_positive": len(fp),
+                    "needs_review":   len(needs),
+                },
+                "true_positives":  tp,
+                "needs_review":    needs,
+                "false_positives": fp,
+            }
+
+        # ── Default path: fetch from indexer ─────────────────────────────────
         limit = min(limit, 50)
         try:
             res = await idx.search({
@@ -451,6 +502,7 @@ def register(mcp, wz, idx, cfg, _cap):
         needs = [r for r in results if r.get("disposition") == "NEEDS_REVIEW"]
 
         return {
+            "mode": "auto_search",
             "time_range": time_range,
             "min_level":  min_level,
             "total_matching": total,

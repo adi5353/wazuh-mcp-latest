@@ -31,6 +31,7 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
         time_range: str = "24h",
         min_level: int = 7,
         limit: int = 500,
+        stream: bool = False,
     ) -> str:
         """Export alerts as CSV text for download or offline analysis.
 
@@ -39,8 +40,12 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
 
         Args:
             time_range: Lookback window (e.g. '24h', '7d').
-            min_level: Minimum Wazuh rule level (1-15, default 7).
-            limit: Maximum rows to export (max 500).
+            min_level:  Minimum Wazuh rule level (1-15, default 7).
+            limit:      Maximum rows to export (max 500 in normal mode;
+                        ignored in stream mode — all matching rows are fetched).
+            stream:     If True, use search_after cursor pagination to export ALL
+                        matching alerts without memory-buffering a single large page.
+                        Use for exports > 500 rows or when the server reports truncation.
         """
         from ..validators import validate_time_range, validate_min_level
         try:
@@ -50,37 +55,87 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
             return f"ERROR: {e}"
 
         from ..helpers import time_window, trim_alert
-        body = {
-            "size": _cap(limit),
-            "sort": [{"@timestamp": "desc"}],
-            "query": {
-                "bool": {
-                    "filter": [
-                        time_window(f"now-{time_range}"),
-                        {"range": {"rule.level": {"gte": min_level}}},
-                    ]
-                }
-            },
+        import json as _json  # noqa: F401
+
+        query = {
+            "bool": {
+                "filter": [
+                    time_window(f"now-{time_range}"),
+                    {"range": {"rule.level": {"gte": min_level}}},
+                ]
+            }
         }
+
+        _CSV_FIELDS = ["timestamp", "agent_id", "agent_name", "rule_id",
+                       "rule_level", "rule_description", "srcip", "mitre_tactics"]
+
+        def _hit_to_row(h: dict) -> dict:
+            a = trim_alert(h)
+            return {
+                "timestamp":       a.get("timestamp", ""),
+                "agent_id":        a.get("agent_id", ""),
+                "agent_name":      a.get("agent_name", ""),
+                "rule_id":         a.get("rule_id", ""),
+                "rule_level":      a.get("rule_level", ""),
+                "rule_description": a.get("rule_description", ""),
+                "srcip":           a.get("srcip", ""),
+                "mitre_tactics":   ",".join((a.get("mitre") or {}).get("tactic", [])),
+            }
+
+        if not stream:
+            # ── Normal (single-page) mode ─────────────────────────────────────
+            body = {
+                "size": _cap(limit),
+                "sort": [{"@timestamp": "desc"}, {"_id": "asc"}],
+                "query": query,
+            }
+            try:
+                res = await idx.search(body, index=cfg.alerts_index)
+                rows = [_hit_to_row(h) for h in res["hits"]["hits"]]
+                return _to_csv(rows, _CSV_FIELDS) or "No alerts found for the specified criteria."
+            except Exception as e:
+                return f"ERROR: {e}"
+
+        # ── Streaming (search_after cursor) mode ─────────────────────────────
+        # Iterates pages of 500 until no more results, then assembles one CSV.
+        PAGE_SIZE = 500
+        rows: list[dict] = []
+        search_after: list | None = None
+        page = 0
+
         try:
-            res = await idx.search(body, index=cfg.alerts_index)
-            hits = res["hits"]["hits"]
-            rows = []
-            for h in hits:
-                a = trim_alert(h)
-                rows.append({
-                    "timestamp": a.get("timestamp", ""),
-                    "agent_id": a.get("agent_id", ""),
-                    "agent_name": a.get("agent_name", ""),
-                    "rule_id": a.get("rule_id", ""),
-                    "rule_level": a.get("rule_level", ""),
-                    "rule_description": a.get("rule_description", ""),
-                    "srcip": a.get("srcip", ""),
-                    "mitre_tactics": ",".join(
-                        (a.get("mitre") or {}).get("tactic", [])
-                    ),
-                })
-            return _to_csv(rows) or "No alerts found for the specified criteria."
+            while True:
+                body = {
+                    "size": PAGE_SIZE,
+                    "sort": [{"@timestamp": "desc"}, {"_id": "asc"}],
+                    "query": query,
+                }
+                if search_after:
+                    body["search_after"] = search_after
+
+                res = await idx.search(body, index=cfg.alerts_index)
+                hits = res["hits"]["hits"]
+                if not hits:
+                    break
+
+                rows.extend(_hit_to_row(h) for h in hits)
+                page += 1
+
+                if len(hits) < PAGE_SIZE:
+                    break  # last page
+
+                last_sort = hits[-1].get("sort")
+                if not last_sort:
+                    break
+                search_after = last_sort
+
+            if not rows:
+                return "No alerts found for the specified criteria."
+
+            csv_content = _to_csv(rows, _CSV_FIELDS)
+            # Prepend a metadata comment line for transparency
+            meta = f"# wazuh-mcp export | time_range={time_range} | min_level={min_level} | rows={len(rows)} | pages={page}\n"
+            return meta + csv_content
         except Exception as e:
             return f"ERROR: {e}"
 
