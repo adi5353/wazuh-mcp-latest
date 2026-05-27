@@ -45,11 +45,11 @@ async def _ipinfo_get(ip: str) -> dict:
 
 
 async def _ip_api_get(ip: str) -> dict:
-    """Query ip-api.com for GeoIP data (free, no key needed)."""
+    """Query ip-api.com for GeoIP data via HTTPS (pro key required for HTTPS; falls back gracefully)."""
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
-                f"http://ip-api.com/json/{ip}",
+                f"https://ip-api.com/json/{ip}",
                 params={"fields": "status,country,regionName,city,isp,org,as,hosting,proxy,mobile"},
             )
             if r.status_code == 200:

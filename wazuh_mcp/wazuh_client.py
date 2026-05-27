@@ -134,6 +134,29 @@ class WazuhClient:
         r.raise_for_status()
         return r.json()
 
+    async def detect_api_version(self) -> dict:
+        """Detect the Wazuh Manager API version at startup.
+
+        Returns a dict with keys: major (int), minor (int), patch (int), full (str).
+        Used to select correct API paths for v4 vs v5 compatibility shims.
+        """
+        try:
+            data = await self.request("GET", "/")
+            raw = (
+                data.get("data", {}).get("api_version")
+                or data.get("api_version")
+                or ""
+            )
+            parts = str(raw).lstrip("v").split(".")
+            major = int(parts[0]) if len(parts) > 0 else 0
+            minor = int(parts[1]) if len(parts) > 1 else 0
+            patch = int(parts[2]) if len(parts) > 2 else 0
+            log.info("Wazuh Manager API version detected: %s", raw)
+            return {"major": major, "minor": minor, "patch": patch, "full": raw}
+        except Exception as exc:
+            log.warning("Could not detect Wazuh API version: %s", exc)
+            return {"major": 0, "minor": 0, "patch": 0, "full": "unknown"}
+
     async def upload_xml_file(self, path: str, xml_content: str, overwrite: bool = True) -> dict:  # noqa: E501
         """Upload a raw XML file to the Wazuh Manager (rules or decoders).
 

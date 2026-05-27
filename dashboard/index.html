@@ -14,8 +14,15 @@
     --critical:#f85149;--high:#ffa657;--medium:#d29922;--low:#3fb950;
     --radius:8px;--shadow:0 2px 12px rgba(0,0,0,.4);
   }
+  [data-theme="light"]{
+    --bg:#f6f8fa;--surface:#ffffff;--surface2:#f0f2f5;--border:#d0d7de;
+    --text:#1f2328;--text2:#57606a;--accent:#0969da;--green:#1a7f37;
+    --yellow:#9a6700;--red:#d1242f;--purple:#8250df;--orange:#bc4c00;
+    --critical:#d1242f;--high:#bc4c00;--medium:#9a6700;--low:#1a7f37;
+    --shadow:0 2px 12px rgba(0,0,0,.12);
+  }
   body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);
-    min-height:100vh;display:flex;flex-direction:column}
+    min-height:100vh;display:flex;flex-direction:column;transition:background .2s,color .2s}
   a{color:var(--accent);text-decoration:none}
   button{cursor:pointer;border:none;border-radius:6px;font-size:13px;
     padding:6px 14px;transition:opacity .15s}
@@ -182,6 +189,8 @@
     <button onclick="showPage('roi')">ROI</button>
     <button onclick="showPage('settings')">Settings</button>
   </nav>
+  <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme"
+    style="background:transparent;color:var(--text2);padding:6px 10px;font-size:16px;margin-left:4px">🌙</button>
 </header>
 
 <main>
@@ -749,6 +758,20 @@ function toast(msg) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => t.classList.remove('show'), 3500);
 }
+
+// ── Theme toggle ──────────────────────────────────────────────────────────
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  document.getElementById('theme-toggle').textContent = isDark ? '☀️' : '🌙';
+  localStorage.setItem('mcp_theme', isDark ? 'light' : 'dark');
+}
+(function initTheme() {
+  const saved = localStorage.getItem('mcp_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = saved === 'light' ? '☀️' : '🌙';
+})();
 
 // ── Init ───────────────────────────────────────────────────────────────────
 document.getElementById('cfg-url').value = CFG.url;
