@@ -9,8 +9,34 @@ import os
 import httpx
 
 from ..circuit_breaker import breaker
+import time
 
 log = logging.getLogger("wazuh-mcp")
+
+# IOC result cache (Fix 1) — prevents repeated external API calls for same indicator
+_IOC_CACHE: dict[str, tuple[dict, float]] = {}
+_CACHE_TTL_IP    = int(os.getenv("WAZUH_IOC_CACHE_TTL_IP",    "3600"))   # 1h
+_CACHE_TTL_HASH  = int(os.getenv("WAZUH_IOC_CACHE_TTL_HASH",  "86400"))  # 24h
+_CACHE_TTL_OTHER = int(os.getenv("WAZUH_IOC_CACHE_TTL_OTHER", "7200"))   # 2h
+
+
+def _cache_get(key: str) -> dict | None:
+    entry = _IOC_CACHE.get(key)
+    if entry and time.monotonic() < entry[1]:
+        return entry[0]
+    _IOC_CACHE.pop(key, None)
+    return None
+
+
+def _cache_set(key: str, value: dict | None, ttl: int) -> None:
+    if value is None:
+        return
+    _IOC_CACHE[key] = (value, time.monotonic() + ttl)
+    if len(_IOC_CACHE) > 2000:
+        now = time.monotonic()
+        stale = [k for k, (_, exp) in _IOC_CACHE.items() if exp < now]
+        for k in stale[:200]:
+            _IOC_CACHE.pop(k, None)
 
 # Shared connection pools — one TLS handshake per host, reused across all calls.
 # Closed on server shutdown via close_shared_ti_clients() called from server.py lifespan.
@@ -57,6 +83,11 @@ async def _vt_get(path: str) -> dict | None:
     vt_key = os.getenv("VIRUSTOTAL_API_KEY")
     if not vt_key:
         return None
+    # Fix 1: cache before hitting API
+    _ck = f"vt:{path}"
+    _hit = _cache_get(_ck)
+    if _hit is not None:
+        return _hit
     if not breaker.allow("virustotal"):
         st = breaker.status("virustotal")
         reason = "circuit open" if st["circuit_open"] else "daily quota exhausted"
@@ -70,7 +101,10 @@ async def _vt_get(path: str) -> dict | None:
         )
         if r.status_code == 200:
             breaker.record_success("virustotal")
-            return r.json()
+            _res = r.json()
+            _ttl = (_CACHE_TTL_HASH if "/files/" in path else _CACHE_TTL_IP if "/ip_addresses/" in path else _CACHE_TTL_OTHER)
+            _cache_set(_ck, _res, _ttl)
+            return _res
         breaker.record_failure("virustotal")
         return None
     except Exception as e:
@@ -83,6 +117,11 @@ async def _abuse_get(ip: str) -> dict | None:
     abuse_key = os.getenv("ABUSEIPDB_API_KEY")
     if not abuse_key:
         return None
+    # Fix 1: cache before hitting API
+    _ck2 = f"abuse:{ip}"
+    _hit2 = _cache_get(_ck2)
+    if _hit2 is not None:
+        return _hit2
     if not breaker.allow("abuseipdb"):
         st = breaker.status("abuseipdb")
         reason = "circuit open" if st["circuit_open"] else "daily quota exhausted"
@@ -97,7 +136,9 @@ async def _abuse_get(ip: str) -> dict | None:
         )
         if r.status_code == 200:
             breaker.record_success("abuseipdb")
-            return r.json().get("data")
+            _res2 = r.json().get("data")
+            _cache_set(_ck2, _res2, _CACHE_TTL_IP)
+            return _res2
         breaker.record_failure("abuseipdb")
         return None
     except Exception as e:
@@ -345,8 +386,22 @@ def register(ctx: ToolContext) -> None:
         _URL_RE    = re.compile(r'^https?://')
         _DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$')
 
+        def _defang(ioc: str) -> str:
+            """Normalize defanged IOCs: 1[.]1[.]1[.]1->1.1.1.1, hxxp->http."""
+            return (ioc.strip()
+                    .replace("[.]", ".").replace("(.)", ".")
+                    .replace("[:]", ":").replace("hxxp", "http")
+                    .replace("hXXp", "http").replace("hxxps", "https")
+                    .replace("hXXps", "https"))
+
         def _detect_type(ioc: str) -> str:
-            ioc = ioc.strip()
+            import socket
+            ioc = _defang(ioc)
+            try:
+                socket.inet_pton(socket.AF_INET6, ioc)
+                return "ip"
+            except (OSError, AttributeError):
+                pass
             if _IP_RE.match(ioc):     return "ip"
             if _HASH_RE.match(ioc):   return "hash"
             if _URL_RE.match(ioc):    return "url"
@@ -355,7 +410,7 @@ def register(ctx: ToolContext) -> None:
 
         # Build coroutine list
         async def _enrich_one(ioc: str) -> dict:
-            ioc = ioc.strip()
+            ioc = _defang(ioc.strip())
             t = ioc_type if ioc_type != "auto" else _detect_type(ioc)
             try:
                 if t == "ip":

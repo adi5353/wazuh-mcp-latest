@@ -121,27 +121,11 @@ class Config:
             indexer_user = get_secret("WAZUH_INDEXER_USER", default="wazuh-readonly")
             indexer_pass = required("WAZUH_INDEXER_PASS")
 
-        # MSSP multi-instance parsing
-        tenants: tuple = ()
-        raw_instances = os.getenv("WAZUH_INSTANCES", "")
-        if raw_instances:
-            try:
-                parsed = json.loads(raw_instances)
-                tenants = tuple(
-                    TenantConfig(
-                        name=inst["name"],
-                        manager_host=inst["host"],
-                        manager_user=inst.get("user", manager_user),
-                        manager_pass=inst.get("pass", manager_pass),
-                        indexer_host=inst.get("indexer_host", indexer_host),
-                        indexer_user=inst.get("indexer_user", indexer_user),
-                        indexer_pass=inst.get("indexer_pass", indexer_pass),
-                    )
-                    for inst in parsed
-                )
-            except (json.JSONDecodeError, KeyError) as e:
-                raise RuntimeError(f"Invalid WAZUH_INSTANCES JSON: {e}") from e
-
+        # MSSP multi-instance parsing (Fix 7: supports WAZUH_INSTANCES_FILE)
+        tenants: tuple = _load_instances_json(
+            os.getenv("WAZUH_INSTANCES", ""),
+            manager_user, manager_pass, indexer_host, indexer_user, indexer_pass,
+        )
         return cls(
             manager_host=manager_host,
             manager_user=manager_user,
@@ -167,3 +151,50 @@ class Config:
             cloud_mode=cloud_mode,
             tenants=tenants,
         )
+
+
+def _load_instances_json(raw_inline: str, manager_user: str, manager_pass: str,
+                         indexer_host: str, indexer_user: str, indexer_pass: str) -> tuple:
+    """Parse MSSP tenant list from inline JSON string or WAZUH_INSTANCES_FILE path.
+
+    Prefer WAZUH_INSTANCES_FILE over inline WAZUH_INSTANCES so credentials
+    can live in a version-controlled JSON file rather than a shell env var.
+    """
+    file_path = os.getenv("WAZUH_INSTANCES_FILE", "")
+    if file_path:
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                raw_inline = fh.read()
+        except OSError as e:
+            raise RuntimeError(f"Cannot read WAZUH_INSTANCES_FILE={file_path!r}: {e}") from e
+
+    if not raw_inline:
+        return ()
+
+    try:
+        parsed = json.loads(raw_inline)
+    except json.JSONDecodeError as e:
+        source = file_path or "WAZUH_INSTANCES env var"
+        raise RuntimeError(f"Invalid JSON in {source}: {e}") from e
+
+    if not isinstance(parsed, list):
+        raise RuntimeError("WAZUH_INSTANCES / WAZUH_INSTANCES_FILE must be a JSON array")
+
+    tenants = []
+    for i, inst in enumerate(parsed):
+        missing = [k for k in ("name", "host") if k not in inst]
+        if missing:
+            raise RuntimeError(
+                f"Tenant #{i} is missing required fields: {missing}. "
+                "Each entry needs at minimum 'name' and 'host'."
+            )
+        tenants.append(TenantConfig(
+            name=inst["name"],
+            manager_host=inst["host"],
+            manager_user=inst.get("user", manager_user),
+            manager_pass=inst.get("pass", manager_pass),
+            indexer_host=inst.get("indexer_host", indexer_host),
+            indexer_user=inst.get("indexer_user", indexer_user),
+            indexer_pass=inst.get("indexer_pass", indexer_pass),
+        ))
+    return tuple(tenants)

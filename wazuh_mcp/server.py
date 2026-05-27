@@ -1104,6 +1104,18 @@ def main() -> None:
 
             # Cache stats
             from .cache import cache_stats
+
+            # Fix 9: secret backend connectivity check
+            try:
+                from .secrets_backend import _backend, _loaded, _cache as _sb_cache
+                checks["secrets_backend"] = {
+                    "backend": _backend or "env",
+                    "loaded": _loaded,
+                    "cached_secrets": len(_sb_cache),
+                    "status": "ok" if _loaded else "not_loaded",
+                }
+            except Exception as _sb_err:
+                checks["secrets_backend"] = {"status": f"error: {_sb_err}"}
             checks["cache"] = cache_stats()
 
             all_ok = all(
@@ -1387,7 +1399,7 @@ def main() -> None:
         app = MaxBodySizeMiddleware(app)  # type: ignore[assignment]
         log.info(
             "Body size limit: %s KB (override with WAZUH_MCP_MAX_BODY_KB)",
-            os.getenv("WAZUH_MCP_MAX_BODY_KB", "512"),
+            os.getenv("WAZUH_MCP_MAX_BODY_KB", "4096"),
         )
 
         log.info("SSE routes: /sse (GET), /messages (POST), /health (GET), /metrics (GET)")
