@@ -1,10 +1,17 @@
 """Agent management tools — list, inspect, restart, group assignment."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 from ..rbac import responder_only, admin_only
 
 
-def register(mcp, wz, idx, cfg, _cap, _require_writes):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _require_writes = ctx.require_writes
 
     @mcp.tool()
     async def list_agents(status: str = "active", limit: int = 50, group_filter: str = "") -> dict:

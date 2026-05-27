@@ -6,6 +6,7 @@ Configuration:
     PAGERDUTY_ROUTING_KEY  — PagerDuty Events API v2 routing (integration) key
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import os
 
@@ -13,7 +14,13 @@ _EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
 _SEVERITY_MAP = {"critical": "critical", "high": "error", "medium": "warning", "low": "info"}
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def trigger_pagerduty_alert(

@@ -6,6 +6,7 @@ and populates Wazuh CDB lists. Correlates active alerts against feed IOCs.
 Tools: sync_threat_feed, list_threat_feeds, correlate_alerts_with_feed
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import logging
 import time
@@ -100,7 +101,12 @@ async def _fetch_feed(feed_id: str) -> tuple[list[str], str]:
     return [], "unknown feed"
 
 
-def register(mcp, wz, idx, cfg, _require_writes):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _require_writes = ctx.require_writes
 
     @mcp.tool()
     async def sync_threat_feed(feed_id: str, dry_run: bool = True) -> dict:

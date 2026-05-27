@@ -3,6 +3,7 @@ import os
 import time
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
+from wazuh_mcp.tool_context import ToolContext
 
 
 def _make_tool_env():
@@ -19,7 +20,8 @@ def _make_tool_env():
         return None  # writes allowed in tests
 
     from wazuh_mcp.tools.credential_mgmt import register
-    register(mcp, wz, cfg, _require_writes)
+    ctx = ToolContext(mcp=mcp, wz=wz, idx=None, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+    register(ctx)
     return tools, wz, cfg
 
 
@@ -128,7 +130,8 @@ class TestPasswordRotation:
             return {"error": "Write operations are disabled."}
 
         from wazuh_mcp.tools.credential_mgmt import register
-        register(mcp, wz, cfg, _require_writes_blocked)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=None, cfg=cfg, cap=lambda x: x, require_writes=_require_writes_blocked, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
 
         import asyncio
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "admin"}):

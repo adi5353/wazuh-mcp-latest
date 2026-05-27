@@ -1,5 +1,6 @@
 """Archive log search tools — forensic reconstruction from full Wazuh archives index."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import os
 
@@ -7,7 +8,12 @@ from ..helpers import trim_alert, time_window
 from ..validators import safe_validate, validate_time_range
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def search_archive_logs(

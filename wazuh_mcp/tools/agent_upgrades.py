@@ -1,8 +1,15 @@
 """Agent upgrade management tools — trigger, track, and roll back agent upgrades."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def list_agent_upgrades(limit: int = 50) -> dict:

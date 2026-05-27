@@ -17,6 +17,7 @@ Tools:
     check_sla_breaches      — list CVEs that have breached their patch SLA
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import re
 from datetime import datetime, timedelta, timezone
@@ -63,7 +64,12 @@ def _sla_status(entry: dict) -> dict:
         return {"sla_deadline": None, "sla_breached": False, "days_remaining": None}
 
 
-def register(mcp, wz, idx, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+
     from ..validators import safe_validate, validate_cve_id, validate_free_text, safe_validate
 
     @mcp.tool()
@@ -124,7 +130,7 @@ def register(mcp, wz, idx, cfg):
         if sla_days:
             deadline = datetime.now(timezone.utc) + timedelta(days=sla_days)
             result["sla_deadline"] = deadline.strftime("%Y-%m-%d")
-            result["message"] += f" Patch SLA: {sla_days} days (by {result['sla_deadline']})."
+            result["message"] = str(result["message"]) + f" Patch SLA: {sla_days} days (by {result['sla_deadline']})."
         return result
 
     @mcp.tool()

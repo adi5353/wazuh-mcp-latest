@@ -9,6 +9,7 @@ Tools added:
   classify_ip_infrastructure  — fast infrastructure type classification
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import ipaddress
 import logging
@@ -115,7 +116,11 @@ def _is_private(ip: str) -> bool:
         return False
 
 
-def register(mcp, wz, idx, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
 
     @mcp.tool()
     async def enrich_ip_extended(ip: str) -> dict:

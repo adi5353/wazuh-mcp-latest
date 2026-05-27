@@ -3,9 +3,16 @@
 Query index health, statistics, aliases, and ISM policies.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_index_stats(index_pattern: str = "wazuh-alerts-*") -> dict:

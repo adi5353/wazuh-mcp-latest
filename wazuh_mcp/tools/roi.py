@@ -6,12 +6,19 @@ Tools:
   roi_session_end       — close a session and get per-session savings
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import uuid
 from datetime import datetime, timezone
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def generate_roi_report(days: int = 7) -> dict:

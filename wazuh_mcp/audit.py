@@ -82,7 +82,7 @@ def _scrub_pii(value: str) -> str:
     return value
 
 
-def _sanitize_string(value: str) -> str:
+def sanitize_string(value: str) -> str:
     """Strip prompt injection tokens, executable code, secrets, and PII from a string."""
     for pat in _PROMPT_INJECTION_PATTERNS:
         value = pat.sub("[FILTERED]", value)
@@ -97,7 +97,7 @@ def _sanitize_value(value: Any, _depth: int = 0) -> Any:
     if _depth > 10:  # prevent infinite recursion on deeply nested data
         return value
     if isinstance(value, str):
-        return _sanitize_string(value)
+        return sanitize_string(value)
     if isinstance(value, dict):
         return {k: _sanitize_value(v, _depth + 1) for k, v in value.items()}
     if isinstance(value, list):
@@ -268,11 +268,13 @@ def _write_record(record: dict) -> None:
         handler.acquire()
         try:
             stream = handler.stream
+            assert stream is not None, "audit handler stream is unexpectedly None"
             if handler.maxBytes > 0:
                 stream.seek(0, 2)  # seek to end
                 if stream.tell() + encoded_len >= handler.maxBytes:
                     handler.doRollover()
                     stream = handler.stream  # doRollover reopens a fresh stream
+                    assert stream is not None, "audit handler stream None after rollover"
             stream.write(line)
             stream.flush()
         finally:

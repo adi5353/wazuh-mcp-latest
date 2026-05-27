@@ -1,5 +1,6 @@
 """Fleet inventory tools — per-agent and fleet-wide package/process/port/login queries."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import os
@@ -16,7 +17,13 @@ async def _batch_gather(coros, batch_size: int = _FLEET_BATCH_SIZE) -> list:
     return results
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_agent_packages(

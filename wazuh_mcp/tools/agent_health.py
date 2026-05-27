@@ -17,11 +17,17 @@ Score bands:
   0-49    CRITICAL
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

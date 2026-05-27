@@ -1,5 +1,6 @@
 """Alert search and summary tools — indexer queries for alert triage and investigation."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 import re
 
 from ..helpers import trim_alert
@@ -18,7 +19,13 @@ def _double_time_range(time_range: str) -> str:
     return f"now-{time_range}"
 
 
-def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _enrich_mitre_ids = ctx.enrich_mitre_ids
 
     @mcp.tool()
     async def alert_summary(time_range: str = "24h", min_level: int = 7) -> dict:

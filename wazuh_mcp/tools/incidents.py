@@ -1,5 +1,6 @@
 """Incident response tools — timeline, blast radius, report creation, and alert tagging."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import datetime
 import os
@@ -9,7 +10,15 @@ import httpx
 from ..helpers import trim_alert, time_window
 
 
-def register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incident_recommendations):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _require_writes = ctx.require_writes
+    _enrich_mitre_ids = ctx.enrich_mitre_ids
+    _incident_recommendations = ctx.incident_recommendations
 
     @mcp.tool()
     async def incident_timeline(

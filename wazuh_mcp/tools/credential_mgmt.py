@@ -9,6 +9,7 @@ Requires:
   - WAZUH_CRED_CREATED_AT=<unix-timestamp>  (optional, for age reporting)
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import os
 import time
@@ -17,7 +18,11 @@ from ..rbac import admin_only
 from ..validators import safe_validate, validate_free_text
 
 
-def register(mcp, wz, cfg, _require_writes):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    cfg = ctx.cfg
+    _require_writes = ctx.require_writes
 
     @mcp.tool()
     async def get_credential_age() -> dict:

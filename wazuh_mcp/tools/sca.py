@@ -1,10 +1,16 @@
 """Security Configuration Assessment tools — policies, failed checks, fleet scoring."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 from ..helpers import time_window
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def get_agent_sca_policies(agent_id: str) -> dict:

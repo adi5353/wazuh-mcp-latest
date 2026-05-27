@@ -1,10 +1,15 @@
 """MITRE ATT&CK tools — ruleset coverage analysis and gap detection."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 from ..helpers import time_window
 
 
-def register(mcp, wz, idx, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
 
     @mcp.tool()
     async def mitre_coverage_analysis() -> dict:

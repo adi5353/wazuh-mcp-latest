@@ -17,6 +17,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from wazuh_mcp.tool_context import ToolContext
 
 import pytest
 
@@ -479,7 +480,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_alert"]("nonexistent-id")
         assert "error" in result
         assert "not found" in result["error"].lower()
@@ -498,7 +500,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_alert"]("id", audience="hacker")
         assert "error" in result
 
@@ -517,7 +520,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_alert"]("abc123", audience="analyst")
         assert result["severity"] == "HIGH"
         assert result["agent"] == "web-01"
@@ -541,7 +545,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_alert"]("abc123", audience="tier1")
         assert "WHAT HAPPENED" in result["narrative"]
         assert "WHAT TO DO NEXT" in result["narrative"]
@@ -561,7 +566,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_alert"]("abc123", audience="ciso")
         assert "EXECUTIVE SUMMARY" in result["narrative"]
         assert result["severity"] == "CRITICAL"
@@ -581,7 +587,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_alert"]("abc123", audience="compliance")
         assert "COMPLIANCE EVENT RECORD" in result["narrative"]
         assert "PCI-DSS" in result["narrative"] or "HIPAA" in result["narrative"]
@@ -606,7 +613,8 @@ class TestExplainAlert:
             hit = self._make_mock_hit(level=level, alert_id=f"id-{level}")
             idx = self._make_idx(hits=[hit])
             registered.clear()
-            register(mcp, wz, idx, cfg, 10)
+            ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+            register(ctx)
             result = await registered["explain_alert"](f"id-{level}")
             assert result["severity"] == expected_sev, \
                 f"level {level} expected {expected_sev}, got {result['severity']}"
@@ -625,7 +633,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_recent_alerts"](time_range="1h", min_level=10)
         assert result["alerts_explained"] == 0
         assert "message" in result
@@ -648,7 +657,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         result = await registered["explain_recent_alerts"](time_range="1h", limit=5)
         assert result["alerts_explained"] == 2
         assert len(result["alerts"]) == 2
@@ -679,7 +689,8 @@ class TestExplainAlert:
 
         mcp.tool = capture_tool
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
         await registered["explain_recent_alerts"](limit=999)
         assert search_calls[0]["size"] <= 10
 
@@ -705,7 +716,9 @@ class TestExplainAlert:
             return {"ip": ip, "country": "Russia", "city": "Moscow", "isp": "AS123"}
 
         from wazuh_mcp.tools.explain_alert import register
-        register(mcp, wz, idx, cfg, 10, _geoip_lookup=mock_geo)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        ctx.geoip_lookup = mock_geo
+        register(ctx)
         result = await registered["explain_alert"]("abc123")
         assert geo_called == ["185.1.2.3"]
         assert "Russia" in result["narrative"]
@@ -839,5 +852,5 @@ class TestRegistryContent:
 
     def test_explain_alert_registered_in_server(self):
         server_src = Path("wazuh_mcp/server.py").read_text(encoding="utf-8")
-        assert "explain_alert" in server_src
-        assert "_explain_alert_module.register" in server_src
+        # With auto-discovery, the file is picked up via pkgutil.iter_modules
+        assert "explain_alert" in server_src or "pkgutil" in server_src

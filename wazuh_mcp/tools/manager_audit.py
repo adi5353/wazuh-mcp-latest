@@ -5,9 +5,16 @@ what API actions were performed, and by which user.
 Requires ADMIN role.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def search_manager_audit_log(

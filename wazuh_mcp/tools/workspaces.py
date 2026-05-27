@@ -14,6 +14,7 @@ Tools:
     export_workspace    — export workspace as JSON or Markdown
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import json
 import os
@@ -52,7 +53,10 @@ def _save_ws(ws: dict) -> None:
 _VALID_TYPES = {"note", "alert_id", "agent_id", "artifact", "timeline", "cve", "ip"}
 
 
-def register(mcp, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    cfg = ctx.cfg
+
     from ..validators import safe_validate, validate_free_text
 
     @mcp.tool()

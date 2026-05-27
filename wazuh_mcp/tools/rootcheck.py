@@ -3,9 +3,16 @@
 These tools expose Wazuh's rootkit hunter scan results per agent.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_agent_rootcheck_results(

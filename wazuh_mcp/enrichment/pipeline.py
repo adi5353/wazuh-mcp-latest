@@ -68,12 +68,13 @@ async def _enrich_reputation(alert: dict, wz: Any = None, idx: Any = None, cfg: 
     except ValueError:
         return
     try:
-        from ..tools.threat_intel import _vt_lookup, _abuse_lookup
-        vt, abuse = await asyncio.gather(
-            _vt_lookup(ip, cfg),
-            _abuse_lookup(ip, cfg),
+        from ..tools.threat_intel import _vt_get, _abuse_get
+        _rep_results: list[Any] = list(await asyncio.gather(
+            _vt_get(f"ip_addresses/{ip}"),
+            _abuse_get(ip),
             return_exceptions=True,
-        )
+        ))
+        vt, abuse = _rep_results[0], _rep_results[1]
         alert.setdefault("enrichment", {})["reputation"] = {
             "virustotal": vt if not isinstance(vt, Exception) else {"error": str(vt)},
             "abuseipdb": abuse if not isinstance(abuse, Exception) else {"error": str(abuse)},

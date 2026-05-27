@@ -6,12 +6,18 @@ assigns a composite incident score, and detects multi-stage attack chains.
 from __future__ import annotations
 
 import collections
+from ..tool_context import ToolContext
 from typing import Any
 
 from ..helpers import time_window
 
 
-def register(mcp: Any, wz: Any, idx: Any, cfg: Any, _cap: Any) -> None:
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz  = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def correlate_alerts(
@@ -67,7 +73,7 @@ def register(mcp: Any, wz: Any, idx: Any, cfg: Any, _cap: Any) -> None:
         from ..mitre_data import enrich_mitre_ids
 
         # ── Build clusters keyed by (src_ip or agent_id) + tactic ────────────
-        Cluster = collections.defaultdict(lambda: {
+        Cluster: Any = collections.defaultdict(lambda: {
             "alerts": [], "agents": set(), "src_ips": set(),
             "tactics": set(), "technique_ids": set(),
             "max_level": 0, "score": 0,

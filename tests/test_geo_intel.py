@@ -5,6 +5,7 @@ import asyncio
 import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from wazuh_mcp.tool_context import ToolContext
 
 
 # ── F8: Extended GeoIP & ASN Intelligence ────────────────────────────────────
@@ -50,7 +51,7 @@ class TestGeoIntel:
                 return decorator
             mcp.tool = capture_tool
             from wazuh_mcp.tools import geo_intel
-            geo_intel.register(mcp, None, None, None)
+            geo_intel.register(ToolContext(mcp=mcp, wz=None, idx=None, cfg=None, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: []))
             result = await registered_fn["enrich_ip_extended"]("192.168.1.100")
             assert result["classification"] == "private/rfc1918"
         asyncio.run(run())
@@ -73,7 +74,7 @@ class TestGeoIntel:
             with patch.object(geo_intel, "_ipinfo_get", return_value=mock_ipinfo), \
                  patch.object(geo_intel, "_ip_api_get", return_value=mock_ipapi), \
                  patch.object(geo_intel, "_is_tor_exit", return_value=False):
-                geo_intel.register(mcp, None, None, None)
+                geo_intel.register(ToolContext(mcp=mcp, wz=None, idx=None, cfg=None, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: []))
                 result = await registered_fn["enrich_ip_extended"]("54.1.2.3")
 
             assert result["ip"] == "54.1.2.3"
@@ -97,7 +98,7 @@ class TestGeoIntel:
             with patch.object(geo_intel, "_ipinfo_get", return_value={}), \
                  patch.object(geo_intel, "_ip_api_get", return_value={}), \
                  patch.object(geo_intel, "_is_tor_exit", return_value=True):
-                geo_intel.register(mcp, None, None, None)
+                geo_intel.register(ToolContext(mcp=mcp, wz=None, idx=None, cfg=None, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: []))
                 result = await registered_fn["enrich_ip_extended"]("185.220.101.1")
 
             assert result["classification"] == "tor-exit-node"
@@ -116,7 +117,7 @@ class TestGeoIntel:
                 return decorator
             mcp.tool = capture_tool
             from wazuh_mcp.tools import geo_intel
-            geo_intel.register(mcp, None, None, None)
+            geo_intel.register(ToolContext(mcp=mcp, wz=None, idx=None, cfg=None, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: []))
             result = await registered_fn["classify_ip_infrastructure"]("10.10.10.1")
             assert result["classification"] == "private/rfc1918"
         asyncio.run(run())
@@ -139,7 +140,8 @@ class TestThreatFeeds:
         idx = AsyncMock()
         cfg = MagicMock()
         require_writes = MagicMock(return_value=None)
-        threat_feeds.register(mcp, wz, idx, cfg, require_writes)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        threat_feeds.register(ctx)
         return registered, threat_feeds
 
     def test_list_threat_feeds_returns_all_feeds(self):
@@ -210,7 +212,8 @@ class TestThreatFeeds:
                     ]
                 }
             }
-            tf.register(mcp2, AsyncMock(), idx, MagicMock(), MagicMock(return_value=None))
+            ctx2 = ToolContext(mcp=mcp2, wz=AsyncMock(), idx=idx, cfg=MagicMock(), cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+            tf.register(ctx2)
             result = await reg2["correlate_alerts_with_feed"]("feodo", hours=24)
             assert result["matches_found"] == 1
             assert result["severity"] == "critical"
@@ -245,7 +248,8 @@ class TestPlaybooks:
                 return fn
             return dec
         mcp.tool = capture_tool
-        playbooks.register(mcp, AsyncMock(), AsyncMock(), MagicMock())
+        ctx = ToolContext(mcp=mcp, wz=AsyncMock(), idx=AsyncMock(), cfg=MagicMock(), cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        playbooks.register(ctx)
         return registered, playbooks
 
     def test_list_playbooks_returns_all(self):
@@ -334,7 +338,8 @@ class TestNetworkTopology:
         wz = AsyncMock()
         idx = AsyncMock()
         cfg = MagicMock()
-        network_topology.register(mcp, wz, idx, cfg, None)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        network_topology.register(ctx)
         return registered, wz, idx, network_topology
 
     def test_subnet_key_ipv4(self):
@@ -423,7 +428,8 @@ class TestAutonomousSOC:
         idx = AsyncMock()
         cfg = MagicMock()
         cfg.slack_bot_token = ""
-        autonomous_soc.register(mcp, wz, idx, cfg)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        autonomous_soc.register(ctx)
         return registered, autonomous_soc
 
     def test_get_autonomous_status_not_running(self):

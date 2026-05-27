@@ -1,5 +1,6 @@
 """Threat intelligence enrichment — IP reputation, file hash lookup, and geo lookup."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import logging
@@ -105,7 +106,13 @@ async def _abuse_get(ip: str) -> dict | None:
         return None
 
 
-def register(mcp, wz, idx, cfg, _geoip_lookup):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _geoip_lookup = ctx.geoip_lookup
+
     from ..validators import safe_validate, validate_ip_address, validate_ip_list
 
     @mcp.tool()

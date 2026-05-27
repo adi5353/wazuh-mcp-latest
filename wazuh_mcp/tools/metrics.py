@@ -1,5 +1,6 @@
 """MCP server self-monitoring tools — Prometheus metrics, tool usage stats, slow query detection."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import os
 import time
@@ -30,7 +31,13 @@ def record_tool_call(tool_name: str, elapsed: float, had_error: bool = False) ->
         _call_durations[tool_name] = buf[-_MAX_SAMPLES:]
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_mcp_server_metrics() -> dict:

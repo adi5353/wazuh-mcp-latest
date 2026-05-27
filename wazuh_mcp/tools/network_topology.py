@@ -6,6 +6,7 @@ subnet, exposed ports per node, and peer communications from alert data.
 Tools: get_network_topology, get_agent_neighbors, map_subnet_exposure
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import ipaddress
@@ -31,7 +32,12 @@ async def _get_agent_ports(wz, agent_id: str) -> list[dict]:
         return []
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def get_network_topology(subnet_prefix: int = 24) -> dict:
@@ -67,8 +73,8 @@ def register(mcp, wz, idx, cfg, _cap):
             *[_get_agent_ports(wz, a.get("id", "")) for a in active],
             return_exceptions=True,
         )
-        port_map = {
-            a.get("id", ""): (r if not isinstance(r, Exception) else [])
+        port_map: dict[str, list[dict]] = {
+            a.get("id", ""): (r if not isinstance(r, BaseException) else [])
             for a, r in zip(active, port_results)
         }
 
@@ -206,7 +212,7 @@ def register(mcp, wz, idx, cfg, _cap):
         all_ports: dict[int, int] = defaultdict(int)
         nodes = []
         for ag, ports in zip(in_subnet, port_results):
-            port_list = ports if not isinstance(ports, Exception) else []
+            port_list: list[dict] = ports if not isinstance(ports, BaseException) else []
             for p in port_list:
                 port_num = p.get("local_port") or p.get("port") or 0
                 if port_num:

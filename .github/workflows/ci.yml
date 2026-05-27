@@ -23,8 +23,6 @@ jobs:
         run: ruff check wazuh_mcp
       - name: mypy
         run: mypy wazuh_mcp --ignore-missing-imports --no-error-summary
-        # Informational on existing codebase; errors tracked but not blocking
-        continue-on-error: true
 
   # ── 2. Security scan ──────────────────────────────────────────────────────
   security:

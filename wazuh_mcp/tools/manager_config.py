@@ -3,6 +3,7 @@
 Reads ossec.conf sections via the Manager REST API.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 _COMMON_SECTIONS = [
     "global", "alerts", "logging", "remote", "rootcheck", "syscheck",
@@ -11,7 +12,13 @@ _COMMON_SECTIONS = [
 ]
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def list_manager_config_sections() -> dict:

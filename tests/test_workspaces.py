@@ -2,7 +2,8 @@
 import os
 import json
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from wazuh_mcp.tool_context import ToolContext
 
 
 def _make_env(tmp_path):
@@ -13,7 +14,8 @@ def _make_env(tmp_path):
 
     with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
         from wazuh_mcp.tools.workspaces import register
-        register(mcp, cfg)
+        ctx = ToolContext(mcp=mcp, wz=None, idx=None, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        register(ctx)
     return tools, cfg
 
 

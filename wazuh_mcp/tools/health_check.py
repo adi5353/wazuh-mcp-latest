@@ -5,12 +5,19 @@ Wazuh Indexer (OpenSearch), with latency measurements and a clear
 overall status. Ideal as the first tool to run in any SOC session.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import time
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_wazuh_api_health() -> dict:

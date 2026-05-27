@@ -21,6 +21,7 @@ Tools:
   configure_scheduled_reports  — set shift handover and digest schedule
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import logging
@@ -521,7 +522,12 @@ async def _monitor_loop(wz, idx, cfg, interval: int, severity_threshold: int,
 
 
 # ── Tool registration ─────────────────────────────────────────────────────────
-def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    tool_registry = ctx.tool_registry
 
     @mcp.tool()
     async def start_autonomous_monitor(

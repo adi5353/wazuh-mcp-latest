@@ -1,5 +1,6 @@
 """Compliance tools — framework summaries, control drill-down, and report generation."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import datetime
 
@@ -82,7 +83,12 @@ for _ctrl in _ISO27001_CONTROLS:
         _GROUP_TO_ISO.setdefault(_grp, []).append(_ctrl["id"])
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def compliance_summary(
@@ -1091,4 +1097,4 @@ def register(mcp, wz, idx, cfg, _cap):
             ),
         }
 
-    return {"generate_compliance_report": generate_compliance_report}
+    ctx.shared["generate_compliance_report"] = generate_compliance_report

@@ -1,5 +1,6 @@
-"""Reporting tools — alert volume comparison, rule anomaly detection, weekly summary, shift handover."""
+﻿"""Reporting tools â€” alert volume comparison, rule anomaly detection, weekly summary, shift handover."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import datetime
@@ -7,7 +8,13 @@ import datetime
 from ..helpers import time_window
 
 
-def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _enrich_mitre_ids = ctx.enrich_mitre_ids
 
     @mcp.tool()
     async def compare_alert_volume(
@@ -223,7 +230,7 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
                 "prior_week": prior_count,
                 "trend_pct": trend_pct,
                 "trend_direction": (
-                    "↑" if (trend_pct or 0) > 0 else "↓" if (trend_pct or 0) < 0 else "="
+                    "â†‘" if (trend_pct or 0) > 0 else "â†“" if (trend_pct or 0) < 0 else "="
                 ),
             },
             "top_rules": [
@@ -366,20 +373,20 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
             nr = len(rule_anom.get("new_rules", []))
             sp = len(rule_anom.get("spikes", []))
             if nr:
-                attention.append(f"{nr} new rule(s) firing this shift — review rule_anomalies.new_rules")
+                attention.append(f"{nr} new rule(s) firing this shift â€” review rule_anomalies.new_rules")
             if sp:
-                attention.append(f"{sp} rule spike(s) detected — review rule_anomalies.spikes")
+                attention.append(f"{sp} rule spike(s) detected â€” review rule_anomalies.spikes")
         if isinstance(volume, dict):
             dp = volume.get("delta_pct")
             if isinstance(dp, (int, float)) and abs(dp) > 25:
-                attention.append(f"Alert volume {dp:+.1f}% vs previous period — investigate cause")
+                attention.append(f"Alert volume {dp:+.1f}% vs previous period â€” investigate cause")
 
         return {
             "shift_handover": {
                 "analyst": analyst_name,
                 "shift_duration": shift_duration,
                 "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
-                "attention_items": attention or ["No significant anomalies — clean handover."],
+                "attention_items": attention or ["No significant anomalies â€” clean handover."],
             },
             "alert_overview": safe(s),
             "brute_force_activity": safe(authfail),
@@ -389,7 +396,6 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
             "rule_anomalies": safe(rule_anom),
         }
 
-    return {
-        "generate_shift_handover": generate_shift_handover,
-        "generate_weekly_summary": generate_weekly_summary,
-    }
+    ctx.shared["generate_shift_handover"] = generate_shift_handover
+    ctx.shared["generate_weekly_summary"] = generate_weekly_summary
+

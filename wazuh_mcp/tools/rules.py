@@ -1,5 +1,6 @@
 """Rules and decoder tools — lookup, search, logtest, coverage analysis, rollback, and decoder test."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 import json as _json
 
 from ..rbac import analyst_only, admin_only
@@ -9,7 +10,12 @@ from ..rbac import analyst_only, admin_only
 _rule_backups: dict[str, str] = {}
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def get_rule_details(rule_id: str) -> dict:

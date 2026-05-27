@@ -3,7 +3,7 @@ import re
 import uuid
 import structlog
 import logging
-from typing import Any
+from typing import Any, MutableMapping, Union
 
 # Fields whose values must never appear in log output.
 _SENSITIVE_KEYS = re.compile(
@@ -15,7 +15,9 @@ _SENSITIVE_KEYS = re.compile(
 _LOG_FORMAT = os.getenv("WAZUH_MCP_LOG_FORMAT", "json").lower()
 
 
-def _redact_sensitive(logger: Any, method: str, event_dict: dict) -> dict:  # noqa: ARG001
+def _redact_sensitive(
+    logger: Any, method: str, event_dict: MutableMapping[str, Any]
+) -> Union[MutableMapping[str, Any], str, bytes, bytearray, tuple[Any, ...]]:  # noqa: ARG001
     """structlog processor: replace sensitive field values with [REDACTED]."""
     for key in list(event_dict.keys()):
         if _SENSITIVE_KEYS.search(key):

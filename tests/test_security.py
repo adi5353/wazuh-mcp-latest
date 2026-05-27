@@ -6,6 +6,7 @@ import os
 import time
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
+from wazuh_mcp.tool_context import ToolContext
 
 
 # ── H1: RBAC ─────────────────────────────────────────────────────────────────
@@ -289,7 +290,8 @@ class TestRBACOnLogTestTools:
         idx = MagicMock()
         cfg = MagicMock()
         from wazuh_mcp.tools import rules
-        rules.register(mcp, wz, idx, cfg, lambda n: n)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        rules.register(ctx)
         return tools, wz
 
     def test_viewer_blocked_from_test_log(self):
@@ -333,7 +335,8 @@ class TestThreatHuntingValidation:
         })
         cfg = MagicMock()
         from wazuh_mcp.tools import threat_hunting
-        threat_hunting.register(mcp, wz, idx, cfg)
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        threat_hunting.register(ctx)
         return tools
 
     def test_invalid_time_range_lateral_movement(self):
@@ -388,7 +391,8 @@ class TestSuppressionValidation:
         cfg = MagicMock()
         from wazuh_mcp.tools import suppression
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
-            suppression.register(mcp, wz, idx, cfg, lambda: None)
+            ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+            suppression.register(ctx)
         return tools
 
     def test_invalid_time_range_in_list_suppressed(self):
@@ -682,11 +686,11 @@ class TestInputSanitizer:
 
 class TestOutputSanitizer:
     def _san(self, value):
-        from wazuh_mcp.audit import sanitize_response, _sanitize_string
+        from wazuh_mcp.audit import sanitize_response, sanitize_string
         if isinstance(value, dict):
             return sanitize_response(value)
         if isinstance(value, str):
-            return _sanitize_string(value)
+            return sanitize_string(value)
         return value
 
     # ── Extended prompt injection patterns ───────────────────────────────────

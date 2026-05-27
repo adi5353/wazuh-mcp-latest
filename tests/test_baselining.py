@@ -5,6 +5,7 @@ import asyncio
 import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from wazuh_mcp.tool_context import ToolContext
 
 
 # ── F2: Behavioral Baselining ─────────────────────────────────────────────────
@@ -22,7 +23,9 @@ class TestBaseline:
         mcp.tool = tool
         wz = AsyncMock()
         idx = AsyncMock()
-        baseline.register(mcp, wz, idx, MagicMock(), lambda x: x)
+        cfg = MagicMock()
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        baseline.register(ctx)
         return reg, wz, idx, baseline
 
     def test_deviation_score_zero_for_matching_mean(self):
@@ -133,7 +136,9 @@ class TestUEBA:
         mcp.tool = tool
         wz = AsyncMock()
         idx = AsyncMock()
-        ueba.register(mcp, wz, idx, MagicMock(), lambda x: x)
+        cfg = MagicMock()
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+        ueba.register(ctx)
         return reg, wz, idx, ueba
 
     def test_analyse_activity_empty(self):
@@ -228,7 +233,9 @@ class TestScheduler:
         # Patch file I/O so tests don't write to disk
         with patch.object(scheduler, "_load_schedules"), \
              patch.object(scheduler, "_save_schedules"):
-            scheduler.register(mcp, wz, idx, MagicMock())
+            cfg = MagicMock()
+            ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+            scheduler.register(ctx)
         return reg, wz, idx, scheduler
 
     def test_list_schedules_empty(self):

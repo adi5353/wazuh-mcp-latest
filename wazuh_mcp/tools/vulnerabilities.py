@@ -1,5 +1,6 @@
 """Vulnerability tools — fleet exposure, per-agent CVEs, patch prioritisation."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import httpx
 
@@ -52,7 +53,12 @@ async def _fetch_kev() -> dict[str, dict]:
         return {}
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def vulnerability_summary(min_severity: str = "High") -> dict:

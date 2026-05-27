@@ -8,6 +8,7 @@ Configuration:
     AZURE_DEVOPS_TOKEN    — Personal Access Token with Work Items (Read & Write) scope
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import os
 import base64
@@ -30,7 +31,13 @@ def _base_url() -> str:
     return f"https://dev.azure.com/{org}/{project}/_apis"
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def create_azure_devops_work_item(

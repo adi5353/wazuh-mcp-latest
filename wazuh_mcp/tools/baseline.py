@@ -7,6 +7,7 @@ deviations against the baseline.
 Tools: compute_agent_baseline, score_agent_deviation, list_anomalous_agents
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import logging
@@ -160,7 +161,13 @@ def _mean_std(values: list[float]) -> tuple[float, float]:
     return mean, math.sqrt(variance)
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+
     _load_all_baselines_from_disk()  # populate cache once at startup
 
     @mcp.tool()

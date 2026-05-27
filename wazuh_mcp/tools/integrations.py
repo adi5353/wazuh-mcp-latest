@@ -1,5 +1,6 @@
 """SOAR integration tools — Jira and TheHive ticketing."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import datetime
 import logging
@@ -12,7 +13,11 @@ log = logging.getLogger("wazuh-mcp")
 _SOAR_TIMEOUT = 15
 
 
-def register(mcp, wz, idx, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
 
     def _jira_url()     -> str: return os.getenv("JIRA_URL", "")
     def _jira_user()    -> str: return os.getenv("JIRA_USER", "")

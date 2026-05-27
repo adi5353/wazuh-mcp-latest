@@ -1,5 +1,7 @@
 """Notification tools — Slack alerts, shift handover delivery, weekly summary delivery, email compliance report."""
 from __future__ import annotations
+from ..tool_context import ToolContext
+from typing import Any
 
 import datetime
 import logging
@@ -15,12 +17,14 @@ log = logging.getLogger("wazuh-mcp")
 _SOAR_TIMEOUT = 15
 
 
-def register(
-    mcp, wz, idx, cfg,
-    generate_shift_handover,
-    generate_weekly_summary,
-    generate_compliance_report,
-):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz  = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    generate_shift_handover: Any = ctx.shared.get("generate_shift_handover")
+    generate_weekly_summary: Any = ctx.shared.get("generate_weekly_summary")
+    generate_compliance_report: Any = ctx.shared.get("generate_compliance_report")
 
     _SLACK_WEBHOOK   = os.getenv("SLACK_WEBHOOK_URL", "")
     _SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")

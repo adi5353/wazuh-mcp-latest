@@ -1,6 +1,7 @@
 """Tests for F6: CVE watchlist and patch tracking."""
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
+from wazuh_mcp.tool_context import ToolContext
 
 
 def _make_env():
@@ -12,7 +13,8 @@ def _make_env():
     cfg = MagicMock()
 
     from wazuh_mcp.tools.cve_watchlist import register
-    register(mcp, wz, idx, cfg)
+    ctx = ToolContext(mcp=mcp, wz=wz, idx=idx, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+    register(ctx)
     return tools, wz, idx, cfg
 
 

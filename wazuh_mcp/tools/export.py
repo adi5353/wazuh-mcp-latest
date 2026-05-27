@@ -4,6 +4,7 @@ Returns file content as a string. For large exports, combine with the
 workspace tools to save to a file.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import csv
 import io
@@ -24,7 +25,13 @@ def _to_csv(rows: list[dict], fieldnames: list[str] | None = None) -> str:
     return buf.getvalue()
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def export_alerts_csv(
@@ -90,8 +97,8 @@ def register(mcp, wz, idx, cfg, _cap, _truncate):
             }
             try:
                 res = await idx.search(body, index=cfg.alerts_index)
-                rows = [_hit_to_row(h) for h in res["hits"]["hits"]]
-                return _to_csv(rows, _CSV_FIELDS) or "No alerts found for the specified criteria."
+                export_rows = [_hit_to_row(h) for h in res["hits"]["hits"]]
+                return _to_csv(export_rows, _CSV_FIELDS) or "No alerts found for the specified criteria."
             except Exception as e:
                 return f"ERROR: {e}"
 

@@ -4,13 +4,20 @@ Query and verify the integrity of the Wazuh MCP audit log.
 Requires ADMIN role.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import json
 import os
 from pathlib import Path
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_audit_log_stats() -> dict:

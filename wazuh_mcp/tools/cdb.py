@@ -2,6 +2,7 @@
 and backup/restore CDB lists for disaster recovery.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import json
 import os
@@ -11,7 +12,12 @@ from pathlib import Path
 from ..rbac import responder_only, admin_only
 
 
-def register(mcp, wz, idx, cfg, _require_writes):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _require_writes = ctx.require_writes
 
     @mcp.tool()
     async def list_cdb_lists() -> dict:

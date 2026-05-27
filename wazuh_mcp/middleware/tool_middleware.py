@@ -42,7 +42,7 @@ class ToolMiddleware:
             async def wrapped(*fn_args: Any, **fn_kwargs: Any) -> Any:
                 from ..input_sanitizer import sanitize_input_value
                 from ..identity import record_injection_attempt
-                from ..audit import sanitize_response, cap_response_size, _sanitize_string
+                from ..audit import sanitize_response, cap_response_size, sanitize_string
 
                 # ── INPUT sanitization ────────────────────────────────────
                 clean_kwargs: dict = {}
@@ -76,11 +76,11 @@ class ToolMiddleware:
                 if isinstance(result, dict):
                     result = sanitize_response(result)
                 elif isinstance(result, str):
-                    result = _sanitize_string(result)
+                    result = sanitize_string(result)
                 elif isinstance(result, list):
                     result = [
                         sanitize_response(item) if isinstance(item, dict)
-                        else (_sanitize_string(item) if isinstance(item, str) else item)
+                        else (sanitize_string(item) if isinstance(item, str) else item)
                         for item in result
                     ]
 

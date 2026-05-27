@@ -1,10 +1,16 @@
 """Agent onboarding tools — enrollment command generation, never-connected agents, health checklist."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import os
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def generate_enrollment_command(

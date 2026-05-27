@@ -7,6 +7,7 @@ survive server restarts.
 Tools: create_report_schedule, list_report_schedules, delete_report_schedule
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import json
@@ -166,7 +167,12 @@ def _ensure_scheduler_running(wz, idx, cfg) -> None:
         _SCHEDULER_TASK = loop.create_task(_scheduler_loop(wz, idx, cfg))
 
 
-def register(mcp, wz, idx, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+
     _load_schedules()
 
     @mcp.tool()

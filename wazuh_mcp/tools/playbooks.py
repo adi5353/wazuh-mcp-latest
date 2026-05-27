@@ -7,6 +7,7 @@ consistent response procedures.
 Tools: list_playbooks, run_playbook, get_playbook_status, resume_playbook
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import logging
@@ -17,7 +18,7 @@ from typing import Any
 
 log = logging.getLogger("wazuh-mcp")
 
-_BUILTIN_PLAYBOOKS = [
+_BUILTIN_PLAYBOOKS: list[dict[str, Any]] = [
     {
         "id": "isolate-compromised-host",
         "name": "Isolate Compromised Host",
@@ -230,7 +231,12 @@ async def _run_rollback(
     return results
 
 
-def register(mcp, wz, idx, cfg, tool_registry: dict | None = None):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    tool_registry = ctx.tool_registry
 
     def _get_playbook(playbook_id: str) -> dict | None:
         for pb in _BUILTIN_PLAYBOOKS:

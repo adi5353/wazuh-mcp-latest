@@ -1,5 +1,6 @@
 """Active response tools — list AR actions, correlate with alerts, audit effectiveness."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 from ..validators import safe_validate, validate_time_range
 
@@ -7,7 +8,12 @@ AR_RULE_IDS = ["601", "602", "603", "651", "652"]
 AR_GROUPS = ["active_response", "ar"]
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def get_active_responses(time_range: str = "24h", limit: int = 50) -> dict:
@@ -68,7 +74,7 @@ def register(mcp, wz, idx, cfg, _cap):
         if not src_ip and not agent_id:
             return {"error": "Provide src_ip or agent_id"}
 
-        filters = [{"range": {"@timestamp": {"gte": f"now-{time_range}"}}}]
+        filters: list[dict] = [{"range": {"@timestamp": {"gte": f"now-{time_range}"}}}]
         if src_ip:
             filters.append({"term": {"data.srcip": src_ip}})
         if agent_id:

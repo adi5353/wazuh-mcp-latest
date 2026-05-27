@@ -98,7 +98,7 @@ class WazuhClient:
         log.info("Wazuh Manager: authenticated, token cached")
 
     async def request(self, method: str, path: str, **kwargs: Any) -> dict:
-        last_exc: Exception | None = None
+        last_exc: BaseException = RuntimeError("unreachable")
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 return await self._request_once(method, path, **kwargs)
@@ -107,7 +107,7 @@ class WazuhClient:
                     raise
                 last_exc = exc
                 await _retry_sleep(attempt)
-        raise last_exc  # type: ignore[misc]  — unreachable but satisfies type checker
+        raise last_exc  # unreachable — loop always raises or returns first
 
     async def _request_once(self, method: str, path: str, **kwargs: Any) -> dict:
         if not self._token or time.time() > self._token_expires:

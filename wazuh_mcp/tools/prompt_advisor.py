@@ -6,6 +6,7 @@ the PoC, routing guidance, and a token-budget advisor to keep responses
 within safe limits for any downstream LLM (Groq, OpenAI, local models).
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import json
 
@@ -107,7 +108,13 @@ _DEFAULT_TOKEN_ESTIMATE = 600   # for any tool not in the table
 _GROQ_TPM_LIMIT = 12_000        # Groq llama-3.3-70b free-tier limit
 
 
-def register(mcp, wz, idx, cfg, _cap, _truncate):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _truncate = ctx.truncate
 
     @mcp.tool()
     async def get_recommended_system_prompt(

@@ -1,15 +1,17 @@
 """Quick-win tools: ABAC status, natural-language → OpenSearch DSL, auto-triage."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import re
 import datetime
 import time as _time
+from typing import Any
 
 
 # ── Natural-language patterns → OpenSearch DSL fragments ──────────────────────
 
-_TIME_PATTERNS: list[tuple[re.Pattern, str]] = [
+_TIME_PATTERNS: list[tuple[re.Pattern, Any]] = [
     (re.compile(r'\b(last\s+)?(\d+)\s+minute', re.I), lambda m: f"{m.group(2)}m"),
     (re.compile(r'\b(last\s+)?(\d+)\s+hour',   re.I), lambda m: f"{m.group(2)}h"),
     (re.compile(r'\b(last\s+)?(\d+)\s+day',    re.I), lambda m: f"{m.group(2)}d"),
@@ -112,7 +114,12 @@ def _extract_min_level(text: str) -> int:
     return 7
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def get_abac_status() -> dict:
@@ -220,7 +227,7 @@ def register(mcp, wz, idx, cfg, _cap):
                     auth=(cfg.indexer_user, cfg.indexer_pass),
                     timeout=8,
                 ) as _client:
-                    vr = await _client.get(validate_url, json=validate_body)
+                    vr = await _client.post(validate_url, json=validate_body)
                     vdata = vr.json()
                     if not vdata.get("valid", True):
                         result["execute_error"] = f"Query validation failed: {vdata.get('error', 'invalid DSL')}"

@@ -4,11 +4,18 @@ Translates raw Wazuh alert JSON into a plain-English summary that any analyst
 (Tier 1, CISO, or compliance officer) can act on immediately.
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import datetime
 
 
-def register(mcp, wz, idx, cfg, _cap, _geoip_lookup=None):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
+    _geoip_lookup = ctx.geoip_lookup
 
     @mcp.tool()
     async def explain_alert(alert_id: str, audience: str = "analyst") -> dict:
@@ -81,7 +88,7 @@ def register(mcp, wz, idx, cfg, _cap, _geoip_lookup=None):
 
         # IP geo enrichment (best-effort)
         geo_context = ""
-        if src_ip and _geoip_lookup:
+        if src_ip and _geoip_lookup is not None:
             try:
                 geo = await _geoip_lookup(src_ip)
                 if "country" in geo:
@@ -207,7 +214,7 @@ def register(mcp, wz, idx, cfg, _cap, _geoip_lookup=None):
             src_ip = (doc.get("data", {}).get("srcip") or
                       doc.get("data", {}).get("src_ip") or "")
             geo_context = ""
-            if src_ip and _geoip_lookup:
+            if src_ip and _geoip_lookup is not None:
                 try:
                     geo = await _geoip_lookup(src_ip)
                     if "country" in geo:

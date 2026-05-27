@@ -1,5 +1,6 @@
 """Alert suppression and noise scoring tools — FP lifecycle management and rule tuning."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import datetime
 import logging
@@ -13,7 +14,12 @@ from ..validators import safe_validate, validate_time_range, validate_rule_id
 log = logging.getLogger("wazuh-mcp")
 
 
-def register(mcp, wz, idx, cfg, _require_writes):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _require_writes = ctx.require_writes
 
     @mcp.tool()
     async def list_suppressed_rules(

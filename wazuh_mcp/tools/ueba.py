@@ -7,6 +7,7 @@ credential-based attacks (T1078) invisible to per-agent rules.
 Tools: get_user_activity_profile, detect_user_anomalies, list_privileged_escalations
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import asyncio
 import logging
@@ -159,7 +160,12 @@ def _analyse_activity(events: list[dict], username: str) -> dict:
     }
 
 
-def register(mcp, wz, idx, cfg, _cap):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+    _cap = ctx.cap
 
     @mcp.tool()
     async def get_user_activity_profile(username: str, hours: int = 24) -> dict:
@@ -432,6 +438,6 @@ def register(mcp, wz, idx, cfg, _cap):
             "total_escalation_events": len(events),
             "unique_users": len(by_user),
             "by_user": summary[:20],
-            "severity": "high" if any(s["escalation_count"] > 5 for s in summary) else
+            "severity": "high" if any(int(s["escalation_count"]) > 5 for s in summary) else  # type: ignore[arg-type]
                         "medium" if summary else "none",
         }

@@ -13,6 +13,7 @@ Wazuh rule ID ranges:
     200000+             — reserved for decoders
 """
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import xml.etree.ElementTree as ET
 import textwrap
@@ -81,7 +82,12 @@ _RULE_TEMPLATE = """\
 </group>"""
 
 
-def register(mcp, wz, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
+
     from ..validators import safe_validate, validate_free_text
 
     @mcp.tool()

@@ -1,20 +1,27 @@
 """Cluster health tools — Wazuh cluster status and event queue monitoring."""
 from __future__ import annotations
+from ..tool_context import ToolContext
 
 import httpx
+from typing import Any
 
 
-def register(mcp, wz, idx, cfg):
+def register(ctx: ToolContext) -> None:
+    mcp = ctx.mcp
+    wz = ctx.wz
+    idx = ctx.idx
+    cfg = ctx.cfg
 
     @mcp.tool()
     async def get_cluster_health() -> dict:
         """Full health check of Wazuh cluster nodes and the Indexer (OpenSearch) cluster."""
         import asyncio
-        cluster_status, cluster_nodes = await asyncio.gather(
+        results: list[Any] = list(await asyncio.gather(
             wz.request("GET", "/cluster/status"),
             wz.request("GET", "/cluster/nodes"),
             return_exceptions=True,
-        )
+        ))
+        cluster_status, cluster_nodes = results[0], results[1]
         indexer_health: dict = {}
         try:
             async with httpx.AsyncClient(

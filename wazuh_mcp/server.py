@@ -26,11 +26,12 @@ import logging
 import os
 import sys
 import time
+from typing import Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from .audit import audit_logger, sanitize_response, cap_response_size, _sanitize_string
+from .audit import audit_logger, sanitize_response, cap_response_size, sanitize_string
 from .input_sanitizer import sanitize_input_value
 from .config import Config
 from .identity import resolve_role_for_key, set_session_role, record_injection_attempt
@@ -117,61 +118,6 @@ _TOOL_REGISTRY: dict[str, Any] = {}
 _tool_mw = ToolMiddleware(mcp, _TOOL_REGISTRY)
 _tool_mw.install()
 
-# ── Domain tool modules ────────────────────────────────────────────────────────
-from .tools import agents as _agents_module  # noqa: E402
-from .tools import alerts as _alerts_module  # noqa: E402
-from .tools import vulnerabilities as _vulns_module  # noqa: E402
-from .tools import active_response as _ar_module  # noqa: E402
-from .tools import fim as _fim_module  # noqa: E402
-from .tools import compliance as _compliance_module  # noqa: E402
-from .tools import fleet as _fleet_module  # noqa: E402
-from .tools import sca as _sca_module  # noqa: E402
-from .tools import cdb as _cdb_module  # noqa: E402
-from .tools import rules as _rules_module  # noqa: E402
-from .tools import threat_intel as _ti_module  # noqa: E402
-from .tools import threat_hunting as _hunting_module  # noqa: E402
-from .tools import mitre as _mitre_module  # noqa: E402
-from .tools import incidents as _incidents_module  # noqa: E402
-from .tools import reporting as _reporting_module  # noqa: E402
-from .tools import integrations as _integrations_module  # noqa: E402
-from .tools import notifications as _notifications_module  # noqa: E402
-from .tools import onboarding as _onboarding_module  # noqa: E402
-from .tools import cluster as _cluster_module  # noqa: E402
-from .tools import archive as _archive_module  # noqa: E402
-from .tools import suppression as _suppression_module  # noqa: E402
-from .tools import agent_health as _agent_health_module  # noqa: E402
-from .tools import credential_mgmt as _cred_module  # noqa: E402
-from .tools import cve_watchlist as _cve_watchlist_module  # noqa: E402
-from .tools import rule_wizard as _rule_wizard_module  # noqa: E402
-from .tools import workspaces as _workspaces_module  # noqa: E402
-from .tools import geo_intel as _geo_intel_module  # noqa: E402
-from .tools import threat_feeds as _threat_feeds_module  # noqa: E402
-from .tools import playbooks as _playbooks_module  # noqa: E402
-from .tools import network_topology as _net_topology_module  # noqa: E402
-from .tools import autonomous_soc as _autonomous_soc_module  # noqa: E402
-from .tools import baseline as _baseline_module  # noqa: E402
-from .tools import ueba as _ueba_module  # noqa: E402
-from .tools import scheduler as _scheduler_module  # noqa: E402
-from .tools import agent_upgrades as _agent_upgrades_module  # noqa: E402
-from .tools import audit_mgmt as _audit_mgmt_module  # noqa: E402
-from .tools import azure_devops as _azure_devops_module  # noqa: E402
-from .tools import export as _export_module  # noqa: E402
-from .tools import index_mgmt as _index_mgmt_module  # noqa: E402
-from .tools import manager_audit as _manager_audit_module  # noqa: E402
-from .tools import manager_config as _manager_config_module  # noqa: E402
-from .tools import pagerduty as _pagerduty_module  # noqa: E402
-from .tools import rootcheck as _rootcheck_module  # noqa: E402
-from .tools import servicenow as _servicenow_module  # noqa: E402
-from .tools import syslog_config as _syslog_config_module  # noqa: E402
-from .tools import health_check as _health_check_module  # noqa: E402
-from .tools import prompt_advisor as _prompt_advisor_module  # noqa: E402
-from .tools import explain_alert as _explain_alert_module  # noqa: E402
-from .tools import roi as _roi_module  # noqa: E402
-from .tools import quick_wins as _quick_wins_module  # noqa: E402
-from .tools import metrics as _metrics_module  # noqa: E402
-from .tools import correlation as _correlation_module  # noqa: E402
-
-
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
 def _require_writes() -> dict | None:
@@ -196,71 +142,58 @@ def _truncate(s: str | None, n: int = 300) -> str | None:
     return s if len(s) <= n else s[:n] + "…"
 
 
-# _MITRE_MAP, _enrich_mitre_ids → wazuh_mcp/mitre_data.py
-# _geoip_lookup              → wazuh_mcp/geo.py
-# _incident_recommendations  → wazuh_mcp/triage.py
+# ── Build a single ToolContext shared by all modules ──────────────────────────
+# _enrich_mitre_ids → wazuh_mcp/mitre_data.py
+# _geoip_lookup     → wazuh_mcp/geo.py
+# _incident_recommendations → wazuh_mcp/triage.py
 
+from .tool_context import ToolContext  # noqa: E402
 
-# ── Register domain modules (pass proxies so switch_tenant propagates) ────────
-_agents_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _require_writes)
-_alerts_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _enrich_mitre_ids)
-_vulns_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_ar_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_fim_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_compliance_fns = _compliance_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_fleet_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_sca_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_cdb_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _require_writes)
-_rules_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_ti_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _geoip_lookup)
-_hunting_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_mitre_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_incidents_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _require_writes, _enrich_mitre_ids, _incident_recommendations)
-_reporting_fns = _reporting_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _enrich_mitre_ids)
-_integrations_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_notifications_module.register(
-    mcp, _wz_proxy, _idx_proxy, cfg,
-    generate_shift_handover=_reporting_fns["generate_shift_handover"],
-    generate_weekly_summary=_reporting_fns["generate_weekly_summary"],
-    generate_compliance_report=_compliance_fns["generate_compliance_report"],
+_ctx = ToolContext(
+    mcp=mcp,
+    wz=_wz_proxy,
+    idx=_idx_proxy,
+    cfg=cfg,
+    cap=_cap,
+    require_writes=_require_writes,
+    truncate=_truncate,
+    enrich_mitre_ids=_enrich_mitre_ids,
+    geoip_lookup=_geoip_lookup,
+    incident_recommendations=_incident_recommendations,
+    tool_registry=_TOOL_REGISTRY,
 )
-_onboarding_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_cluster_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_archive_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_suppression_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _require_writes)
-_agent_health_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_cred_module.register(mcp, _wz_proxy, cfg, _require_writes)
-_cve_watchlist_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_rule_wizard_module.register(mcp, _wz_proxy, cfg)
-_workspaces_module.register(mcp, cfg)
-_geo_intel_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_threat_feeds_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _require_writes)
-_playbooks_module.register(mcp, _wz_proxy, _idx_proxy, cfg, tool_registry=_TOOL_REGISTRY)
-_net_topology_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_autonomous_soc_module.register(mcp, _wz_proxy, _idx_proxy, cfg, tool_registry=_TOOL_REGISTRY)
-_baseline_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_ueba_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_scheduler_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
-_agent_upgrades_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_audit_mgmt_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_azure_devops_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_export_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_index_mgmt_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_manager_audit_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_manager_config_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_pagerduty_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_rootcheck_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_servicenow_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_syslog_config_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_health_check_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_prompt_advisor_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_explain_alert_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _geoip_lookup)
-_roi_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_quick_wins_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
-_metrics_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
-_correlation_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
 
-# ── MCP Resources (P3) ────────────────────────────────────────────────────────
+# ── Auto-discover and register all tool modules ───────────────────────────────
+# Each module in wazuh_mcp/tools/ exposes register(ctx: ToolContext).
+# Modules are registered in alphabetical order except that `notifications`
+# is deferred to the end so compliance and reporting can write their callables
+# into ctx.shared first.
+import importlib  # noqa: E402
+import pkgutil    # noqa: E402
+from . import tools as _tools_pkg  # noqa: E402
+
+_DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
+
+for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
+    if _modname == "__init__" or _modname in _DEFERRED:
+        continue
+    _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
+    if hasattr(_mod, "register"):
+        try:
+            _mod.register(_ctx)
+        except Exception as _e:
+            log.error("Failed to register tool module %s: %s", _modname, _e)
+
+# Register deferred modules (those that depend on ctx.shared populated above)
+for _modname in _DEFERRED:
+    _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
+    if hasattr(_mod, "register"):
+        try:
+            _mod.register(_ctx)
+        except Exception as _e:
+            log.error("Failed to register deferred tool module %s: %s", _modname, _e)
+
+# ── MCP Resources ─────────────────────────────────────────────────────────────
 from . import resources as _resources_module  # noqa: E402
 _resources_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
 

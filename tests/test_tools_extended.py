@@ -13,6 +13,7 @@ def _run(coro):
 
 def _make_env(module_path, extra_register_args=()):
     """Build a minimal mock environment and return the registered tools dict."""
+    from wazuh_mcp.tool_context import ToolContext
     tools = {}
     mcp = MagicMock()
     mcp.tool = lambda: (lambda fn: tools.__setitem__(fn.__name__, fn) or fn)
@@ -28,9 +29,20 @@ def _make_env(module_path, extra_register_args=()):
     def _truncate(s, n=300):
         return s if s is None or len(s) <= n else s[:n] + "…"
 
+    ctx = ToolContext(
+        mcp=mcp, wz=wz, idx=idx, cfg=cfg,
+        cap=_cap,
+        require_writes=lambda: None,
+        truncate=_truncate,
+        enrich_mitre_ids=lambda ids: [{"id": i} for i in ids],
+        geoip_lookup=AsyncMock(return_value={}),
+        incident_recommendations=lambda alert: [],
+        tool_registry={},
+    )
+
     import importlib
     mod = importlib.import_module(module_path)
-    mod.register(mcp, wz, idx, cfg, _cap, _truncate, *extra_register_args)
+    mod.register(ctx)
     return tools, wz, idx, cfg
 
 
@@ -412,7 +424,13 @@ class TestFleetBatch:
             return s
 
         from wazuh_mcp.tools.fleet import register
-        register(mcp, self.wz, idx, cfg, _cap, _truncate)
+        from wazuh_mcp.tool_context import ToolContext
+        from unittest.mock import AsyncMock as _AM
+        ctx = ToolContext(mcp=mcp, wz=self.wz, idx=idx, cfg=cfg, cap=_cap,
+                          require_writes=lambda: None, truncate=_truncate,
+                          enrich_mitre_ids=lambda ids: [], geoip_lookup=_AM(return_value=dict()),
+                          incident_recommendations=lambda a: [])
+        register(ctx)
         self.tools = tools
 
     def test_invalid_resource_rejected(self):
@@ -459,7 +477,13 @@ class TestRecentAlerts24h:
             return min(n, 500)
 
         from wazuh_mcp.tools.alerts import register
-        register(mcp, wz, self.idx, cfg, _cap, lambda ids: ids)
+        from wazuh_mcp.tool_context import ToolContext
+        from unittest.mock import AsyncMock as _AM
+        ctx = ToolContext(mcp=mcp, wz=wz, idx=self.idx, cfg=cfg, cap=_cap,
+                          require_writes=lambda: None, truncate=lambda s, n=300: s,
+                          enrich_mitre_ids=lambda ids: ids, geoip_lookup=_AM(return_value=dict()),
+                          incident_recommendations=lambda a: [])
+        register(ctx)
         self.tools = tools
 
     def test_returns_window_label(self):
