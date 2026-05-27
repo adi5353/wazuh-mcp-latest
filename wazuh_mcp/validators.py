@@ -126,12 +126,25 @@ def validate_severity(value: str, field: str = "severity") -> str:
 
 
 def validate_framework(value: str, field: str = "framework") -> str:
-    """Validate a compliance framework name."""
+    """Validate a compliance framework name.
+
+    Accepts both hyphenated and snake_case forms (e.g. 'PCI-DSS' or 'pci_dss').
+    Always returns the canonical snake_case form used in Wazuh field names.
+    """
+    # Normalise: lowercase, replace hyphens with underscores
+    normalized = value.strip().lower().replace("-", "_")
+    # Map common aliases to canonical names
+    _ALIASES = {
+        "nist_800_53r4": "nist_800_53",
+        "nist800_53": "nist_800_53",
+        "pci_dss_v3": "pci_dss",
+        "pci_dss_v4": "pci_dss",
+    }
+    normalized = _ALIASES.get(normalized, normalized)
     allowed = {"pci_dss", "hipaa", "gdpr", "nist_800_53", "tsc"}
-    normalized = value.strip().lower()
     if normalized not in allowed:
         raise ValueError(
-            f"Invalid {field} '{value}'. Must be one of: {', '.join(sorted(allowed))}."
+            f"Invalid {field} '{value}'. Must be one of: PCI-DSS, HIPAA, GDPR, NIST-800-53, TSC."
         )
     return normalized
 

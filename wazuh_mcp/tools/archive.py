@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from ..helpers import trim_alert, time_window
+from ..validators import safe_validate, validate_time_range
 
 
 def register(mcp, wz, idx, cfg, _cap):
@@ -21,6 +22,9 @@ def register(mcp, wz, idx, cfg, _cap):
         query_string: Lucene syntax, e.g. 'data.srcip:198.51.100.42'
         Requires archiving enabled in ossec.conf.
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         archives_index = os.getenv("WAZUH_ARCHIVES_INDEX", "wazuh-archives-*")
         filters: list = [time_window(f"now-{time_range}")]
         if agent_id:
@@ -60,6 +64,9 @@ def register(mcp, wz, idx, cfg, _cap):
         Returns a chronological event timeline — useful for forensic investigation.
         All ingested logs, not just alerts. Requires archiving enabled in ossec.conf.
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         archives_index = os.getenv("WAZUH_ARCHIVES_INDEX", "wazuh-archives-*")
         must_clauses: list = [
             {"term": {"agent.name": agent_name}},

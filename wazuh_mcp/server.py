@@ -82,6 +82,28 @@ cfg = Config.from_env()
 wz = WazuhClient(cfg)
 idx = WazuhIndexer(cfg)
 
+
+class _ClientProxy:
+    """Mutable proxy for WazuhClient/WazuhIndexer.
+
+    All tool-module closures capture this proxy object by reference.  When
+    switch_tenant() calls proxy.replace(new_client), every closure immediately
+    sees the new backend without needing to be re-registered.
+    """
+
+    def __init__(self, client):
+        self._client = client
+
+    def replace(self, new_client) -> None:
+        self._client = new_client
+
+    def __getattr__(self, name: str):
+        return getattr(self._client, name)
+
+
+_wz_proxy = _ClientProxy(wz)
+_idx_proxy = _ClientProxy(idx)
+
 MAX_RESULTS_GLOBAL = int(os.getenv("WAZUH_MAX_RESULTS_GLOBAL", "500"))
 SERVER_START_TIME = time.time()
 
@@ -179,68 +201,68 @@ def _truncate(s: str | None, n: int = 300) -> str | None:
 # _incident_recommendations  → wazuh_mcp/triage.py
 
 
-# ── Register domain modules ────────────────────────────────────────────────────
-_agents_module.register(mcp, wz, idx, cfg, _cap, _require_writes)
-_alerts_module.register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids)
-_vulns_module.register(mcp, wz, idx, cfg, _cap)
-_ar_module.register(mcp, wz, idx, cfg, _cap)
-_fim_module.register(mcp, wz, idx, cfg, _cap)
-_compliance_fns = _compliance_module.register(mcp, wz, idx, cfg, _cap)
-_fleet_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_sca_module.register(mcp, wz, idx, cfg, _cap)
-_cdb_module.register(mcp, wz, idx, cfg, _require_writes)
-_rules_module.register(mcp, wz, idx, cfg, _cap)
-_ti_module.register(mcp, wz, idx, cfg, _geoip_lookup)
-_hunting_module.register(mcp, wz, idx, cfg)
-_mitre_module.register(mcp, wz, idx, cfg)
-_incidents_module.register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incident_recommendations)
-_reporting_fns = _reporting_module.register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids)
-_integrations_module.register(mcp, wz, idx, cfg)
+# ── Register domain modules (pass proxies so switch_tenant propagates) ────────
+_agents_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _require_writes)
+_alerts_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _enrich_mitre_ids)
+_vulns_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_ar_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_fim_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_compliance_fns = _compliance_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_fleet_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_sca_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_cdb_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _require_writes)
+_rules_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_ti_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _geoip_lookup)
+_hunting_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
+_mitre_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
+_incidents_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _require_writes, _enrich_mitre_ids, _incident_recommendations)
+_reporting_fns = _reporting_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _enrich_mitre_ids)
+_integrations_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
 _notifications_module.register(
-    mcp, wz, idx, cfg,
+    mcp, _wz_proxy, _idx_proxy, cfg,
     generate_shift_handover=_reporting_fns["generate_shift_handover"],
     generate_weekly_summary=_reporting_fns["generate_weekly_summary"],
     generate_compliance_report=_compliance_fns["generate_compliance_report"],
 )
-_onboarding_module.register(mcp, wz, idx, cfg, _cap)
-_cluster_module.register(mcp, wz, idx, cfg)
-_archive_module.register(mcp, wz, idx, cfg, _cap)
-_suppression_module.register(mcp, wz, idx, cfg, _require_writes)
-_agent_health_module.register(mcp, wz, idx, cfg, _cap)
-_cred_module.register(mcp, wz, cfg, _require_writes)
-_cve_watchlist_module.register(mcp, wz, idx, cfg)
-_rule_wizard_module.register(mcp, wz, cfg)
+_onboarding_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_cluster_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
+_archive_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_suppression_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _require_writes)
+_agent_health_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_cred_module.register(mcp, _wz_proxy, cfg, _require_writes)
+_cve_watchlist_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
+_rule_wizard_module.register(mcp, _wz_proxy, cfg)
 _workspaces_module.register(mcp, cfg)
-_geo_intel_module.register(mcp, wz, idx, cfg)
-_threat_feeds_module.register(mcp, wz, idx, cfg, _require_writes)
-_playbooks_module.register(mcp, wz, idx, cfg, tool_registry=_TOOL_REGISTRY)
-_net_topology_module.register(mcp, wz, idx, cfg, _cap)
-_autonomous_soc_module.register(mcp, wz, idx, cfg, tool_registry=_TOOL_REGISTRY)
-_baseline_module.register(mcp, wz, idx, cfg, _cap)
-_ueba_module.register(mcp, wz, idx, cfg, _cap)
-_scheduler_module.register(mcp, wz, idx, cfg)
-_agent_upgrades_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_audit_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_azure_devops_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_export_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_index_mgmt_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_manager_audit_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_manager_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_pagerduty_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_rootcheck_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_servicenow_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_syslog_config_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_health_check_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_prompt_advisor_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_explain_alert_module.register(mcp, wz, idx, cfg, _cap, _geoip_lookup)
-_roi_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_quick_wins_module.register(mcp, wz, idx, cfg, _cap)
-_metrics_module.register(mcp, wz, idx, cfg, _cap, _truncate)
-_correlation_module.register(mcp, wz, idx, cfg, _cap)
+_geo_intel_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
+_threat_feeds_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _require_writes)
+_playbooks_module.register(mcp, _wz_proxy, _idx_proxy, cfg, tool_registry=_TOOL_REGISTRY)
+_net_topology_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_autonomous_soc_module.register(mcp, _wz_proxy, _idx_proxy, cfg, tool_registry=_TOOL_REGISTRY)
+_baseline_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_ueba_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_scheduler_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
+_agent_upgrades_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_audit_mgmt_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_azure_devops_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_export_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_index_mgmt_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_manager_audit_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_manager_config_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_pagerduty_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_rootcheck_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_servicenow_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_syslog_config_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_health_check_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_prompt_advisor_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_explain_alert_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _geoip_lookup)
+_roi_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_quick_wins_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
+_metrics_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap, _truncate)
+_correlation_module.register(mcp, _wz_proxy, _idx_proxy, cfg, _cap)
 
 # ── MCP Resources (P3) ────────────────────────────────────────────────────────
 from . import resources as _resources_module  # noqa: E402
-_resources_module.register(mcp, wz, idx, cfg)
+_resources_module.register(mcp, _wz_proxy, _idx_proxy, cfg)
 
 # ── Enrichment pipeline tools (P3) ────────────────────────────────────────────
 
@@ -372,7 +394,7 @@ async def switch_tenant(tenant_name: str) -> dict:
     Args:
         tenant_name: The name of the tenant as defined in WAZUH_INSTANCES.
     """
-    global _active_tenant, wz, idx
+    global _active_tenant
 
     if not cfg.tenants:
         return {
@@ -388,8 +410,6 @@ async def switch_tenant(tenant_name: str) -> dict:
             "available": names,
         }
 
-    # Swap out the shared WazuhClient + WazuhIndexer to point at the new tenant
-    from .config import Config as _Config
     from .wazuh_client import WazuhClient as _WC
     from .wazuh_indexer import WazuhIndexer as _WI
     import dataclasses
@@ -403,8 +423,20 @@ async def switch_tenant(tenant_name: str) -> dict:
         indexer_user=tenant.indexer_user,
         indexer_pass=tenant.indexer_pass,
     )
-    wz = _WC(tenant_cfg)
-    idx = _WI(tenant_cfg)
+
+    # Close old connections before replacing to avoid leaking httpx connection pools
+    try:
+        await _wz_proxy._client.aclose()
+    except Exception:
+        pass
+    try:
+        await _idx_proxy._client.aclose()
+    except Exception:
+        pass
+
+    # Replace the inner clients on the proxies — all tool closures see new backends
+    _wz_proxy.replace(_WC(tenant_cfg))
+    _idx_proxy.replace(_WI(tenant_cfg))
     _active_tenant = {"name": tenant.name, "manager_host": tenant.manager_host}
 
     log.info("MSSP tenant switched to '%s' (%s)", tenant.name, tenant.manager_host)
@@ -1070,10 +1102,12 @@ def main() -> None:
             if _uvicorn_server:
                 _uvicorn_server[0].should_exit = True
             # Release HTTP connection pools
+            from .tools.threat_intel import close_shared_ti_clients
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(wz.aclose())
-                loop.create_task(idx.aclose())
+                loop.create_task(_wz_proxy._client.aclose())
+                loop.create_task(_idx_proxy._client.aclose())
+                loop.create_task(close_shared_ti_clients())
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
 

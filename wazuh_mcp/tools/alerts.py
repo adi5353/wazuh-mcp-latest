@@ -1,8 +1,21 @@
 """Alert search and summary tools — indexer queries for alert triage and investigation."""
 from __future__ import annotations
+import re
 
 from ..helpers import trim_alert
 from ..validators import safe_validate, validate_time_range, validate_min_level, validate_agent_id, validate_ip_address, validate_limit
+
+
+def _double_time_range(time_range: str) -> str:
+    """Return an ES date-math expression for 2× the given time range.
+
+    '24h' → 'now-48h', '7d' → 'now-14d', '30m' → 'now-60m'.
+    Falls back to 'now-{range}-{range}' only as a last resort (never valid ES).
+    """
+    m = re.match(r'^(\d+)([smhdwMy])$', time_range)
+    if m:
+        return f"now-{int(m.group(1)) * 2}{m.group(2)}"
+    return f"now-{time_range}"
 
 
 def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
@@ -60,7 +73,7 @@ def register(mcp, wz, idx, cfg, _cap, _enrich_mitre_ids):
                 "bool": {
                     "filter": [
                         {"range": {"@timestamp": {
-                            "gte": f"now-{time_range}-{time_range}",
+                            "gte": _double_time_range(time_range),
                             "lte": f"now-{time_range}",
                         }}},
                         {"range": {"rule.level": {"gte": min_level}}},

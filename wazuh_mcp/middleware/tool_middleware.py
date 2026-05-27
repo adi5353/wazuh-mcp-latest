@@ -86,9 +86,9 @@ class ToolMiddleware:
 
                 return cap_response_size(result)
 
-            # Register the original function (not the wrapper) so playbook
-            # engine can call it without re-entering the middleware chain.
-            registry[fn.__name__] = fn
+            # Register the middleware-wrapped function so playbook / autonomous
+            # SOC calls pass through input sanitization and output capping too.
+            registry[fn.__name__] = wrapped
             return decorator(wrapped)
 
         return capturing_decorator

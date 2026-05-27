@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..helpers import trim_alert, time_window
+from ..validators import safe_validate, validate_time_range
 
 CRITICAL_PATHS = [
     "/etc/passwd", "/etc/shadow", "/etc/sudoers", "/etc/ssh/sshd_config",
@@ -40,6 +41,9 @@ def register(mcp, wz, idx, cfg, _cap):
         file_path_substring: optional wildcard match against syscheck.path
                              (e.g. '/etc/' or 'shadow').
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         filters: list = [
             time_window(f"now-{time_range}"),
             {"term": {"rule.groups": "syscheck"}},
@@ -83,6 +87,9 @@ def register(mcp, wz, idx, cfg, _cap):
         Call this BEFORE listing individual FIM events for broad questions like
         'where's the most file activity this week'.
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         body = {
             "size": 0,
             "query": {
@@ -125,6 +132,9 @@ def register(mcp, wz, idx, cfg, _cap):
         Designed to surface the FIM events that warrant immediate attention regardless
         of which agent triggered them.
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         path_filters = [{"wildcard": {"syscheck.path": f"*{p}*"}} for p in CRITICAL_PATHS]
         body = {
             "size": _cap(limit),

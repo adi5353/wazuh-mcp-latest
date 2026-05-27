@@ -11,6 +11,46 @@ from ..circuit_breaker import breaker
 
 log = logging.getLogger("wazuh-mcp")
 
+# Shared connection pools — one TLS handshake per host, reused across all calls.
+# Closed on server shutdown via close_shared_ti_clients() called from server.py lifespan.
+_VT_CLIENT: httpx.AsyncClient | None = None
+_ABUSE_CLIENT: httpx.AsyncClient | None = None
+
+
+def _get_vt_client() -> httpx.AsyncClient:
+    global _VT_CLIENT
+    if _VT_CLIENT is None or _VT_CLIENT.is_closed:
+        _VT_CLIENT = httpx.AsyncClient(
+            base_url="https://www.virustotal.com",
+            timeout=15,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _VT_CLIENT
+
+
+def _get_abuse_client() -> httpx.AsyncClient:
+    global _ABUSE_CLIENT
+    if _ABUSE_CLIENT is None or _ABUSE_CLIENT.is_closed:
+        _ABUSE_CLIENT = httpx.AsyncClient(
+            base_url="https://api.abuseipdb.com",
+            timeout=15,
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=3),
+        )
+    return _ABUSE_CLIENT
+
+
+async def close_shared_ti_clients() -> None:
+    """Close shared httpx clients on server shutdown."""
+    global _VT_CLIENT, _ABUSE_CLIENT
+    for client in (_VT_CLIENT, _ABUSE_CLIENT):
+        if client and not client.is_closed:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+    _VT_CLIENT = None
+    _ABUSE_CLIENT = None
+
 
 async def _vt_get(path: str) -> dict | None:
     vt_key = os.getenv("VIRUSTOTAL_API_KEY")
@@ -23,16 +63,15 @@ async def _vt_get(path: str) -> dict | None:
                     reason, st["requests_today"], st["daily_limit"])
         return None
     try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"https://www.virustotal.com/api/v3/{path}",
-                headers={"x-apikey": vt_key},
-            )
-            if r.status_code == 200:
-                breaker.record_success("virustotal")
-                return r.json()
-            breaker.record_failure("virustotal")
-            return None
+        r = await _get_vt_client().get(
+            f"/api/v3/{path}",
+            headers={"x-apikey": vt_key},
+        )
+        if r.status_code == 200:
+            breaker.record_success("virustotal")
+            return r.json()
+        breaker.record_failure("virustotal")
+        return None
     except Exception as e:
         log.warning("VirusTotal error: %s", e)
         breaker.record_failure("virustotal")
@@ -50,17 +89,16 @@ async def _abuse_get(ip: str) -> dict | None:
                     reason, st["requests_today"], st["daily_limit"])
         return None
     try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                "https://api.abuseipdb.com/api/v2/check",
-                params={"ipAddress": ip, "maxAgeInDays": 90},
-                headers={"Key": abuse_key, "Accept": "application/json"},
-            )
-            if r.status_code == 200:
-                breaker.record_success("abuseipdb")
-                return r.json().get("data")
-            breaker.record_failure("abuseipdb")
-            return None
+        r = await _get_abuse_client().get(
+            "/api/v2/check",
+            params={"ipAddress": ip, "maxAgeInDays": 90},
+            headers={"Key": abuse_key, "Accept": "application/json"},
+        )
+        if r.status_code == 200:
+            breaker.record_success("abuseipdb")
+            return r.json().get("data")
+        breaker.record_failure("abuseipdb")
+        return None
     except Exception as e:
         log.warning("AbuseIPDB error: %s", e)
         breaker.record_failure("abuseipdb")
@@ -415,7 +453,8 @@ def register(mcp, wz, idx, cfg, _geoip_lookup):
 
         # ── HaveIBeenPwned email lookup ────────────────────────────────────────
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True,
+                                         base_url="https://haveibeenpwned.com") as c:
                 hibp_headers = {
                     "User-Agent": "wazuh-mcp-security-tool",
                     "hibp-api-key": os.getenv("HIBP_API_KEY", ""),
@@ -423,7 +462,7 @@ def register(mcp, wz, idx, cfg, _geoip_lookup):
                 # Remove empty header values
                 hibp_headers = {k: v for k, v in hibp_headers.items() if v}
                 r = await c.get(
-                    f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}?truncateResponse=false",
+                    f"/api/v3/breachedaccount/{email}?truncateResponse=false",
                     headers=hibp_headers,
                 )
                 if r.status_code == 200:
@@ -453,10 +492,11 @@ def register(mcp, wz, idx, cfg, _geoip_lookup):
         if hunter_key and "@" in email:
             domain = email.split("@", 1)[1]
             try:
-                async with httpx.AsyncClient(timeout=15) as c:
+                async with httpx.AsyncClient(timeout=15,
+                                             base_url="https://api.hunter.io") as c:
                     # Email verification endpoint
                     r = await c.get(
-                        "https://api.hunter.io/v2/email-verifier",
+                        "/v2/email-verifier",
                         params={"email": email, "api_key": hunter_key},
                     )
                     if r.status_code == 200:

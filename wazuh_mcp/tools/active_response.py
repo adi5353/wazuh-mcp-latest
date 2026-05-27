@@ -1,6 +1,8 @@
 """Active response tools — list AR actions, correlate with alerts, audit effectiveness."""
 from __future__ import annotations
 
+from ..validators import safe_validate, validate_time_range
+
 AR_RULE_IDS = ["601", "602", "603", "651", "652"]
 AR_GROUPS = ["active_response", "ar"]
 
@@ -10,6 +12,9 @@ def register(mcp, wz, idx, cfg, _cap):
     @mcp.tool()
     async def get_active_responses(time_range: str = "24h", limit: int = 50) -> dict:
         """List active-response actions Wazuh took recently, with triggering context."""
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         body = {
             "size": _cap(limit),
             "sort": [{"@timestamp": "desc"}],
@@ -117,6 +122,9 @@ def register(mcp, wz, idx, cfg, _cap):
         For each AR event that blocked an IP, count alerts from that IP AFTER the block.
         Zero = block worked; non-zero = the attacker got through anyway.
         """
+        _, err = safe_validate(validate_time_range, time_range)
+        if err:
+            return err
         ar_body = {
             "size": 500,
             "sort": [{"@timestamp": "asc"}],

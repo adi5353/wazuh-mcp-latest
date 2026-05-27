@@ -125,7 +125,13 @@ class WazuhClient:
         )
         if r.status_code == 401:
             log.info("Wazuh Manager: token rejected, re-authenticating")
-            await self._login()
+            async with self._login_lock:
+                # Another concurrent request may have already refreshed the token.
+                if self._token and time.time() <= self._token_expires:
+                    pass
+                else:
+                    self._token = None
+                    await self._login()
             r = await self._client.request(
                 method,
                 f"{self.cfg.manager_host}{path}",
@@ -198,7 +204,12 @@ class WazuhClient:
         )
         if r.status_code == 401:
             log.info("Wazuh Manager: token rejected, re-authenticating")
-            await self._login()
+            async with self._login_lock:
+                if self._token and time.time() <= self._token_expires:
+                    pass
+                else:
+                    self._token = None
+                    await self._login()
             headers["Authorization"] = f"Bearer {self._token}"
             r = await self._client.put(
                 url,

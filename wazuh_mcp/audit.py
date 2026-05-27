@@ -136,10 +136,32 @@ def cap_response_size(result: Any) -> Any:
         return result
     if len(serialized) <= _MAX_OUTPUT_CHARS:
         return result
-    try:
-        preview = json.loads(serialized[: _MAX_OUTPUT_CHARS])
-    except Exception:
+    # Truncate at a valid JSON object boundary by slicing the top-level list/dict.
+    # Naively slicing the serialized string almost always produces malformed JSON.
+    preview: Any
+    if isinstance(result, dict):
+        # Return as many top-level keys as fit within the limit
+        preview = {}
+        running = 2  # account for '{}'
+        for k, v in result.items():
+            entry = json.dumps({k: v}, default=str)
+            if running + len(entry) + 1 > _MAX_OUTPUT_CHARS:
+                break
+            preview[k] = v
+            running += len(entry) + 1
+    elif isinstance(result, list):
+        # Return as many list items as fit within the limit
+        preview = []
+        running = 2  # account for '[]'
+        for item in result:
+            entry = json.dumps(item, default=str)
+            if running + len(entry) + 1 > _MAX_OUTPUT_CHARS:
+                break
+            preview.append(item)
+            running += len(entry) + 1
+    else:
         preview = serialized[: _MAX_OUTPUT_CHARS]
+
     return {
         "warning": "Response truncated — use more specific filters to narrow results",
         "total_chars": len(serialized),
