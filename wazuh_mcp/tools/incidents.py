@@ -111,20 +111,17 @@ def register(mcp, wz, idx, cfg, _cap, _require_writes, _enrich_mitre_ids, _incid
         lateral_movement_suspected = len(agents) >= 3 or bool(pivot_users and len(agents) >= 2)
 
         # ── Optional attacker-IP enrichment ──────────────────────────────────
-        # Enrich distinct source IPs via VirusTotal/AbuseIPDB if API key is set.
+        # Uses the shared _vt_get() helper from threat_intel so the circuit
+        # breaker and daily quota limits are respected (VIRUSTOTAL_API_KEY).
         attacker_ips = [b["key"] for b in aggs["src_ips"]["buckets"] if b["key"]]
         ip_enrichments: list[dict] = []
-        vt_key = os.getenv("WAZUH_VT_API_KEY", "")
-        if vt_key and attacker_ips:
+        if attacker_ips and os.getenv("VIRUSTOTAL_API_KEY"):
+            from .threat_intel import _vt_get
             for _ip in attacker_ips[:5]:  # cap at 5 to avoid quota burn
                 try:
-                    async with httpx.AsyncClient(timeout=8) as _cli:
-                        vtr = await _cli.get(
-                            f"https://www.virustotal.com/api/v3/ip_addresses/{_ip}",
-                            headers={"x-apikey": vt_key},
-                        )
-                    if vtr.status_code == 200:
-                        vt = vtr.json().get("data", {}).get("attributes", {})
+                    vt_resp = await _vt_get(f"ip_addresses/{_ip}")
+                    if vt_resp:
+                        vt = vt_resp.get("data", {}).get("attributes", {})
                         stats = vt.get("last_analysis_stats", {})
                         ip_enrichments.append({
                             "ip": _ip,

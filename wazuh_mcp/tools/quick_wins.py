@@ -1,8 +1,10 @@
 """Quick-win tools: ABAC status, natural-language → OpenSearch DSL, auto-triage."""
 from __future__ import annotations
 
+import asyncio
 import re
 import datetime
+import time as _time
 
 
 # ── Natural-language patterns → OpenSearch DSL fragments ──────────────────────
@@ -54,6 +56,32 @@ _RULE_LEVEL_PATTERN = re.compile(
     r'\b(?:level|severity)\s*[>>=]?\s*(\d{1,2})\b', re.I
 )
 _RULE_ID_PATTERN = re.compile(r'\brule\s+(?:id\s+)?(\d{3,6})\b', re.I)
+
+# ── KEV catalog cache ─────────────────────────────────────────────────────────
+# CISA Known Exploited Vulnerabilities (~600 KB JSON). Fetched at most once
+# per KEV_TTL_SECONDS (6 hours) regardless of how many triage calls are made.
+_KEV_CACHE: set[str] = set()
+_KEV_FETCHED_AT: float = 0.0
+_KEV_TTL_SECONDS: float = 6 * 3600  # 6 hours
+
+
+async def _get_kev_ids() -> set[str]:
+    """Return the cached set of CISA KEV CVE IDs, refreshing every 6 hours."""
+    global _KEV_CACHE, _KEV_FETCHED_AT
+    if _KEV_CACHE and (_time.monotonic() - _KEV_FETCHED_AT) < _KEV_TTL_SECONDS:
+        return _KEV_CACHE
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10) as _kev:
+            resp = await _kev.get(
+                "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+            )
+            data = resp.json()
+        _KEV_CACHE = {v.get("cveID", "").upper() for v in data.get("vulnerabilities", [])}
+        _KEV_FETCHED_AT = _time.monotonic()
+        return _KEV_CACHE
+    except Exception:
+        return _KEV_CACHE  # return stale cache on failure rather than empty set
 
 
 def _extract_time_range(text: str) -> str:
@@ -332,17 +360,12 @@ def register(mcp, wz, idx, cfg, _cap):
             tp_signals.append(f"Rule fired {recurrence_count} times in last hour — sustained activity")
 
         # ── KEV catalog check ────────────────────────────────────────────────
-        # If the alert contains a CVE reference and that CVE is in CISA's Known
-        # Exploited Vulnerabilities (KEV) catalog, it is almost certainly a TP.
+        # Uses module-level cache (_KEV_CACHE) refreshed every 6 hours — safe
+        # to call in batch_auto_triage without issuing repeated HTTP fetches.
         alert_cve = data.get("cve") or data.get("vulnerability", {}).get("cve", "")
         if alert_cve:
             try:
-                import httpx as _httpx
-                kev_url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-                async with _httpx.AsyncClient(timeout=6) as _kev:
-                    kr = await _kev.get(kev_url)
-                    kev_data = kr.json()
-                kev_ids = {v.get("cveID", "") for v in kev_data.get("vulnerabilities", [])}
+                kev_ids = await _get_kev_ids()
                 if alert_cve.upper() in kev_ids:
                     score += 25
                     tp_signals.append(
@@ -435,16 +458,20 @@ def register(mcp, wz, idx, cfg, _cap):
         """
         from ..helpers import trim_alert
 
+        # Semaphore caps concurrent OpenSearch connections (each triage = ~2 queries)
+        _sem = asyncio.Semaphore(8)
+
+        async def _triage_one(aid: str) -> dict:
+            async with _sem:
+                try:
+                    return await auto_triage_alert(str(aid))
+                except Exception as exc:
+                    return {"alert_id": aid, "error": str(exc)}
+
         # ── Fast path: caller supplied pre-fetched IDs ────────────────────────
         if alert_ids:
             alert_ids = alert_ids[:50]
-            results = []
-            for aid in alert_ids:
-                try:
-                    triage = await auto_triage_alert(str(aid))
-                    results.append(triage)
-                except Exception as exc:
-                    results.append({"alert_id": aid, "error": str(exc)})
+            results = list(await asyncio.gather(*[_triage_one(str(aid)) for aid in alert_ids]))
 
             tp    = [r for r in results if r.get("disposition") == "TRUE_POSITIVE"]
             fp    = [r for r in results if r.get("disposition") == "FALSE_POSITIVE"]
@@ -489,13 +516,7 @@ def register(mcp, wz, idx, cfg, _cap):
                 "message": f"No alerts at level ≥{min_level} in the last {time_range}.",
             }
 
-        results = []
-        for hit in hits:
-            try:
-                triage = await auto_triage_alert(hit["_id"])
-                results.append(triage)
-            except Exception as exc:
-                results.append({"alert_id": hit["_id"], "error": str(exc)})
+        results = list(await asyncio.gather(*[_triage_one(hit["_id"]) for hit in hits]))
 
         tp    = [r for r in results if r.get("disposition") == "TRUE_POSITIVE"]
         fp    = [r for r in results if r.get("disposition") == "FALSE_POSITIVE"]

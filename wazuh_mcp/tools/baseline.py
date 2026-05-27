@@ -15,8 +15,28 @@ from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("wazuh-mcp")
 
-# In-memory baseline store: agent_id -> baseline dict
+# In-memory cache: agent_id -> baseline dict (write-through to state_store)
 _BASELINES: dict[str, dict] = {}
+
+
+def _baseline_key(agent_id: str) -> str:
+    return f"agent_baseline_{agent_id}"
+
+
+def _load_baseline(agent_id: str) -> dict | None:
+    """Load a baseline from persistent store into the in-memory cache."""
+    from ..state_store import load_kv
+    data = load_kv(_baseline_key(agent_id))
+    if data:
+        _BASELINES[agent_id] = data
+    return data
+
+
+def _save_baseline(agent_id: str, baseline: dict) -> None:
+    """Write-through: update in-memory cache and persist to disk."""
+    from ..state_store import save_kv
+    _BASELINES[agent_id] = baseline
+    save_kv(_baseline_key(agent_id), baseline)
 
 _SCORE_WEIGHTS = {
     "alert_volume": 0.35,
@@ -165,11 +185,12 @@ def register(mcp, wz, idx, cfg, _cap):
                 "std": round(crit_std, 2),
             },
         }
-        _BASELINES[agent_id] = baseline
+        _save_baseline(agent_id, baseline)  # write-through to state_store
 
         return {
             **baseline,
             "status": "baseline_computed",
+            "persisted": True,
             "tip": f"Run score_agent_deviation('{agent_id}') to check current behavior.",
         }
 
@@ -184,7 +205,7 @@ def register(mcp, wz, idx, cfg, _cap):
         window_hours: current observation window in hours (default 24)
         Returns deviation score 0-100 and per-dimension breakdown.
         """
-        baseline = _BASELINES.get(agent_id)
+        baseline = _BASELINES.get(agent_id) or _load_baseline(agent_id)
         if not baseline:
             return {
                 "error": f"No baseline for agent {agent_id}. Run compute_agent_baseline first.",
@@ -282,6 +303,16 @@ def register(mcp, wz, idx, cfg, _cap):
         threshold: minimum deviation score to flag (0-100, default 40)
         window_hours: current observation window (default 24h)
         """
+        # Populate in-memory cache from disk for any agents not yet loaded this session
+        from ..state_store import _kv_dir
+        try:
+            for f in _kv_dir().glob("agent_baseline_*.json"):
+                aid = f.stem.removeprefix("agent_baseline_")
+                if aid and aid not in _BASELINES:
+                    _load_baseline(aid)
+        except Exception:
+            pass
+
         if not _BASELINES:
             return {
                 "error": "No baselines computed yet.",

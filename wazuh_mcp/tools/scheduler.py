@@ -17,10 +17,18 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..rbac import analyst_only
+from ..state_store import _state_dir
 
 log = logging.getLogger("wazuh-mcp")
 
-_SCHEDULES_FILE = "/app/logs/report_schedules.json"
+
+def _schedules_file() -> str:
+    """Return platform-safe path for the schedules JSON file.
+
+    Uses WAZUH_WORKSPACE_DIR/state/ (same root as all other persisted state)
+    instead of the former Docker-only hardcode /app/logs/report_schedules.json.
+    """
+    return str(_state_dir() / "report_schedules.json")
 
 # Valid report types that can be scheduled
 _VALID_REPORT_TYPES = {
@@ -43,8 +51,9 @@ _SCHEDULER_RUNNING = False
 def _load_schedules() -> None:
     """Load schedules from disk on startup."""
     try:
-        if os.path.exists(_SCHEDULES_FILE):
-            with open(_SCHEDULES_FILE) as f:
+        path = _schedules_file()
+        if os.path.exists(path):
+            with open(path) as f:
                 _SCHEDULES.update(json.load(f))
             log.info("Loaded %d report schedules from disk", len(_SCHEDULES))
     except Exception as exc:
@@ -54,13 +63,13 @@ def _load_schedules() -> None:
 def _save_schedules() -> None:
     """Persist schedules to disk."""
     try:
-        os.makedirs(os.path.dirname(_SCHEDULES_FILE), exist_ok=True)
-        # Exclude non-serializable fields
+        path = _schedules_file()
+        # _state_dir() already mkdir-p's the directory
         serializable = {
             sid: {k: v for k, v in sched.items() if k != "_task"}
             for sid, sched in _SCHEDULES.items()
         }
-        with open(_SCHEDULES_FILE, "w") as f:
+        with open(path, "w") as f:
             json.dump(serializable, f, indent=2)
     except Exception as exc:
         log.warning("Failed to save report schedules: %s", exc)
