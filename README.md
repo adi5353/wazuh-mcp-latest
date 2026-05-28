@@ -466,7 +466,7 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `WAZUH_CA_BUNDLE` | — | Path to custom CA cert bundle (PEM) for private CAs |
 | `WAZUH_ALLOW_WRITES` | `false` | Enable write tools (restart, active response, CDB edits) |
 | `WAZUH_MCP_API_KEY` | — | Bearer token required on all HTTP requests (recommended) |
-| `WAZUH_MCP_USER_ROLE` | `analyst` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin` |
+| `WAZUH_MCP_USER_ROLE` | `viewer` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin` |
 | `WAZUH_MCP_RATE_LIMIT_RPM` | `60` | Max requests per minute per API-key identity |
 | `WAZUH_MCP_RATE_LIMIT_BURST` | `10` | Burst allowance above RPM limit |
 | `WAZUH_AUDIT_LOG` | `logs/audit.jsonl` | Path for structured JSONL audit trail |

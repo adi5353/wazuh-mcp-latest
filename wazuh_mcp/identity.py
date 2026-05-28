@@ -108,5 +108,5 @@ def effective_role() -> ROLE:
     task_role = _ctx_role.get()
     if task_role is not None:
         return task_role
-    raw = os.getenv("WAZUH_MCP_USER_ROLE", "analyst").strip().lower()
+    raw = os.getenv("WAZUH_MCP_USER_ROLE", "viewer").strip().lower()
     return _NAME_TO_ROLE.get(raw, ROLE.ANALYST)

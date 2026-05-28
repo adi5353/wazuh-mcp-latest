@@ -353,6 +353,99 @@ class TestMSSPConfig:
         finally:
             srv.cfg.tenants = original_tenants
 
+    @pytest.mark.asyncio
+    async def test_switch_tenant_is_session_scoped_not_global(self):
+        """Calling switch_tenant in one task must not affect a concurrent session.
+
+        This is the regression test for the global-state multi-tenancy bug:
+        _ClientProxy now uses a ContextVar so each asyncio Task has its own
+        client binding.
+        """
+        import dataclasses
+        import wazuh_mcp.server as srv
+        from wazuh_mcp.config import Config, TenantConfig
+
+        # Build two fake tenants
+        tenant_a = TenantConfig(
+            name="tenant-a",
+            manager_host="https://wazuh-a:55000",
+            manager_user="ua", manager_pass="pa",
+            indexer_host="https://idx-a:9200",
+            indexer_user="ua", indexer_pass="pa",
+        )
+        tenant_b = TenantConfig(
+            name="tenant-b",
+            manager_host="https://wazuh-b:55000",
+            manager_user="ub", manager_pass="pb",
+            indexer_host="https://idx-b:9200",
+            indexer_user="ub", indexer_pass="pb",
+        )
+
+        # Build a real Config dataclass (required by dataclasses.replace inside switch_tenant)
+        base_cfg = Config(
+            manager_host="https://default:55000",
+            manager_user="default", manager_pass="default",
+            indexer_host="https://default-idx:9200",
+            indexer_user="default", indexer_pass="default",
+            alerts_index="wazuh-alerts-*",
+            vuln_index="wazuh-states-vulnerabilities-*",
+            inventory_packages_index="wazuh-states-inventory-packages-*",
+            inventory_processes_index="wazuh-states-inventory-processes-*",
+            inventory_ports_index="wazuh-states-inventory-ports-*",
+            verify_ssl=False,
+            ca_bundle=None,
+            allow_writes=False,
+            request_timeout=30,
+            cloud_mode=False,
+            tenants=(tenant_a, tenant_b),
+        )
+
+        original_cfg = srv.cfg
+        srv.cfg = base_cfg
+
+        # Use a barrier so both tasks reach the switch_tenant call simultaneously
+        barrier = asyncio.Barrier(2)
+        results: dict[str, str] = {}
+
+        async def session_a():
+            await barrier.wait()
+            await srv.switch_tenant("tenant-a")
+            await barrier.wait()
+            # Resolve the proxy in this task's context
+            results["a"] = srv._wz_proxy.cfg.manager_host
+
+        async def session_b():
+            await barrier.wait()
+            await srv.switch_tenant("tenant-b")
+            await barrier.wait()
+            results["b"] = srv._wz_proxy.cfg.manager_host
+
+        try:
+            with patch("wazuh_mcp.server.WazuhClient") as mock_wz, \
+                 patch("wazuh_mcp.server.WazuhIndexer"):
+                # Make WazuhClient(cfg) return a mock that preserves cfg
+                def make_wz(cfg):
+                    m = MagicMock()
+                    m.cfg = cfg
+                    return m
+                mock_wz.side_effect = make_wz
+
+                await asyncio.gather(
+                    asyncio.ensure_future(session_a()),
+                    asyncio.ensure_future(session_b()),
+                )
+        finally:
+            srv.cfg = original_cfg
+
+        # Each session must have seen its own tenant — not the other's
+        assert results["a"] == "https://wazuh-a:55000", (
+            f"Session A expected tenant-a host but got: {results['a']!r}"
+        )
+        assert results["b"] == "https://wazuh-b:55000", (
+            f"Session B expected tenant-b host but got: {results['b']!r}"
+        )
+        assert results["a"] != results["b"], "Session isolation broken: both tasks resolved the same client"
+
 
 # ── 4. Role-optimized MCP prompts ─────────────────────────────────────────────
 

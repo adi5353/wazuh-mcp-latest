@@ -59,6 +59,20 @@ class TestRBAC:
             err = admin_only()
             assert err is None
 
+    def test_default_role_is_viewer_when_env_unset(self):
+        """Secure-by-default: effective_role() must be VIEWER when env var is absent."""
+        import importlib
+        import wazuh_mcp.identity as identity_mod
+        with patch.dict(os.environ):
+            os.environ.pop("WAZUH_MCP_USER_ROLE", None)
+            # Force re-evaluation by calling effective_role() directly
+            from wazuh_mcp.rbac import ROLE
+            role = identity_mod.effective_role()
+            assert role == ROLE.VIEWER, (
+                f"Expected VIEWER as secure default, got {role!r}. "
+                "Set WAZUH_MCP_USER_ROLE explicitly to grant higher access."
+            )
+
     def test_unknown_role_defaults_to_analyst(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "superuser"}):
             from wazuh_mcp.rbac import _current_role, ROLE
