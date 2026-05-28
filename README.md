@@ -39,7 +39,7 @@ Targeted improvements across performance, alert quality, rules, compliance, and 
 
 | Area | Change | Details |
 |---|---|---|
-| **Connection pool** | Configurable via env vars | `WAZUH_HTTP_POOL_SIZE` (default 20) and `WAZUH_HTTP_MAX_KEEPALIVE` (default 10) — tune for high-throughput SOC deployments |
+| **Connection pool** | Configurable via env vars | `WAZUH_HTTP_POOL_SIZE` (default 100) and `WAZUH_HTTP_MAX_KEEPALIVE` (default 40) — sized for 130+ concurrent tools under real SOC load; tune down for low-resource deployments |
 | **Cache observability** | Hit/miss counters | `cache_stats()` now returns `hits`, `misses`, `hit_ratio` — see actual cache effectiveness. New `invalidate_tool(name)` flushes a single tool's cache without clearing everything |
 | **Alert pagination** | Cursor-based paging | `search_alerts` now accepts `page_token` (opaque base64 cursor using `search_after`) and returns `next_page_token` + `has_more` — safe to walk millions of alerts without memory spikes |
 
@@ -84,7 +84,7 @@ Infrastructure hardening and performance improvements. No breaking changes.
 | Area | Change | Details |
 |---|---|---|
 | **CI/CD** | GitHub Actions pipeline | Lint (ruff + mypy), security scan (bandit + pip-audit), pytest across Python 3.10/3.11/3.12 with 70% coverage gate, Docker build — runs on every push and PR |
-| **Performance** | HTTP connection pooling | `WazuhClient` and `WazuhIndexer` now share persistent `httpx.AsyncClient` pools (20 max connections, 10 keepalive) — eliminates per-request TCP handshake overhead |
+| **Performance** | HTTP connection pooling | `WazuhClient` and `WazuhIndexer` now share persistent `httpx.AsyncClient` pools (100 max connections, 40 keepalive) — eliminates per-request TCP handshake overhead and prevents pool saturation under concurrent SOC load |
 | **Security** | HTTPS GeoIP | `enrich_ip_geo` now uses **ipinfo.io over HTTPS** by default (was `http://ip-api.com`). Configurable via `WAZUH_GEOIP_PROVIDER`. Set `IPINFO_TOKEN` for 50k/mo free lookups |
 | **Operations** | Audit log rotation | `logs/audit.jsonl` now auto-rotates at 50 MB (configurable via `WAZUH_AUDIT_MAX_BYTES`), keeping 7 backups (`WAZUH_AUDIT_BACKUP_COUNT`) — prevents unbounded disk growth in production SOCs |
 
@@ -476,8 +476,11 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `IPINFO_TOKEN` | — | ipinfo.io token for 50k/mo free lookups (optional — works without token at lower limits) |
 | `WAZUH_REQUEST_TIMEOUT` | `30` | Per-request API timeout in seconds |
 | `WAZUH_MAX_RESULTS_GLOBAL` | `500` | Hard cap on results from any list tool |
-| `WAZUH_HTTP_POOL_SIZE` | `20` | Max simultaneous HTTP connections to Wazuh Manager |
-| `WAZUH_HTTP_MAX_KEEPALIVE` | `10` | Max keepalive connections in the pool |
+| `WAZUH_HTTP_POOL_SIZE` | `100` | Max simultaneous HTTP connections to Wazuh Manager |
+| `WAZUH_HTTP_MAX_KEEPALIVE` | `40` | Max keepalive connections in the Manager pool |
+| `WAZUH_INDEXER_POOL_SIZE` | `100` | Max simultaneous HTTP connections to Wazuh Indexer |
+| `WAZUH_INDEXER_MAX_KEEPALIVE` | `40` | Max keepalive connections in the Indexer pool |
+| `WAZUH_MCP_MAX_TOKENS` | `4000` | Token budget per tool response; list results are pruned to fit (0 = disabled) |
 | `WAZUH_AUDIT_LOG_SIGNING_KEY` | — | HMAC-SHA256 signing key for audit log tamper detection (enables `verify_audit_log_integrity`) |
 
 ### TLS for the MCP Endpoint
