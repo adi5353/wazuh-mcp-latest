@@ -34,8 +34,10 @@ _RETRY_BASE   = 1.0   # seconds — first delay before jitter
 _RETRY_CAP    = 10.0  # seconds — maximum delay before jitter
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
-_POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_HTTP_POOL_SIZE", "20"))
-_POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_HTTP_MAX_KEEPALIVE", "10"))
+# Defaults raised to 100/40 to prevent pool saturation under real SOC load
+# (130+ concurrent tools + batch operations).  Tune down for low-resource deployments.
+_POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_HTTP_POOL_SIZE",    "100"))
+_POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_HTTP_MAX_KEEPALIVE",  "40"))
 
 
 def _is_retryable(exc: Exception) -> bool:

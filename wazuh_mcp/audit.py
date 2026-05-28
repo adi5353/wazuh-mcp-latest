@@ -20,6 +20,15 @@ from typing import Any
 
 _MAX_OUTPUT_CHARS: int = int(os.getenv("WAZUH_MCP_MAX_OUTPUT_CHARS", "20000"))
 
+# Token budget per tool response — 0 = disabled (char ceiling is still enforced).
+# Default 4000 is safe across all major LLMs including Groq 12k TPM.
+_MAX_OUTPUT_TOKENS: int = int(os.getenv("WAZUH_MCP_MAX_TOKENS", "4000"))
+
+# Fields stripped first (lowest signal) when pruning alert-shaped list items.
+_LOW_SIGNAL_ALERT_FIELDS: frozenset[str] = frozenset(
+    ("log_snippet", "decoder", "rule_groups", "mitre")
+)
+
 _SENSITIVE_KEYS = re.compile(
     r"(password|passwd|token|api_key|apikey|secret|authorization|credential)",
     re.IGNORECASE,
@@ -122,6 +131,47 @@ def sanitize_response(result: dict) -> dict:
     return _sanitize_value(result)
 
 
+def _count_tokens(obj: Any) -> int:
+    """Estimate token count using the char/4 heuristic (established in prompt_advisor.py)."""
+    try:
+        return len(json.dumps(obj, default=str)) // 4
+    except Exception:
+        return 0
+
+
+def _prune_low_signal(item: Any) -> Any:
+    """Strip low-signal fields from alert-shaped dicts to shrink token cost.
+
+    Only modifies dicts that look like trimmed alerts (contain 'rule_id' or
+    'rule_level').  All other values are returned untouched.
+    """
+    if not isinstance(item, dict):
+        return item
+    if "rule_id" not in item and "rule_level" not in item:
+        return item
+    return {k: v for k, v in item.items() if k not in _LOW_SIGNAL_ALERT_FIELDS}
+
+
+def _trim_list_to_token_budget(items: list, budget: int) -> list:
+    """Return a pruned list that fits within *budget* tokens.
+
+    Pass 1 — strip low-signal fields from every item; recheck total.
+    Pass 2 — slice the pruned list item-by-item until it fits.
+    """
+    pruned = [_prune_low_signal(item) for item in items]
+    if _count_tokens(pruned) <= budget:
+        return pruned
+    out: list = []
+    running = 0
+    for item in pruned:
+        cost = _count_tokens(item)
+        if running + cost > budget:
+            break
+        out.append(item)
+        running += cost
+    return out
+
+
 def cap_response_size(result: Any) -> Any:
     """Truncate oversized tool responses before they reach the LLM.
 
@@ -135,6 +185,11 @@ def cap_response_size(result: Any) -> Any:
     except Exception:
         return result
     if len(serialized) <= _MAX_OUTPUT_CHARS:
+        # Within char ceiling — apply token budget pruning for list responses.
+        if _MAX_OUTPUT_TOKENS > 0 and isinstance(result, list):
+            token_count = len(serialized) // 4
+            if token_count > _MAX_OUTPUT_TOKENS:
+                return _trim_list_to_token_budget(result, _MAX_OUTPUT_TOKENS)
         return result
     # Truncate at a valid JSON object boundary by slicing the top-level list/dict.
     # Naively slicing the serialized string almost always produces malformed JSON.
