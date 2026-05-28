@@ -21,6 +21,7 @@ Enhanced edition — adds:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -83,27 +84,42 @@ cfg = Config.from_env()
 wz = WazuhClient(cfg)
 idx = WazuhIndexer(cfg)
 
+# Per-session context variables — each asyncio task (i.e. each MCP request) gets
+# its own tenant client without affecting other concurrent sessions.
+_ctx_wz: contextvars.ContextVar[WazuhClient] = contextvars.ContextVar("_ctx_wz")
+_ctx_idx: contextvars.ContextVar[WazuhIndexer] = contextvars.ContextVar("_ctx_idx")
+_ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "_ctx_active_tenant", default={}
+)
+
 
 class _ClientProxy:
-    """Mutable proxy for WazuhClient/WazuhIndexer.
+    """Session-scoped proxy for WazuhClient/WazuhIndexer.
 
-    All tool-module closures capture this proxy object by reference.  When
-    switch_tenant() calls proxy.replace(new_client), every closure immediately
-    sees the new backend without needing to be re-registered.
+    All tool-module closures capture this proxy by reference.  Attribute access
+    resolves the underlying client from a per-task ContextVar, so switch_tenant()
+    only affects the calling session — other concurrent sessions are untouched.
     """
 
-    def __init__(self, client):
-        self._client = client
+    def __init__(self, default_client, ctx_var: contextvars.ContextVar):
+        self._default = default_client
+        self._ctx_var = ctx_var
 
-    def replace(self, new_client) -> None:
-        self._client = new_client
+    def replace(self, new_client) -> contextvars.Token:
+        """Bind *new_client* to the current asyncio task only."""
+        return self._ctx_var.set(new_client)
+
+    def reset(self, token: contextvars.Token) -> None:
+        """Restore the previous client binding for the current task."""
+        self._ctx_var.reset(token)
 
     def __getattr__(self, name: str):
-        return getattr(self._client, name)
+        client = self._ctx_var.get(self._default)
+        return getattr(client, name)
 
 
-_wz_proxy = _ClientProxy(wz)
-_idx_proxy = _ClientProxy(idx)
+_wz_proxy = _ClientProxy(wz, _ctx_wz)
+_idx_proxy = _ClientProxy(idx, _ctx_idx)
 
 MAX_RESULTS_GLOBAL = int(os.getenv("WAZUH_MAX_RESULTS_GLOBAL", "500"))
 SERVER_START_TIME = time.time()
@@ -301,10 +317,6 @@ async def set_session_role_tool(api_key: str) -> dict:
 # MSSP multi-tenant instance switching
 # ============================================================================
 
-# Active tenant state (None = use default single-instance config)
-_active_tenant: dict | None = None
-
-
 @mcp.tool()
 async def list_tenants() -> dict:
     """List all configured Wazuh tenants (MSSP mode).
@@ -317,9 +329,10 @@ async def list_tenants() -> dict:
             "mssp_mode": False,
             "message": "Single-instance mode. Set WAZUH_INSTANCES env var to enable MSSP multi-tenant mode.",
         }
+    active = _ctx_active_tenant.get({})
     return {
         "mssp_mode": True,
-        "active_tenant": _active_tenant["name"] if _active_tenant else "(default)",
+        "active_tenant": active.get("name", "(default)"),
         "tenants": [
             {"name": t.name, "manager_host": t.manager_host}
             for t in cfg.tenants
@@ -331,14 +344,13 @@ async def list_tenants() -> dict:
 async def switch_tenant(tenant_name: str) -> dict:
     """Switch the active Wazuh tenant for this session (MSSP mode).
 
-    After switching, all subsequent tool calls query the selected tenant's
-    Wazuh Manager and Indexer. Requires WAZUH_INSTANCES to be configured.
+    After switching, all subsequent tool calls in this session query the
+    selected tenant's Wazuh Manager and Indexer.  Other concurrent sessions
+    are not affected.  Requires WAZUH_INSTANCES to be configured.
 
     Args:
         tenant_name: The name of the tenant as defined in WAZUH_INSTANCES.
     """
-    global _active_tenant
-
     if not cfg.tenants:
         return {
             "error": "MSSP multi-tenant mode is not configured. "
@@ -367,27 +379,21 @@ async def switch_tenant(tenant_name: str) -> dict:
         indexer_pass=tenant.indexer_pass,
     )
 
-    # Close old connections before replacing to avoid leaking httpx connection pools
-    try:
-        await _wz_proxy._client.aclose()
-    except Exception:
-        pass
-    try:
-        await _idx_proxy._client.aclose()
-    except Exception:
-        pass
+    new_wz = _WC(tenant_cfg)
+    new_idx = _WI(tenant_cfg)
 
-    # Replace the inner clients on the proxies — all tool closures see new backends
-    _wz_proxy.replace(_WC(tenant_cfg))
-    _idx_proxy.replace(_WI(tenant_cfg))
-    _active_tenant = {"name": tenant.name, "manager_host": tenant.manager_host}
+    # Bind the new clients to this session's asyncio task context only.
+    # Other sessions continue using their own (possibly different) clients.
+    _wz_proxy.replace(new_wz)
+    _idx_proxy.replace(new_idx)
+    _ctx_active_tenant.set({"name": tenant.name, "manager_host": tenant.manager_host})
 
     log.info("MSSP tenant switched to '%s' (%s)", tenant.name, tenant.manager_host)
     return {
         "status": "ok",
         "active_tenant": tenant.name,
         "manager_host": tenant.manager_host,
-        "message": f"All subsequent tool calls now target tenant '{tenant.name}'.",
+        "message": f"All subsequent tool calls in this session now target tenant '{tenant.name}'.",
     }
 
 

@@ -19,6 +19,7 @@ dependencies = [
     "uvicorn>=0.30.0",
     "starlette>=0.40.0",
     "structlog>=24.0.0",
+    "defusedxml>=0.7.1",
 ]
 
 [project.scripts]
@@ -82,8 +83,6 @@ skips = [
     "B110",   # try/except/pass — intentional resilience pattern in optional paths
     "B112",   # try/except/continue — intentional in SCA poll loops
     "B311",   # random — used for jitter only, not crypto
-    "B314",   # xml.etree.fromstring — XML is admin-authored Wazuh rule content, not user input
-    "B405",   # xml.etree import — same rationale as B314
     "B608",   # false-positive SQL injection — these are plain string messages, not queries
 ]
 severity = "medium"

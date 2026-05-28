@@ -239,6 +239,90 @@ class TestResponseSchemas:
         assert result["group"] == ["linux-servers"]
 
 
+# ── Fix B: Non-blocking proactive token refresh ───────────────────────────────
+
+class TestProactiveTokenRefresh:
+    """Verify that concurrent requests are not serialized behind _login_lock."""
+
+    def _make_client(self):
+        from wazuh_mcp.wazuh_client import WazuhClient
+        cfg = MagicMock()
+        cfg.manager_host = "https://wazuh.test:55000"
+        cfg.manager_user = "admin"
+        cfg.manager_pass = "pass"
+        cfg.ca_bundle = None
+        cfg.verify_ssl = False
+        cfg.request_timeout = 30
+        return WazuhClient(cfg)
+
+    def test_valid_token_does_not_block_on_lock(self):
+        """If the token is valid, _ensure_token must return immediately without acquiring the lock."""
+        import time
+        client = self._make_client()
+        client._token = "valid-token"
+        client._token_expires = time.time() + 700  # well within TTL
+
+        lock_acquired = []
+
+        async def run():
+            original_acquire = client._login_lock.acquire
+
+            async def spy_acquire():
+                lock_acquired.append(True)
+                return await original_acquire()
+
+            client._login_lock.acquire = spy_acquire
+            await client._ensure_token()
+
+        asyncio.run(run())
+        assert not lock_acquired, "_login_lock must NOT be acquired when token is valid"
+
+    def test_concurrent_requests_all_complete_during_slow_login(self):
+        """10 concurrent requests with an expired token must all succeed even if _login is slow."""
+        import time
+        client = self._make_client()
+        # Start with an expired token
+        client._token = None
+        client._token_expires = 0.0
+
+        login_count = [0]
+
+        async def slow_login(self_inner=None):
+            login_count[0] += 1
+            await asyncio.sleep(0.01)  # simulate slow auth endpoint
+            client._token = "refreshed-token"
+            client._token_expires = time.time() + 800
+
+        async def run():
+            with patch.object(client, "_login", side_effect=slow_login):
+                # Fire 10 concurrent calls — all should get a token without deadlock
+                await asyncio.gather(*[client._ensure_token() for _ in range(10)])
+
+        asyncio.run(run())
+        assert client._token == "refreshed-token"
+        # The double-checked lock means _login is called exactly once for all 10
+        assert login_count[0] == 1, f"_login was called {login_count[0]} times; expected 1"
+
+    def test_proactive_refresh_scheduled_near_expiry(self):
+        """When token is near expiry (within refresh window), a background task is scheduled."""
+        import time
+        from wazuh_mcp.wazuh_client import _TOKEN_PROACTIVE_REFRESH_WINDOW
+        client = self._make_client()
+        # Token valid but within the proactive refresh window
+        client._token = "near-expiry-token"
+        client._token_expires = time.time() + (_TOKEN_PROACTIVE_REFRESH_WINDOW - 10)
+
+        async def run():
+            with patch.object(client, "_proactive_refresh", new=AsyncMock()) as mock_refresh:
+                await client._ensure_token()
+                # Give the event loop a turn to schedule the background task
+                await asyncio.sleep(0)
+                return mock_refresh
+        mock = asyncio.run(run())
+        # The proactive refresh should have been triggered as a background task
+        assert client._refresh_task is not None, "Background refresh task must be created near expiry"
+
+
 # ── Gap 11: Prometheus /metrics module presence ──────────────────────────────
 
 class TestPrometheusMetrics:

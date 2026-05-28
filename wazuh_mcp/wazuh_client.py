@@ -56,12 +56,16 @@ async def _retry_sleep(attempt: int) -> None:
     await asyncio.sleep(delay)
 
 
+_TOKEN_PROACTIVE_REFRESH_WINDOW = 100  # seconds before expiry to trigger background refresh
+
+
 class WazuhClient:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._token: Optional[str] = None
         self._token_expires: float = 0.0
         self._login_lock = asyncio.Lock()
+        self._refresh_task: Optional[asyncio.Task] = None  # background proactive refresh
         # Use CA bundle when provided, otherwise fall back to verify_ssl flag.
         self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
         # Persistent connection pool — reused across all requests.
@@ -98,6 +102,34 @@ class WazuhClient:
         self._token_expires = time.time() + TOKEN_TTL_SECONDS
         log.info("Wazuh Manager: authenticated, token cached")
 
+    async def _proactive_refresh(self) -> None:
+        """Background token refresh — runs without blocking ongoing requests."""
+        try:
+            async with self._login_lock:
+                # Another concurrent task may have already refreshed the token.
+                if self._token and time.time() < self._token_expires:
+                    return
+                self._token = None
+                await self._login()
+        except Exception as exc:
+            log.warning("Wazuh Manager: proactive token refresh failed: %s", exc)
+
+    async def _ensure_token(self) -> None:
+        """Ensure a valid token exists, preferring non-blocking proactive refresh."""
+        now = time.time()
+        if self._token and now < self._token_expires:
+            # Token is valid; schedule a background refresh when nearing expiry.
+            if now > self._token_expires - _TOKEN_PROACTIVE_REFRESH_WINDOW:
+                if self._refresh_task is None or self._refresh_task.done():
+                    self._refresh_task = asyncio.ensure_future(self._proactive_refresh())
+            return
+        # Token absent or already expired — must block until we have a fresh one.
+        async with self._login_lock:
+            if self._token and time.time() < self._token_expires:
+                return  # another coroutine already refreshed it
+            self._token = None
+            await self._login()
+
     async def request(self, method: str, path: str, **kwargs: Any) -> dict:
         if not wazuh_manager_breaker.allow():
             s = wazuh_manager_breaker.status()
@@ -126,12 +158,7 @@ class WazuhClient:
         raise last_exc  # unreachable — loop always raises or returns first
 
     async def _request_once(self, method: str, path: str, **kwargs: Any) -> dict:
-        if not self._token or time.time() > self._token_expires:
-            async with self._login_lock:
-                if not self._token or time.time() > self._token_expires:
-                    # Clear the expired token from memory before fetching a new one
-                    self._token = None
-                    await self._login()
+        await self._ensure_token()
 
         r = await self._client.request(
             method,
