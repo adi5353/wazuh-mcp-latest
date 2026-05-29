@@ -8,7 +8,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Security Fixes
+### Security Fixes — Security-Hardening Branch (2026-05-29)
+
+Second hardening pass addressing 15 additional findings from the security review.
+
+**H1 — /health pre-auth reconnaissance** — Unauthenticated `/health` now returns
+only `{status, uptime_seconds}`. Detailed payload (`checks`, `latency_ms`,
+`manager_version`) is gated behind a valid `WAZUH_MCP_API_KEY` bearer token.
+Added module-level `_health_caller_is_authenticated_fn` for testability.
+
+**M2 — Persistent injection counter per identity** — The prompt-injection lockout
+counter now accumulates across MCP requests for the same authenticated caller,
+keyed by a SHA-256 hash of their bearer token. Previously, a ContextVar reset on
+each new asyncio task, allowing an attacker to stay just below the 3-attempt
+lockout threshold by making separate requests.
+
+**M3 — Active-response default allowlist narrowed** — `_AR_DEFAULT_COMMANDS`
+reduced from `firewall-drop,restart-wazuh` to `firewall-drop` only. `restart-wazuh`
+can interrupt security monitoring and must be explicitly opted-in via
+`WAZUH_MCP_AR_ALLOWED_COMMANDS`.
+
+**M4 — Central indexer field validation** — `WazuhIndexer.search()` and
+`.count()` now accept `validate_fields=True` to enforce the validators allow-list
+for user-supplied field names inside DSL term/match/range clauses.
+
+**M5 — MSSP credential guidance** — Removed misleading "version-controlled JSON"
+wording from `config.py`. Added startup warning when inline `WAZUH_INSTANCES` env
+var is used, advising migration to `WAZUH_INSTANCES_FILE` pointing at a
+secrets-manager-mounted path.
+
+**L2 — CI test markers** — Added `requires_indexer` and `integration` pytest
+markers to `pyproject.toml` so pytest does not warn about unknown markers and CI
+can filter properly.
+
+**L3 — OpenAPI private SDK attribute** — `/openapi.json` endpoint now uses
+`mcp.get_tools()` public API first, falls back to `mcp._tools` wrapped in
+`try/except AttributeError`, and uses `_TOOL_REGISTRY` as a last resort.
+Prevents breakage when SDK drops the private attribute.
+
+**L4 — Middleware ordering comment** — Fixed comment to accurately reflect actual
+ASGI execution order (last-wrapped = outermost = runs first on incoming requests).
+
+**L5 — Supply-chain: Trivy image scan** — Added `trivy` CI job that builds the
+image, scans for HIGH/CRITICAL CVEs (exit 1 on findings), and uploads a
+CycloneDX SBOM artifact. `pip-audit` was already present.
+
+---
+
+### Security Fixes — Production Hardening Pass (previous)
 
 Production-hardening pass addressing 14 review findings. Secure-by-default: with only
 Wazuh credentials configured, the server now binds loopback, runs as `viewer`, keeps
