@@ -37,6 +37,28 @@ from ..state_store import save_monitor_state, load_monitor_state, clear_monitor_
 
 log = logging.getLogger("wazuh-mcp")
 
+
+def _autonomous_ar_allowed(cfg, ip: str | None) -> str | None:
+    """Gate for ANY automated active-response action taken by the monitor.
+
+    Returns None when the action is permitted, else a human-readable reason.
+
+    Defense in depth (Issue 6): the monitor today performs no auto-blocking — its
+    triage trees call read-only tools, plus auto-ticketing and a human-gated
+    suppression queue. This guard exists so that any current or future automated
+    AR path is held to a strict bar:
+      * requires BOTH WAZUH_ALLOW_WRITES=true AND WAZUH_MCP_AUTONOMOUS_AR=true
+      * refuses safe-listed IPs (WAZUH_MCP_AR_SAFE_IPS) and loopback / multicast /
+        private admin ranges (via validators.validate_active_response_target)
+    """
+    if not getattr(cfg, "allow_writes", False):
+        return "Autonomous active response blocked: WAZUH_ALLOW_WRITES is not enabled."
+    if os.getenv("WAZUH_MCP_AUTONOMOUS_AR", "false").strip().lower() != "true":
+        return "Autonomous active response blocked: set WAZUH_MCP_AUTONOMOUS_AR=true to enable."
+    from ..validators import validate_active_response_target
+    return validate_active_response_target(ip)
+
+
 # ── Shared state ──────────────────────────────────────────────────────────────
 _monitor_state: dict[str, Any] = {
     "running": False,

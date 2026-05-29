@@ -8,7 +8,6 @@ active-response commands.
 """
 from __future__ import annotations
 
-import base64
 import re
 import unicodedata
 import urllib.parse
@@ -34,8 +33,12 @@ _INJECTION_CHECKS: list[tuple[re.Pattern, str]] = [
     (re.compile(
         r"(?i)act\s+as\s+(if\s+you\s+are|an?\s+)?(?:unrestricted|jailbreak|DAN)"),
      "jailbreak attempt"),
-    # Shell metacharacters that could escape into active-response CLI calls
-    (re.compile(r"[;\|&`]"),         "shell metacharacter"),
+    # NOTE: the shell-metacharacter check (`[;|&\`]`) was intentionally removed.
+    # No tool passes a user string into a shell (verified: no subprocess/os.system/
+    # shell=True anywhere in wazuh_mcp), and the pattern caused false positives on
+    # legitimate SIEM data — CEF log lines use `|` as a field separator and Lucene
+    # queries use `&&`/`||`. Active-response targets are still validated separately
+    # (validators.validate_active_response_target + validate_ar_command).
     # Template / expression injection
     (re.compile(r"\$\{[^}]*\}"),     "template injection"),
     (re.compile(r"\{\{[^}]*\}\}"),   "template injection"),
@@ -55,15 +58,14 @@ def _normalize(s: str) -> str:
 
 
 def _decode_variants(s: str) -> list[str]:
-    """Return original + URL-decoded + base64-decoded variants for multi-layer checking."""
-    variants = [s, urllib.parse.unquote(s)]
-    try:
-        decoded = base64.b64decode(s + "==").decode("utf-8", errors="ignore")
-        if decoded and decoded != s:
-            variants.append(decoded)
-    except Exception:
-        pass
-    return variants
+    """Return original + URL-decoded variants for multi-layer checking.
+
+    Base64 variant-decoding was intentionally removed from the global path: it
+    flagged base64-like hashes, agent names, and tokens that are legitimate SIEM
+    data as injection attempts. URL-decoding is kept because URL-encoded payloads
+    are a real evasion vector for the LLM-boundary/prompt-override patterns.
+    """
+    return [s, urllib.parse.unquote(s)]
 
 
 def sanitize_input_string(value: str, field: str = "input") -> str:

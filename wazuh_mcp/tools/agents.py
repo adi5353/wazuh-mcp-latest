@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 from ..rbac import responder_only, admin_only
-from ..validators import validate_active_response_target
+from ..validators import validate_active_response_target, validate_ar_command
 
 
 def register(ctx: ToolContext) -> None:
@@ -71,6 +71,11 @@ def register(ctx: ToolContext) -> None:
         err = responder_only()
         if err:
             return err
+
+        # Restrict to the active-response command allowlist (Issue 10)
+        cmd_err = validate_ar_command(command)
+        if cmd_err:
+            return {"error": cmd_err, "blocked": True}
 
         # Protect critical infrastructure — block requests targeting private/reserved IPs
         src_ip_arg = (arguments or [None])[0] if arguments else None

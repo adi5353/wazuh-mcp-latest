@@ -8,6 +8,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security Fixes
+
+Production-hardening pass addressing 14 review findings. Secure-by-default: with only
+Wazuh credentials configured, the server now binds loopback, runs as `viewer`, keeps
+writes off, and requires authentication before any non-loopback exposure.
+
+1. **Insecure default bind** — `WAZUH_MCP_HOST` now defaults to `127.0.0.1`. HTTP mode
+   refuses to start on a non-loopback host without `WAZUH_MCP_API_KEY`, unless
+   `WAZUH_MCP_ALLOW_INSECURE_BIND=true` (logs a loud warning).
+2. **DNS-rebinding protection enabled** — `enable_dns_rebinding_protection=True` with
+   `allowed_hosts`/`allowed_origins` populated from the bind host plus
+   `WAZUH_MCP_ALLOWED_HOSTS` / `WAZUH_MCP_ALLOWED_ORIGINS`.
+3. **Role no longer settable via tool argument** — in HTTP mode the session role is
+   derived from the authenticated bearer token in middleware before dispatch; the
+   `set_session_role` tool is a no-op error in HTTP and works only in stdio.
+4. **Fail-closed roles** — unknown/typo role names resolve to `viewer` (was `analyst`)
+   in both `identity.effective_role()` and `rbac._current_role()`; env default unified
+   to `viewer`.
+5. **Origin/CSRF** — on a non-loopback bind with no `WAZUH_MCP_ALLOWED_ORIGINS`, browser
+   `Origin` requests are denied by default; Origin-less requests require API-key auth.
+   Loopback binds keep permissive passthrough.
+6. **Autonomous monitor** — auto-resume on startup is gated behind
+   `WAZUH_MCP_AUTO_RESUME_MONITOR` (default false); a reusable guard requires both
+   `WAZUH_ALLOW_WRITES=true` and `WAZUH_MCP_AUTONOMOUS_AR=true` plus a never-block
+   IP allowlist (`WAZUH_MCP_AR_SAFE_IPS`) before any automated active response. (The
+   monitor performs no auto-blocking today; the guard hardens current and future paths.)
+7. **Dependencies pinned** — compatible-release ranges with upper bounds in
+   `pyproject.toml`; committed `requirements.lock`; `.github/dependabot.yml` added.
+   (CI already ran `bandit` + `pip-audit`; pip-audit now targets the lockfile.)
+8. **PII scrubbing is opt-in** — `WAZUH_MCP_SCRUB_PII` (default false). Secret redaction
+   and prompt-injection filtering remain always on.
+9. **Global input sanitizer relaxed** — removed the shell-metacharacter check and base64
+   variant-decoding (false positives on CEF `|`, Lucene `&&`/`||`, base64-like hashes);
+   kept size caps, prompt-override tags, path-traversal, and URL-decode checks. Verified
+   no tool feeds user input into a shell (no `subprocess`/`os.system`/`shell=True`).
+10. **Active-response command allowlist** — `WAZUH_MCP_AR_ALLOWED_COMMANDS`
+    (default `firewall-drop,restart-wazuh`) enforced in `run_active_response` and
+    `approve_response`.
+11. **XML upload path validation** — `upload_xml_file` rejects paths outside the
+    `/rules/files/`, `/decoders/files/`, and `/lists/files/` Manager file-API routes
+    and any `..`.
+12. **README tool count corrected** — now "239 tools across 52 modules", with
+    `scripts/generate_tool_table.py` to regenerate and a `--check` mode for CI.
+13. **`WAZUH_VERIFY_SSL` docs** — README Docker block now matches `env.example` (`true`).
+14. **`requirements.txt`** — converted to an authoritative pinned runtime export.
+
+> **Process note:** the project history was squashed into a single commit, which cannot be
+> reconstructed retroactively. Going forward, changes must be committed granularly (one
+> logical change per commit) so security-relevant edits are individually reviewable.
+
 ### Added
 - `wazuh_mcp/mitre_data.py` — full MITRE ATT&CK technique map expanded from 21 to 149 techniques; `enrich_mitre_ids()` and `get_technique()` helpers
 - `wazuh_mcp/geo.py` — dedicated GeoIP module with `geoip_lookup()` (HTTPS only) and new `geoip_batch()` for async concurrent enrichment

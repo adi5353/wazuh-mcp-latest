@@ -84,15 +84,31 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 
+# PII scrubbing is OPT-IN: emails/IPs/SSNs are frequently the analyst's actual
+# answer (e.g. "which IP attacked us?"), so redacting them by default mangles
+# legitimate output. Enable with WAZUH_MCP_SCRUB_PII=true. Secret redaction and
+# prompt-injection filtering remain always-on regardless of this flag.
+def _scrub_pii_enabled() -> bool:
+    return os.getenv("WAZUH_MCP_SCRUB_PII", "false").strip().lower() == "true"
+
+
 def _scrub_pii(value: str) -> str:
-    """Replace PII patterns (emails, SSNs, credit card numbers) with placeholders."""
+    """Replace PII patterns (emails, SSNs, credit card numbers) with placeholders.
+
+    No-op unless WAZUH_MCP_SCRUB_PII=true.
+    """
+    if not _scrub_pii_enabled():
+        return value
     for pattern, placeholder in _PII_PATTERNS:
         value = pattern.sub(placeholder, value)
     return value
 
 
 def sanitize_string(value: str) -> str:
-    """Strip prompt injection tokens, executable code, secrets, and PII from a string."""
+    """Strip prompt injection tokens, executable code, and secrets from a string.
+
+    PII scrubbing is applied only when WAZUH_MCP_SCRUB_PII=true (see _scrub_pii).
+    """
     for pat in _PROMPT_INJECTION_PATTERNS:
         value = pat.sub("[FILTERED]", value)
     value = _CODE_EXECUTION_PATTERNS.sub("[CODE_FILTERED]", value)
