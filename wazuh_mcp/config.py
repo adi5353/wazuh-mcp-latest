@@ -153,12 +153,20 @@ class Config:
         )
 
 
+_config_log = __import__("logging").getLogger("wazuh-mcp.config")
+
+
 def _load_instances_json(raw_inline: str, manager_user: str, manager_pass: str,
                          indexer_host: str, indexer_user: str, indexer_pass: str) -> tuple:
     """Parse MSSP tenant list from inline JSON string or WAZUH_INSTANCES_FILE path.
 
-    Prefer WAZUH_INSTANCES_FILE over inline WAZUH_INSTANCES so credentials
-    can live in a version-controlled JSON file rather than a shell env var.
+    Prefer WAZUH_INSTANCES_FILE over inline WAZUH_INSTANCES.
+    WAZUH_INSTANCES_FILE should point to a file outside version control
+    (e.g. an env-injected secret file or a secrets-manager-mounted path).
+    Never commit tenant credential files to source control.
+
+    M5: A startup warning is emitted when inline WAZUH_INSTANCES is used
+    so operators know to migrate to a secrets-manager-backed file.
     """
     file_path = os.getenv("WAZUH_INSTANCES_FILE", "")
     if file_path:
@@ -167,6 +175,16 @@ def _load_instances_json(raw_inline: str, manager_user: str, manager_pass: str,
                 raw_inline = fh.read()
         except OSError as e:
             raise RuntimeError(f"Cannot read WAZUH_INSTANCES_FILE={file_path!r}: {e}") from e
+    elif raw_inline:
+        # M5: Warn operators that inline WAZUH_INSTANCES credentials are less secure.
+        # Shell history, /proc/*/environ, and container inspect all expose env vars.
+        # Migrate to WAZUH_INSTANCES_FILE pointing at a secrets-manager-mounted file.
+        _config_log.warning(
+            "WAZUH_INSTANCES is set inline in the environment. "
+            "Tenant credentials in env vars may be visible via shell history, "
+            "container inspect, or /proc/*/environ. "
+            "Prefer WAZUH_INSTANCES_FILE pointing at a secrets-manager-mounted path."
+        )
 
     if not raw_inline:
         return ()

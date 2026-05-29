@@ -79,6 +79,27 @@ except ImportError:
     log = logging.getLogger("wazuh-mcp")  # type: ignore[assignment]
     _structlog_available = False
 
+# ── H1: /health auth check — pure function, module-level for testability ──────
+
+import hmac as _hmac_module  # noqa: E402 — placed here to keep close to usage
+
+
+async def _health_caller_is_authenticated_fn(request: Any, api_key: str) -> bool:
+    """Return True when *request* carries the valid API-key bearer token.
+
+    Pure function (no globals) so tests can call it directly.
+    Returns False if *api_key* is empty — no key configured means no
+    authenticated health callers (prevents timing-oracle on an empty secret).
+    """
+    if not api_key:
+        return False
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if not token:
+        return False
+    return _hmac_module.compare_digest(token.encode(), api_key.encode())
+
+
 # ── Global config ─────────────────────────────────────────────────────────────
 cfg = Config.from_env()
 wz = WazuhClient(cfg)
@@ -1147,6 +1168,14 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
         # ── /health endpoint (deep component health) ───────────────────────
+        # H1: unauthenticated callers receive ONLY {status, uptime_seconds}.
+        # Authenticated callers (valid WAZUH_MCP_API_KEY bearer) get full detail.
+        _health_api_key = os.getenv("WAZUH_MCP_API_KEY", "").strip()
+
+        async def _health_caller_is_authenticated(request) -> bool:  # type: ignore[no-untyped-def]
+            """Delegate to module-level pure function (testable)."""
+            return await _health_caller_is_authenticated_fn(request, _health_api_key)
+
         async def health_check(request):  # type: ignore[no-untyped-def]
             checks: dict = {}
             latencies: dict = {}
@@ -1215,18 +1244,21 @@ def main() -> None:
                 for k, v in checks.items()
                 if k in ("manager_api", "indexer", "audit_log")
             )
-            return JSONResponse(
-                {
-                    "status": "healthy" if all_ok else "degraded",
-                    "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+            # H1: restrict detailed health intel to authenticated callers only.
+            status_str = "healthy" if all_ok else "degraded"
+            public_body = {
+                "status": status_str,
+                "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+            }
+            if await _health_caller_is_authenticated(request):
+                full_body = {
+                    **public_body,
                     "manager_version": mgr_version,
                     "checks": checks,
                     "latency_ms": latencies,
-                    # Operational intelligence omitted from public /health to prevent
-                    # unauthenticated reconnaissance (Gap 8 fix).
-                },
-                status_code=200 if all_ok else 503,
-            )
+                }
+                return JSONResponse(full_body, status_code=200 if all_ok else 503)
+            return JSONResponse(public_body, status_code=200 if all_ok else 503)
 
         # ── Audit middleware — pure ASGI (no BaseHTTPMiddleware) ─────────────
         # BaseHTTPMiddleware consumes the request body stream, preventing the
