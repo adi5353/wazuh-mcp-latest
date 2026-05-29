@@ -228,6 +228,14 @@ def validate_active_response_target(src_ip: str | None) -> str | None:
     except ValueError:
         return f"Invalid src_ip '{src_ip}': must be a valid IPv4 or IPv6 address."
 
+    # Operator-defined never-block allowlist (Issue 6) — exact-match IPs.
+    safe_ips = {ip.strip() for ip in os.getenv("WAZUH_MCP_AR_SAFE_IPS", "").split(",") if ip.strip()}
+    if str(addr) in safe_ips or src_ip.strip() in safe_ips:
+        return (
+            f"Active response blocked: {src_ip} is in the WAZUH_MCP_AR_SAFE_IPS "
+            f"never-block allowlist."
+        )
+
     # Built-in protected networks (always blocked regardless of config)
     _BUILTIN_PROTECTED: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
         ipaddress.ip_network("10.0.0.0/8"),       # RFC 1918
@@ -260,6 +268,31 @@ def validate_active_response_target(src_ip: str | None) -> str | None:
                 f"protected range {net}. To override, remove the IP from "
                 f"WAZUH_AR_BLOCKED_CIDRS or review the target."
             )
+    return None
+
+
+# Default allowlist of active-response command names. Override with
+# WAZUH_MCP_AR_ALLOWED_COMMANDS (comma-separated). Commands outside this set are
+# rejected before any PUT /active-response is issued (Issue 10).
+_AR_DEFAULT_COMMANDS = "firewall-drop,restart-wazuh"
+
+
+def ar_allowed_commands() -> set[str]:
+    """Return the configured set of permitted active-response command names."""
+    raw = os.getenv("WAZUH_MCP_AR_ALLOWED_COMMANDS", _AR_DEFAULT_COMMANDS)
+    return {c.strip() for c in raw.split(",") if c.strip()}
+
+
+def validate_ar_command(command: str) -> str | None:
+    """Return an error string if *command* is not in the AR allowlist, else None."""
+    allowed = ar_allowed_commands()
+    name = (command or "").strip()
+    if name not in allowed:
+        return (
+            f"Active-response command '{command}' is not allowed. "
+            f"Permitted commands: {sorted(allowed)}. "
+            f"Set WAZUH_MCP_AR_ALLOWED_COMMANDS to change this."
+        )
     return None
 
 

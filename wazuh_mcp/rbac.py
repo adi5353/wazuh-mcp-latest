@@ -7,7 +7,7 @@ Defines four role tiers with escalating privileges:
   responder  — analyst + active response, CDB writes, suppression
   admin      — responder + cluster management, agent restart, rule push
 
-Set the server-wide role via WAZUH_MCP_USER_ROLE env var (default: analyst).
+Set the server-wide role via WAZUH_MCP_USER_ROLE env var (default: viewer — fail closed).
 Tools annotated with a role requirement will reject calls from lower-tier roles.
 
 Usage in a tool module::
@@ -50,14 +50,18 @@ _ROLE_NAMES: dict[ROLE, str] = {v: k for k, v in _NAME_TO_ROLE.items()}
 
 
 def _current_role() -> ROLE:
-    """Return the effective role: task-local identity first, env var fallback."""
+    """Return the effective role: task-local identity first, env var fallback.
+
+    Fails closed: an unknown/misspelled role name resolves to VIEWER
+    (least privilege) rather than ANALYST.
+    """
     try:
         from .identity import effective_role
         return effective_role()
     except ImportError:
         pass
-    raw = os.getenv("WAZUH_MCP_USER_ROLE", "analyst").strip().lower()
-    return _NAME_TO_ROLE.get(raw, ROLE.ANALYST)
+    raw = os.getenv("WAZUH_MCP_USER_ROLE", "viewer").strip().lower()
+    return _NAME_TO_ROLE.get(raw, ROLE.VIEWER)
 
 
 def require_role(minimum: ROLE) -> dict | None:

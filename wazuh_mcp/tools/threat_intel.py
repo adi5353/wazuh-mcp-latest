@@ -28,15 +28,24 @@ def _cache_get(key: str) -> dict | None:
     return None
 
 
+_CACHE_MAX_SIZE = 2000
+_CACHE_EVICT_N  = 200   # entries removed per eviction pass
+
 def _cache_set(key: str, value: dict | None, ttl: int) -> None:
     if value is None:
         return
     _IOC_CACHE[key] = (value, time.monotonic() + ttl)
-    if len(_IOC_CACHE) > 2000:
+    if len(_IOC_CACHE) > _CACHE_MAX_SIZE:
         now = time.monotonic()
+        # Pass 1: remove expired entries.
         stale = [k for k, (_, exp) in _IOC_CACHE.items() if exp < now]
-        for k in stale[:200]:
+        for k in stale[:_CACHE_EVICT_N]:
             _IOC_CACHE.pop(k, None)
+        # Pass 2: if still over limit, evict the soonest-to-expire entries.
+        if len(_IOC_CACHE) > _CACHE_MAX_SIZE:
+            oldest = sorted(_IOC_CACHE, key=lambda k: _IOC_CACHE[k][1])
+            for k in oldest[:_CACHE_EVICT_N]:
+                _IOC_CACHE.pop(k, None)
 
 # Shared connection pools — one TLS handshake per host, reused across all calls.
 # Closed on server shutdown via close_shared_ti_clients() called from server.py lifespan.

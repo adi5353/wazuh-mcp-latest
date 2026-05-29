@@ -1,24 +1,23 @@
-# ── Installation ──────────────────────────────────────────────────────────────
-# Do NOT install from this file directly — it is intentionally minimal and will
-# produce a broken environment missing structlog, uvicorn, starlette, and
-# python-dotenv.
+# ─────────────────────────────────────────────────────────────────────────────
+# Authoritative PINNED runtime dependencies for Wazuh MCP.
 #
-# Correct install (development / production):
+# This file is now safe to install from directly:
 #
-#   pip install -e .               # installs all deps from pyproject.toml
-#   pip install -e ".[dev]"        # also installs pytest, coverage tools
+#   pip install -r requirements.txt        # runtime only
+#   pip install -e .                        # same deps via pyproject.toml (ranges)
+#   pip install -r requirements.lock        # full pinned closure incl. transitives + dev
 #
-# Docker: the Dockerfile already uses `pip install -e .` — no changes needed.
-#
-# This file is retained only for tools that require requirements.txt to exist
-# (e.g. some CI scanners). All authoritative dependency specs live in pyproject.toml.
-#
-# Runtime deps (from pyproject.toml):
-mcp>=1.0.0
-httpx>=0.28.0
-python-dotenv>=1.0.0
-uvicorn>=0.30.0
-starlette>=0.40.0
-structlog>=24.0.0
-prometheus-client>=0.20.0
-PyYAML>=6.0
+# Version ranges (with upper bounds) live in pyproject.toml; the exact pins below
+# and the complete transitive closure in requirements.lock are what CI's pip-audit
+# and reproducible Docker/production installs consume. Regenerate after changing
+# pyproject.toml dependencies.
+# ─────────────────────────────────────────────────────────────────────────────
+mcp==1.27.1
+httpx==0.28.1
+python-dotenv==1.2.2
+uvicorn==0.47.0
+starlette==1.0.1
+structlog==25.5.0
+defusedxml==0.7.1
+prometheus-client==0.25.0
+PyYAML==6.0.3

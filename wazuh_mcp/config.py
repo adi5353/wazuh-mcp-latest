@@ -66,10 +66,10 @@ class Config:
         return {
             "manager_host": self.manager_host,
             "manager_user": self.manager_user,
-            "manager_pass": "[REDACTED]",
+            "manager_pass": "[REDACTED]",  # nosec B105 — literal placeholder, not a credential
             "indexer_host": self.indexer_host,
             "indexer_user": self.indexer_user,
-            "indexer_pass": "[REDACTED]",
+            "indexer_pass": "[REDACTED]",  # nosec B105 — literal placeholder, not a credential
             "alerts_index": self.alerts_index,
             "verify_ssl": self.verify_ssl,
             "allow_writes": self.allow_writes,

@@ -66,7 +66,7 @@ class AlertResponse(BaseModel):
     full_log: str = Field(default="")
     location: str = Field(default="")
 
-    model_config = {"extra": "ignore", "populate_by_name": True}
+    model_config = {"extra": "ignore", "populate_by_name": True}  # type: ignore[dict-item]
 
 
 # ── Agent schema ──────────────────────────────────────────────────────────────

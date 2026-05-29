@@ -40,6 +40,31 @@ _POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_HTTP_POOL_SIZE",    "100"))
 _POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_HTTP_MAX_KEEPALIVE",  "40"))
 
 
+# Allowed Manager file-API route prefixes for uploads. These are the only
+# Manager endpoints this server writes files to (rules, decoders, and CDB lists).
+# Anything else — or any path containing '..' — is rejected to prevent traversal
+# and arbitrary-endpoint writes via a crafted path.
+_ALLOWED_UPLOAD_PREFIXES = ("/rules/files/", "/decoders/files/", "/lists/files/")
+
+
+def _validate_manager_file_path(path: str) -> None:
+    """Reject any upload path outside the Manager rules/decoders file API.
+
+    Guards against path traversal (``..``) and arbitrary-endpoint writes. The
+    query string (``?overwrite=true``) is ignored for prefix matching.
+    """
+    if not isinstance(path, str) or not path:
+        raise ValueError("upload path must be a non-empty string")
+    route = path.split("?", 1)[0]
+    if ".." in route:
+        raise ValueError(f"Refusing upload path containing '..': {path!r}")
+    if not route.startswith(_ALLOWED_UPLOAD_PREFIXES):
+        raise ValueError(
+            f"Refusing upload to disallowed path {path!r}. "
+            f"Allowed prefixes: {_ALLOWED_UPLOAD_PREFIXES}"
+        )
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Return True if the exception warrants a retry."""
     if isinstance(exc, httpx.RequestError):
@@ -215,7 +240,11 @@ class WazuhClient:
         Uses application/octet-stream as required by the Manager file upload API.
         Automatically appends ?overwrite=true so existing files are replaced.
         Retries on transient network/5xx errors (same policy as request()).
+
+        ``path`` is restricted to the Manager rules/decoders file-API routes to
+        prevent traversal or arbitrary-endpoint writes via a crafted path.
         """
+        _validate_manager_file_path(path)
         if not wazuh_manager_breaker.allow():
             s = wazuh_manager_breaker.status()
             raise RuntimeError(

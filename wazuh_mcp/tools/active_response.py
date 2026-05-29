@@ -316,7 +316,10 @@ def register(ctx: ToolContext) -> None:
         agent_id = params.get("agent_id", "")
         src_ip   = params.get("src_ip")
 
-        from ..validators import validate_active_response_target
+        from ..validators import validate_active_response_target, validate_ar_command
+        cmd_err = validate_ar_command(command)
+        if cmd_err:
+            return {"error": cmd_err, "blocked": True, "token": token}
         ip_err = validate_active_response_target(src_ip)
         if ip_err:
             return {"error": ip_err, "blocked": True, "token": token}

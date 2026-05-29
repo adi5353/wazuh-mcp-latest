@@ -296,7 +296,20 @@ async def set_session_role_tool(api_key: str) -> dict:
 
     If WAZUH_MCP_KEY_MAP is not set, this tool has no effect and the server
     falls back to WAZUH_MCP_USER_ROLE (single-user mode).
+
+    HTTP transport: this tool is DISABLED. A request's role is derived from the
+    authenticated bearer token in the request middleware, never from a tool
+    argument — otherwise any caller could self-elevate. Use stdio for the
+    single-local-user set-role workflow.
     """
+    if os.getenv("WAZUH_MCP_TRANSPORT", "stdio") == "http":
+        return {
+            "error": (
+                "set_session_role is only available in stdio transport. In HTTP "
+                "mode the session role is derived from your authenticated API key "
+                "(WAZUH_MCP_KEY_MAP); it cannot be set via a tool argument."
+            )
+        }
     role = resolve_role_for_key(api_key)
     if role is None:
         return {
@@ -901,13 +914,77 @@ End with: "I am ready to take my first shift." and list 3 things you would watch
 # Entry point — HTTP (SSE) or STDIO
 # ============================================================================
 
+def _is_loopback_host(host: str) -> bool:
+    """True if *host* binds only to the local machine (no remote exposure)."""
+    h = (host or "").strip().lower()
+    if h in ("localhost", "::1", ""):
+        return True
+    try:
+        import ipaddress as _ipaddress
+        return _ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def _check_bind_security(transport: str, host: str, api_key: str) -> None:
+    """Secure-by-default bind guard (Issue 1).
+
+    Refuse to expose the server on a non-loopback address without authentication
+    unless WAZUH_MCP_ALLOW_INSECURE_BIND=true is explicitly set (logs a warning).
+    Raises SystemExit(2) when refusing.
+    """
+    if transport != "http" or _is_loopback_host(host) or api_key:
+        return
+    allow_insecure = os.getenv("WAZUH_MCP_ALLOW_INSECURE_BIND", "false").strip().lower() == "true"
+    if not allow_insecure:
+        log.error(
+            "Refusing to start: WAZUH_MCP_HOST=%s is non-loopback but no "
+            "WAZUH_MCP_API_KEY is set. Either set WAZUH_MCP_API_KEY, bind to "
+            "127.0.0.1, or (NOT recommended) set WAZUH_MCP_ALLOW_INSECURE_BIND=true.",
+            host,
+        )
+        raise SystemExit(2)
+    log.warning(
+        "INSECURE BIND: serving on non-loopback host %s with NO API key "
+        "because WAZUH_MCP_ALLOW_INSECURE_BIND=true. Anyone who can reach "
+        "this port has full access. Set WAZUH_MCP_API_KEY immediately.",
+        host,
+    )
+
+
+def _origin_request_allowed(
+    origin: str,
+    *,
+    is_loopback: bool,
+    has_auth: bool,
+    allowed_origins: set,
+) -> bool:
+    """CSRF/origin decision (Issue 5). Pure function — easy to unit-test.
+
+    * No Origin header (SDK/curl): allowed, except on a non-loopback bind with no
+      API-key auth.
+    * Origin present + allowlist configured: enforce it.
+    * Origin present, no allowlist, non-loopback: deny browser origins by default.
+    * Origin present, no allowlist, loopback: passthrough (dev-friendly).
+    """
+    if not origin:
+        return is_loopback or has_auth
+    if allowed_origins:
+        return origin in allowed_origins
+    if not is_loopback:
+        return False
+    return True
+
+
 def main() -> None:
     import signal
 
     transport = os.getenv("WAZUH_MCP_TRANSPORT", "stdio")
-    host = os.getenv("WAZUH_MCP_HOST", "0.0.0.0")
+    host = os.getenv("WAZUH_MCP_HOST", "127.0.0.1")
     port = int(os.getenv("WAZUH_MCP_PORT", "8000"))
     api_key = os.getenv("WAZUH_MCP_API_KEY", "")
+
+    _check_bind_security(transport, host, api_key)
 
     log.info(
         "Starting Wazuh MCP server — transport=%s host=%s port=%s writes=%s manager=%s indexer=%s",
@@ -915,9 +992,18 @@ def main() -> None:
     )
 
     # ── Auto-resume autonomous monitor if it was running before restart (Gap 2) ──
+    # Gated behind WAZUH_MCP_AUTO_RESUME_MONITOR (default false): a background
+    # loop that acts on alerts must not silently restart on every reboot.
+    _auto_resume = os.getenv("WAZUH_MCP_AUTO_RESUME_MONITOR", "false").strip().lower() == "true"
     from .state_store import load_monitor_state
     _saved_monitor = load_monitor_state()
-    if _saved_monitor and _saved_monitor.get("running"):
+    if _saved_monitor and _saved_monitor.get("running") and not _auto_resume:
+        log.warning(
+            "Autonomous SOC monitor was active before restart but auto-resume is "
+            "disabled (set WAZUH_MCP_AUTO_RESUME_MONITOR=true to re-enable). "
+            "Call start_autonomous_monitor to resume manually."
+        )
+    if _saved_monitor and _saved_monitor.get("running") and _auto_resume:
         log.info(
             "Autonomous SOC monitor was active before restart — auto-resuming "
             "(interval=%ds threshold=%d)",
@@ -1210,6 +1296,16 @@ def main() -> None:
                     if auth_raw else "anonymous"
                 )
 
+                # ── Bind session role from the AUTHENTICATED bearer token (Issue 3) ──
+                # Role is derived from the verified key here, before tool dispatch,
+                # so it can never be set by a tool argument. Runs in the same task
+                # context as the downstream app, so the ContextVar propagates.
+                if auth_raw:
+                    _bearer = auth_raw.removeprefix("Bearer ").strip()
+                    _resolved_role = resolve_role_for_key(_bearer)
+                    if _resolved_role is not None:
+                        set_session_role(_resolved_role)
+
                 # ── Capture response status via wrapped send ───────────────
                 status_code: list[int] = [200]
 
@@ -1268,19 +1364,13 @@ def main() -> None:
         )
 
         class OriginValidationMiddleware:
-            def __init__(self, app) -> None:
+            def __init__(self, app, *, is_loopback: bool, has_auth: bool) -> None:
                 self._app = app
+                self._is_loopback = is_loopback
+                self._has_auth = has_auth
 
             async def __call__(self, scope, receive, send) -> None:
                 if scope["type"] != "http":
-                    await self._app(scope, receive, send)
-                    return
-
-                headers = dict(scope.get("headers", []))
-                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
-
-                # Non-browser clients (SDKs, curl) send no Origin — allow through
-                if not origin:
                     await self._app(scope, receive, send)
                     return
 
@@ -1289,21 +1379,52 @@ def main() -> None:
                     await self._app(scope, receive, send)
                     return
 
-                # If an allowlist is configured, enforce it
-                if _allowed_origins and origin not in _allowed_origins:
-                    response = Response(
-                        f"Origin '{origin}' not allowed. "
-                        f"Set WAZUH_MCP_ALLOWED_ORIGINS to permit it.",
-                        status_code=403,
+                headers = dict(scope.get("headers", []))
+                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
+
+                async def _deny(message: str) -> None:
+                    await Response(message, status_code=403)(scope, receive, send)
+
+                # Delegate to the module-level pure function (testable without HTTP).
+                if not _origin_request_allowed(
+                    origin,
+                    is_loopback=self._is_loopback,
+                    has_auth=self._has_auth,
+                    allowed_origins=_allowed_origins,
+                ):
+                    msg = (
+                        f"Origin '{origin}' not allowed. Set WAZUH_MCP_ALLOWED_ORIGINS "
+                        f"to permit it."
+                        if origin else
+                        "Origin-less requests require API-key authentication when "
+                        "bound to a non-loopback address. Set WAZUH_MCP_API_KEY."
                     )
-                    await response(scope, receive, send)
+                    await Response(msg, status_code=403)(scope, receive, send)
                     return
 
                 await self._app(scope, receive, send)
 
         # ── Assemble ASGI app ──────────────────────────────────────────────
+        # ── DNS-rebinding protection (Issue 2) ─────────────────────────────
+        # Enabled by default. Host header must match the server's bind host or
+        # an entry in WAZUH_MCP_ALLOWED_HOSTS. mcp-remote users behind a proxy
+        # or DNS name MUST add that name to WAZUH_MCP_ALLOWED_HOSTS.
+        _allowed_hosts_env = os.getenv("WAZUH_MCP_ALLOWED_HOSTS", "").strip()
+        _allowed_hosts: set[str] = {
+            host, f"{host}:{port}",
+            "localhost", f"localhost:{port}",
+            "127.0.0.1", f"127.0.0.1:{port}",
+        }
+        _allowed_hosts |= {h.strip() for h in _allowed_hosts_env.split(",") if h.strip()}
         mcp.settings.transport_security = TransportSecuritySettings(
-            enable_dns_rebinding_protection=False
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=sorted(_allowed_hosts),
+            allowed_origins=sorted(_allowed_origins),
+        )
+        log.info(
+            "DNS-rebinding protection enabled — allowed_hosts=%s (add your "
+            "server host to WAZUH_MCP_ALLOWED_HOSTS if mcp-remote gets HTTP 421)",
+            ", ".join(sorted(_allowed_hosts)),
         )
         mcp_asgi = mcp.sse_app()
 
@@ -1373,7 +1494,9 @@ def main() -> None:
             os.getenv("WAZUH_MCP_RATE_LIMIT_BURST", "10"),
         )
 
-        app = OriginValidationMiddleware(app)  # type: ignore[assignment]
+        app = OriginValidationMiddleware(  # type: ignore[assignment]
+            app, is_loopback=_is_loopback_host(host), has_auth=bool(api_key)
+        )
         if _allowed_origins:
             log.info("Origin validation enabled — allowed: %s", ", ".join(sorted(_allowed_origins)))
         else:
