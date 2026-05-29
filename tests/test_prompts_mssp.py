@@ -403,7 +403,10 @@ class TestMSSPConfig:
         original_cfg = srv.cfg
         srv.cfg = base_cfg
 
-        # Use a barrier so both tasks reach the switch_tenant call simultaneously
+        # Use a barrier so both tasks reach the switch_tenant call simultaneously.
+        # asyncio.Barrier was added in Python 3.11; skip on older versions.
+        if not hasattr(asyncio, "Barrier"):
+            pytest.skip("asyncio.Barrier requires Python 3.11+")
         barrier = asyncio.Barrier(2)
         results: dict[str, str] = {}
 
