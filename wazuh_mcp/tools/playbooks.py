@@ -190,7 +190,7 @@ async def _run_rollback(
     completed_step_indices: list[int],
     variables: dict,
     registry: dict,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Execute rollback steps for any completed steps that have rollback definitions.
 
     Rollback steps are executed in reverse order (last completed first) and are

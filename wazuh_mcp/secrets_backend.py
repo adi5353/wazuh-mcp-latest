@@ -83,7 +83,9 @@ def _load_aws() -> dict[str, str]:
         client = boto3.client("secretsmanager", region_name=region)
         resp = client.get_secret_value(SecretId=secret_name)
         data: dict = json.loads(resp["SecretString"])
-        log.info("secrets_backend: loaded %d secrets from AWS secret '%s'", len(data), secret_name)
+        # Log only the count and secret name — never the secret values themselves.
+        secret_count = len(data)
+        log.info("secrets_backend: loaded %d secrets from AWS ('%s')", secret_count, secret_name)
         return {str(k): str(v) for k, v in data.items()}
     except Exception as exc:
         log.warning("secrets_backend: AWS Secrets Manager load failed (%s) — falling back to env vars", exc)
