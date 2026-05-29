@@ -1399,6 +1399,10 @@ def main() -> None:
                     # Constant-time comparison prevents timing-attack brute force
                     if not _hmac.compare_digest(token, self._key):
                         return Response("Unauthorized", status_code=401)
+                    # M2: bind token as identity key so cross-request injection
+                    # counter accumulates per authenticated caller across requests.
+                    from .identity import set_identity_key as _set_id_key
+                    _set_id_key(token)
                 return await call_next(request)
 
         # ── Origin validation middleware (CSRF protection) ─────────────────

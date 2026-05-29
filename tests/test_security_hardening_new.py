@@ -205,6 +205,74 @@ class TestM6FailClosedSecurityPaths:
         assert identity.effective_role() == ROLE.VIEWER
 
 
+# ── M2: Injection counter persistent per identity across requests ──────────────
+
+class TestM2PersistentInjectionCounter:
+    """Cross-request injection counter must accumulate per identity, not reset."""
+
+    def setup_method(self):
+        """Reset the persistent counter before each test."""
+        from wazuh_mcp import identity
+        with identity._persistent_injection_lock:
+            identity._persistent_injection_counts.clear()
+        identity._ctx_role.set(None)
+        identity._ctx_injection_count.set(0)
+        identity._ctx_identity_key.set(None)
+
+    def test_persistent_counter_increments_across_calls(self):
+        from wazuh_mcp import identity
+        identity.set_identity_key("test-api-key")
+        key = identity._ctx_identity_key.get()
+        assert key is not None
+
+        identity.record_injection_attempt()
+        assert identity.get_persistent_injection_count(key) == 1
+        identity.record_injection_attempt()
+        assert identity.get_persistent_injection_count(key) == 2
+
+    def test_lockout_triggers_at_threshold_via_persistent_count(self):
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+
+        identity.set_identity_key("persistent-key")
+        key = identity._ctx_identity_key.get()
+
+        # Seed the persistent counter to threshold - 1
+        with identity._persistent_injection_lock:
+            identity._persistent_injection_counts[key] = identity.INJECTION_LOCKOUT_THRESHOLD - 1
+
+        # One more attempt should trigger lockout
+        identity._ctx_injection_count.set(0)  # task counter is fresh
+        locked = identity.record_injection_attempt()
+        assert locked is True
+        assert identity.effective_role() == ROLE.VIEWER
+
+    def test_set_identity_key_stores_hash_not_raw(self):
+        from wazuh_mcp import identity
+        identity.set_identity_key("my-secret-key")
+        stored = identity._ctx_identity_key.get()
+        assert stored is not None
+        assert "my-secret-key" not in stored  # raw key must not be stored
+
+    def test_reset_persistent_injection_count(self):
+        from wazuh_mcp import identity
+        identity.set_identity_key("reset-test-key")
+        key = identity._ctx_identity_key.get()
+        identity.record_injection_attempt()
+        assert identity.get_persistent_injection_count(key) >= 1
+        identity.reset_persistent_injection_count(key)
+        assert identity.get_persistent_injection_count(key) == 0
+
+    def test_anonymous_callers_use_task_counter_only(self):
+        """When no identity key is set, lockout still works via task counter."""
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        identity._ctx_identity_key.set(None)
+        for _ in range(identity.INJECTION_LOCKOUT_THRESHOLD):
+            identity.record_injection_attempt()
+        assert identity.effective_role() == ROLE.VIEWER
+
+
 # ── L2: CI test marker for indexer-dependent tests ────────────────────────────
 
 class TestL2RequiresIndexerMarker:
