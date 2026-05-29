@@ -1112,14 +1112,32 @@ def main() -> None:
         # ── OpenAPI spec endpoint ──────────────────────────────────────────
         async def openapi_endpoint(request):  # type: ignore[no-untyped-def]
             """Auto-generated OpenAPI 3.1 spec from registered MCP tool schemas."""
+            # L3: mcp._tools is a private SDK attribute that may change between
+            # releases.  Use it when available; fall back to the public tool-list
+            # API or the locally-maintained _TOOL_REGISTRY as a last resort.
             tools_list = []
-            for tool in mcp._tools.values():  # type: ignore[attr-defined]
-                schema = getattr(tool, "parameters", {}) or {}
-                tools_list.append({
-                    "name": tool.name,
-                    "description": (tool.description or "")[:300],
-                    "inputSchema": schema,
-                })
+            try:
+                # Preferred: public API (MCP SDK >= 1.2)
+                tool_iter = mcp.get_tools() if callable(getattr(mcp, "get_tools", None)) else None
+                if tool_iter is None:
+                    # Fall back to private attr (MCP SDK < 1.2) under try/except
+                    _raw = mcp._tools  # type: ignore[attr-defined]
+                    tool_iter = _raw.values()
+                for tool in tool_iter:
+                    schema = getattr(tool, "parameters", None) or getattr(tool, "inputSchema", {}) or {}
+                    tools_list.append({
+                        "name": getattr(tool, "name", str(tool)),
+                        "description": (getattr(tool, "description", None) or "")[:300],
+                        "inputSchema": schema,
+                    })
+            except AttributeError:
+                # Private SDK attribute unavailable — use local registry as fallback.
+                for tool_name in _TOOL_REGISTRY:
+                    tools_list.append({
+                        "name": tool_name,
+                        "description": "",
+                        "inputSchema": {},
+                    })
             spec = {
                 "openapi": "3.1.0",
                 "info": {
@@ -1510,11 +1528,19 @@ def main() -> None:
             lifespan=_lifespan,
         )
 
-        # Middleware stack ordering (outermost runs FIRST on request, LAST on response):
-        # 1. APIKeyMiddleware       — reject unauthenticated requests
-        # 2. OriginValidationMiddleware — CSRF: block disallowed browser origins
-        # 3. RateLimitMiddleware    — throttle authenticated requests
-        # 4. AuditMiddleware        — log only authenticated, rate-allowed requests
+        # Middleware stack — each app = Foo(app) wraps an extra OUTER layer.
+        # The LAST assignment is the outermost layer and therefore runs FIRST on
+        # each incoming request.  Wrapping order (innermost → outermost):
+        #
+        #   innermost (runs last)
+        #   4. AuditMiddleware          — log after auth + rate-limit checks pass
+        #   3. RateLimitMiddleware      — throttle authenticated requests
+        #   2. OriginValidationMiddleware — CSRF / origin check
+        #   1. APIKeyMiddleware         — reject unauthenticated requests        ← outermost (runs first)
+        #   0. IPFilterMiddleware       — block banned IPs (if configured)       ← outermost when enabled
+        #  -1. SecurityHeadersMiddleware — inject HSTS / CSP response headers    ← very outermost
+        #
+        # L4 fix: comment now reflects actual ASGI wrap/execution order above.
 
         app = AuditMiddleware(app)  # type: ignore[assignment]
         log.info("Audit logging enabled → %s", os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))

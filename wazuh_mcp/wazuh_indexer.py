@@ -23,6 +23,42 @@ import httpx
 from .config import Config
 from .circuit_breaker import opensearch_breaker
 
+# M4: field-name allow-list enforcement ─────────────────────────────────────
+# When validate_fields=True is passed to search/count, leaf field names inside
+# the Elasticsearch DSL are checked against the validators allow-list.
+# Internal (server-constructed) queries should NOT set validate_fields=True.
+# Only queries that contain user-supplied field names need this flag.
+
+def _extract_leaf_fields(obj: Any, fields: set | None = None) -> set:
+    """Recursively collect all string keys from term/terms/match/range clauses."""
+    if fields is None:
+        fields = set()
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if key in ("term", "terms", "match", "match_phrase", "range", "wildcard", "prefix"):
+                if isinstance(val, dict):
+                    fields.update(val.keys())
+            else:
+                _extract_leaf_fields(val, fields)
+    elif isinstance(obj, list):
+        for item in obj:
+            _extract_leaf_fields(item, fields)
+    return fields
+
+
+def _validate_query_fields(body: dict) -> None:
+    """Raise ValueError if any leaf field name is not in the allow-list."""
+    from .validators import validate_es_field
+    fields = _extract_leaf_fields(body)
+    for field in fields:
+        # Skip internal ES meta-fields
+        if field.startswith("_"):
+            continue
+        try:
+            validate_es_field(field)
+        except ValueError as exc:
+            raise ValueError(f"Query field validation failed: {exc}") from exc
+
 log = logging.getLogger(__name__)
 
 # ── Retry configuration (same policy as WazuhClient) ─────────────────────────
@@ -84,8 +120,20 @@ class WazuhIndexer:
     async def __aexit__(self, *_: Any) -> None:
         await self.aclose()
 
-    async def search(self, body: dict, index: Optional[str] = None) -> dict:
-        """Run an OpenSearch query with circuit breaker + deduplication + retry."""
+    async def search(self, body: dict, index: Optional[str] = None,
+                     validate_fields: bool = False) -> dict:
+        """Run an OpenSearch query with circuit breaker + deduplication + retry.
+
+        Args:
+            body: Elasticsearch DSL query body.
+            index: Index pattern to search. Defaults to cfg.alerts_index.
+            validate_fields: When True, leaf field names in term/match/range
+                clauses are checked against the allow-list in validators.py.
+                Set this for queries that contain user-supplied field names.
+        """
+        # M4: reject user-controlled fields not in the allow-list
+        if validate_fields:
+            _validate_query_fields(body)
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(
@@ -130,8 +178,18 @@ class WazuhIndexer:
                 raise
         raise last_exc  # unreachable but satisfies type checker
 
-    async def count(self, query: dict, index: Optional[str] = None) -> int:
-        """Count matching documents with circuit breaker + automatic retry on transient failures."""
+    async def count(self, query: dict, index: Optional[str] = None,
+                    validate_fields: bool = False) -> int:
+        """Count matching documents with circuit breaker + automatic retry on transient failures.
+
+        Args:
+            query: Elasticsearch query clause (the inner query, not the full body).
+            index: Index pattern. Defaults to cfg.alerts_index.
+            validate_fields: When True, field names are validated against the allow-list.
+        """
+        # M4: reject user-controlled fields not in the allow-list
+        if validate_fields:
+            _validate_query_fields({"query": query})
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(
