@@ -53,6 +53,10 @@ addopts = [
     "--cov-report=html:htmlcov",
     "--cov-fail-under=70",   # fail build if coverage drops below 70%
 ]
+markers = [
+    "requires_indexer: marks tests that need a live Wazuh Indexer (exclude from default CI run with --ignore=tests/test_roi_autonomous.py)",
+    "integration: marks integration tests that need live Wazuh infrastructure",
+]
 
 [tool.coverage.run]
 source = ["wazuh_mcp"]
