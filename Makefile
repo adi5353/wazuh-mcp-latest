@@ -1,4 +1,4 @@
-.PHONY: lint test test-cov security docker dev clean help
+.PHONY: lint test test-cov security docker dev clean help update-lock
 
 # ── Linting ───────────────────────────────────────────────────────────────────
 lint:
@@ -17,7 +17,11 @@ test-cov:
 # ── Security ──────────────────────────────────────────────────────────────────
 security:
 	bandit -r wazuh_mcp -c pyproject.toml
-	pip-audit --requirement requirements.txt
+	pip-audit --requirement requirements.lock
+
+# ── Dependency lock ───────────────────────────────────────────────────────────
+update-lock:
+	pip-compile pyproject.toml -o requirements.lock
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 docker:
