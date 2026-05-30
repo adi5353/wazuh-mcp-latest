@@ -87,7 +87,9 @@ def _cmd_init() -> None:
     # wizard — this is not a secret-leakage bug. File mode 0o600 restricts access.
     import os as _os
     fd = _os.open(env_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
-    with _os.fdopen(fd, "w") as f:
+    # Force UTF-8: generated comment lines contain box-drawing/em-dash glyphs
+    # that the platform default (cp1252 on Windows) cannot encode.
+    with _os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
     print(f"\n✓ .env written to: {env_path}")

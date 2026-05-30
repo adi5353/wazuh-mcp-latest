@@ -256,36 +256,48 @@ class TestRBACScheduler:
         asyncio.run(run())
 
 
-# ── Tool module allowlist ──────────────────────────────────────────────────────
+# ── Tool module auto-discovery ─────────────────────────────────────────────────
 
-class TestToolModuleAllowlist:
-    def test_allowlist_exists_in_server(self):
-        with patch.dict(os.environ, {
-            "WAZUH_HOST": "http://localhost:55000",
-            "WAZUH_USER": "admin",
-            "WAZUH_PASS": "admin",
-            "WAZUH_INDEXER_HOST": "http://localhost:9200",
-            "WAZUH_INDEXER_PASS": "admin",
-        }):
-            from wazuh_mcp.server import _TOOL_MODULE_ALLOWLIST
-            assert isinstance(_TOOL_MODULE_ALLOWLIST, frozenset)
-            assert len(_TOOL_MODULE_ALLOWLIST) >= 50
+class TestToolModuleAutoDiscovery:
+    """The hardcoded allowlist was removed (Open-Closed Principle). Any module in
+    wazuh_mcp/tools/ exposing ``register`` is auto-discovered — verify that the
+    discovery mechanism finds the known tool modules without an explicit list."""
 
-    def test_known_modules_in_allowlist(self):
-        with patch.dict(os.environ, {
-            "WAZUH_HOST": "http://localhost:55000",
-            "WAZUH_USER": "admin",
-            "WAZUH_PASS": "admin",
-            "WAZUH_INDEXER_HOST": "http://localhost:9200",
-            "WAZUH_INDEXER_PASS": "admin",
-        }):
-            from wazuh_mcp.server import _TOOL_MODULE_ALLOWLIST
-            assert "active_response" in _TOOL_MODULE_ALLOWLIST
-            assert "alerts" in _TOOL_MODULE_ALLOWLIST
-            assert "rule_wizard" in _TOOL_MODULE_ALLOWLIST
-            assert "rule_wizard_generate" in _TOOL_MODULE_ALLOWLIST
-            assert "rule_wizard_validate" in _TOOL_MODULE_ALLOWLIST
-            assert "rule_wizard_deploy" in _TOOL_MODULE_ALLOWLIST
+    def test_no_hardcoded_allowlist_remains(self):
+        import wazuh_mcp.server as server
+        assert not hasattr(server, "_TOOL_MODULE_ALLOWLIST"), (
+            "_TOOL_MODULE_ALLOWLIST should be removed in favour of auto-discovery"
+        )
+
+    def test_known_modules_are_discoverable(self):
+        import importlib
+        import pkgutil
+        from wazuh_mcp import tools as tools_pkg
+
+        discovered = {
+            modname
+            for _imp, modname, _pkg in pkgutil.iter_modules(tools_pkg.__path__)
+            if modname != "__init__"
+            and hasattr(
+                importlib.import_module(f"wazuh_mcp.tools.{modname}"), "register"
+            )
+        }
+        # Modules exposing a top-level register(ctx) are auto-discovered. The
+        # rule_wizard_* submodules expose register_generate/validate/deploy and
+        # are wired through rule_wizard.register(), so the orchestrator is what
+        # gets discovered.
+        for expected in ("active_response", "alerts", "rule_wizard"):
+            assert expected in discovered, f"{expected} not auto-discovered"
+        # Sanity: the suite of tool modules is substantial.
+        assert len(discovered) >= 50
+
+    def test_rule_wizard_subtools_registered_via_orchestrator(self):
+        """The rule_wizard split modules don't expose a bare register(); they are
+        registered through rule_wizard.register() and must still produce tools."""
+        from wazuh_mcp.tools import rule_wizard_generate, rule_wizard_validate, rule_wizard_deploy
+        assert hasattr(rule_wizard_generate, "register_generate")
+        assert hasattr(rule_wizard_validate, "register_validate")
+        assert hasattr(rule_wizard_deploy, "register_deploy")
 
 
 # ── set_session_role keymap guard ─────────────────────────────────────────────

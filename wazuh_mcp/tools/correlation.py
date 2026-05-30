@@ -11,7 +11,7 @@ from ..tool_context import ToolContext
 from ..rbac import ROLE
 from typing import Any
 
-from ..helpers import time_window
+from ..validators import validate_time_range
 
 # Minimum role required to access these tools (registered conditionally by server.py)
 REQUIRED_ROLE = ROLE.ANALYST
@@ -50,7 +50,11 @@ def register(ctx: ToolContext) -> None:
         if err:
             return err
 
-        gte, lte = time_window(time_range)
+        try:
+            tr = validate_time_range(time_range)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        gte, lte = f"now-{tr}", "now"
         tactic_filter = [t.strip() for t in tactics.split(",") if t.strip()]
 
         body: dict = {
@@ -105,7 +109,11 @@ def register(ctx: ToolContext) -> None:
         if err:
             return err
 
-        gte, lte = time_window(time_range)
+        try:
+            tr = validate_time_range(time_range)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        gte, lte = f"now-{tr}", "now"
 
         body: dict = {
             "size": 1000,

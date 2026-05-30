@@ -4,11 +4,14 @@ and human-in-the-loop approval workflow for proposed active responses.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 from ..tool_context import ToolContext
 from ..rbac import ROLE
 from ..validators import safe_validate, validate_time_range
+
+log = logging.getLogger("wazuh-mcp")
 
 # Minimum role required to see these tools (enforced at registration time by server.py)
 REQUIRED_ROLE = ROLE.RESPONDER
@@ -267,8 +270,18 @@ def register(ctx: ToolContext) -> None:
                 async with _httpx.AsyncClient(timeout=10) as client:
                     r = await client.post(slack_webhook, json={"text": msg})
                 slack_sent = r.status_code == 200
+                if not slack_sent:
+                    log.error(
+                        "Slack notification rejected (HTTP %s) for active-response "
+                        "proposal token %s — analyst will not see the approval request",
+                        r.status_code,
+                        token,
+                    )
             except Exception:
-                pass
+                # Never fail the tool call if Slack is down, but make the failure
+                # visible in the logs so a misconfigured webhook or outage can be
+                # diagnosed instead of leaving the analyst waiting forever.
+                log.error("Failed to dispatch Slack notification", exc_info=True)
 
         return {
             "status":       "pending_approval",

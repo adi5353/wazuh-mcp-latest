@@ -75,6 +75,25 @@ class TestPlaybookRollback:
 
 
 class TestFpHeuristic:
+    @pytest.fixture(autouse=True)
+    def _restore_autonomous_soc_globals(self):
+        """``_mod`` reloads autonomous_soc with patched env, which rebinds its
+        module-level FP tuning globals. Without restoring, those polluted values
+        leak into later modules (e.g. test_roi_autonomous). Reload with a clean
+        environment on teardown so every consumer sees the documented defaults."""
+        yield
+        import os as _os
+        import importlib
+        import wazuh_mcp.tools.autonomous_soc as m
+        for k in (
+            "WAZUH_FP_NOISY_GROUPS", "WAZUH_FP_NOISY_SCORE",
+            "WAZUH_FP_HIGH_VOL_THR", "WAZUH_FP_HIGH_VOL_SCORE",
+            "WAZUH_FP_MED_VOL_THR", "WAZUH_FP_MED_VOL_SCORE",
+            "WAZUH_FP_SUPPRESS_THR",
+        ):
+            _os.environ.pop(k, None)
+        importlib.reload(m)
+
     def _mod(self, mp, **env):
         for k, v in env.items(): mp.setenv(k, v)
         import importlib, wazuh_mcp.tools.autonomous_soc as m

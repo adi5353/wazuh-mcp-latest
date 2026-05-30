@@ -243,6 +243,18 @@ class TestROITools:
 
 class TestAutonomousSOCPipeline:
 
+    @pytest.fixture(autouse=True)
+    def _admin_role(self):
+        """These tools enforce RBAC at call time (analyst_or_above / admin_only).
+        Grant an ADMIN session for the duration of the test so the suppression and
+        ticketing tools run their bodies instead of returning a role error. (Was
+        previously satisfied implicitly by a leaked WAZUH_MCP_USER_ROLE env var.)"""
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        identity.set_session_role(ROLE.ADMIN)
+        yield
+        identity._ctx_role.set(None)
+
     def _register_all(self):
         mcp, wz, idx, cfg = MagicMock(), MagicMock(), MagicMock(), MagicMock()
         registered = {}
@@ -546,6 +558,10 @@ class TestSOCDashboard:
 # 5. Demo Environment
 # ────────────────────────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(
+    not Path("demo/docker-compose.yml").exists() or not Path("demo/seed_alerts.py").exists(),
+    reason="demo/ environment assets are not shipped in this checkout — skip demo asset checks",
+)
 class TestDemoEnvironment:
     COMPOSE = Path("demo/docker-compose.yml")
     SEED    = Path("demo/seed_alerts.py")
