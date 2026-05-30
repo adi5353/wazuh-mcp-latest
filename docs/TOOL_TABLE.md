@@ -1,6 +1,6 @@
 # Tool Inventory (auto-generated)
 
-**239 tools** across **52 domain modules** in `wazuh_mcp/tools/`, plus **16 MCP prompts**.
+**239 tools** across **54 domain modules** in `wazuh_mcp/tools/`, plus **16 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
 
@@ -302,14 +302,20 @@
 - `get_agent_rootcheck_results`
 - `get_rootcheck_last_scan`
 
-### `tools/rule_wizard` (9)
+### `tools/rule_wizard_deploy` (3)
 
-- `convert_sigma_rule`
-- `generate_rule_xml`
 - `push_custom_decoder`
 - `push_custom_rule`
 - `sigma_bulk_import`
+
+### `tools/rule_wizard_generate` (3)
+
+- `convert_sigma_rule`
+- `generate_rule_xml`
 - `sigma_coverage_gap`
+
+### `tools/rule_wizard_validate` (3)
+
 - `suggest_rule_tuning`
 - `test_sigma_rule_against_archive`
 - `validate_rule_xml`
