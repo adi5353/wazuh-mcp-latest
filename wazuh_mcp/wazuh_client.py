@@ -25,6 +25,26 @@ from .circuit_breaker import wazuh_manager_breaker
 
 log = logging.getLogger(__name__)
 
+
+class _SecretStr:
+    """Thin wrapper that prevents JWT token from appearing in tracebacks or repr()."""
+    __slots__ = ("_v",)
+
+    def __init__(self, v: str) -> None:
+        self._v = v
+
+    def get(self) -> str:
+        return self._v
+
+    def __repr__(self) -> str:
+        return "SecretStr([REDACTED])"
+
+    def __str__(self) -> str:
+        return "[REDACTED]"
+
+    def __bool__(self) -> bool:
+        return bool(self._v)
+
 # Wazuh JWT tokens default to 900 seconds; refresh ~100s early for safety.
 TOKEN_TTL_SECONDS = 800
 
@@ -89,7 +109,7 @@ _TOKEN_PROACTIVE_REFRESH_WINDOW = 100  # seconds before expiry to trigger backgr
 class WazuhClient:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self._token: Optional[str] = None
+        self._token: Optional[_SecretStr] = None
         self._token_expires: float = 0.0
         self._login_lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None  # background proactive refresh
@@ -125,7 +145,7 @@ class WazuhClient:
             timeout=10,
         )
         r.raise_for_status()
-        self._token = r.json()["data"]["token"]
+        self._token = _SecretStr(r.json()["data"]["token"])
         self._token_expires = time.time() + TOKEN_TTL_SECONDS
         log.info("Wazuh Manager: authenticated, token cached")
 
@@ -190,7 +210,7 @@ class WazuhClient:
         r = await self._client.request(
             method,
             f"{self.cfg.manager_host}{path}",
-            headers={"Authorization": f"Bearer {self._token}"},
+            headers={"Authorization": f"Bearer {self._token.get() if self._token else ''}"},
             **kwargs,
         )
         if r.status_code == 401:
@@ -205,7 +225,7 @@ class WazuhClient:
             r = await self._client.request(
                 method,
                 f"{self.cfg.manager_host}{path}",
-                headers={"Authorization": f"Bearer {self._token}"},
+                headers={"Authorization": f"Bearer {self._token.get() if self._token else ''}"},
                 **kwargs,
             )
         r.raise_for_status()
@@ -282,7 +302,7 @@ class WazuhClient:
             url += ("&" if "?" in path else "?") + "overwrite=true"
 
         headers = {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": f"Bearer {self._token.get() if self._token else ''}",
             "Content-Type": "application/octet-stream",
         }
 
@@ -299,7 +319,7 @@ class WazuhClient:
                 else:
                     self._token = None
                     await self._login()
-            headers["Authorization"] = f"Bearer {self._token}"
+            headers["Authorization"] = f"Bearer {self._token.get() if self._token else ''}"
             r = await self._client.put(
                 url,
                 content=xml_content.encode("utf-8"),
