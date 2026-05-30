@@ -13,12 +13,17 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "mcp>=1.0.0",
-    "httpx>=0.28.0",
-    "python-dotenv>=1.0.0",
-    "uvicorn>=0.30.0",
-    "starlette>=0.40.0",
-    "structlog>=24.0.0",
+    # Compatible-release ranges with upper bounds so a major/breaking release
+    # cannot silently enter a production install. See requirements.lock for the
+    # fully pinned, reproducible set used in CI and Docker.
+    "mcp>=1.0.0,<2.0.0",
+    "httpx>=0.28.0,<0.29.0",
+    "idna>=3.15,<4.0.0",       # CVE-2026-45409 fixed in 3.15
+    "python-dotenv>=1.0.0,<2.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
+    "starlette>=0.40.0,<2.0.0",
+    "structlog>=24.0.0,<26.0.0",
+    "defusedxml>=0.7.1,<0.8.0",
 ]
 
 [project.scripts]
@@ -30,12 +35,12 @@ Issues = "https://github.com/adi5353/wazuh-mcp-latest/issues"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=5.0.0",
-    "pytest-benchmark>=4.0.0",
-    "prometheus_client>=0.20.0",
-    "pyyaml>=6.0",
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.23.0,<0.25.0",
+    "pytest-cov>=5.0.0,<6.0.0",
+    "pytest-benchmark>=4.0.0,<5.0.0",
+    "prometheus_client>=0.20.0,<1.0.0",
+    "pyyaml>=6.0,<7.0",
 ]
 
 # ── pytest + coverage ─────────────────────────────────────────────────────────
@@ -82,8 +87,6 @@ skips = [
     "B110",   # try/except/pass — intentional resilience pattern in optional paths
     "B112",   # try/except/continue — intentional in SCA poll loops
     "B311",   # random — used for jitter only, not crypto
-    "B314",   # xml.etree.fromstring — XML is admin-authored Wazuh rule content, not user input
-    "B405",   # xml.etree import — same rationale as B314
     "B608",   # false-positive SQL injection — these are plain string messages, not queries
 ]
 severity = "medium"

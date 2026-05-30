@@ -15,7 +15,7 @@ Wazuh rule ID ranges:
 from __future__ import annotations
 from ..tool_context import ToolContext
 
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 import textwrap
 import re
 from ..rbac import admin_only
@@ -345,7 +345,7 @@ def register(ctx: ToolContext) -> None:
             return {"error": "xml_content must not be empty."}
 
         # Validate XML structure
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         try:
             root = ET.fromstring(xml_content.strip())
         except ET.ParseError as exc:

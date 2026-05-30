@@ -61,9 +61,11 @@ def _load_vault() -> dict[str, str]:
             path=path.lstrip(f"{mount}/"),
             mount_point=mount,
         )
-        data: dict = resp["data"]["data"]
-        log.info("secrets_backend: loaded %d secrets from Vault path '%s'", len(data), path)
-        return {str(k): str(v) for k, v in data.items()}
+        raw: dict = resp["data"]["data"]
+        # Build the safe string-only result first; log only the count, not the values.
+        result = {str(k): str(v) for k, v in raw.items()}
+        log.info("secrets_backend: loaded %d secrets from Vault path '%s'", len(result), path)
+        return result
     except Exception as exc:
         log.warning("secrets_backend: Vault load failed (%s) — falling back to env vars", exc)
         return {}
@@ -82,9 +84,11 @@ def _load_aws() -> dict[str, str]:
         region = os.environ.get("AWS_REGION", "us-east-1")
         client = boto3.client("secretsmanager", region_name=region)
         resp = client.get_secret_value(SecretId=secret_name)
-        data: dict = json.loads(resp["SecretString"])
-        log.info("secrets_backend: loaded %d secrets from AWS secret '%s'", len(data), secret_name)
-        return {str(k): str(v) for k, v in data.items()}
+        raw: dict = json.loads(resp["SecretString"])
+        # Build the safe string-only result first; log only the count, not the values.
+        result = {str(k): str(v) for k, v in raw.items()}
+        log.info("secrets_backend: loaded %d secrets from AWS ('%s')", len(result), secret_name)
+        return result
     except Exception as exc:
         log.warning("secrets_backend: AWS Secrets Manager load failed (%s) — falling back to env vars", exc)
         return {}

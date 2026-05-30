@@ -128,20 +128,22 @@ class TestPlaybookRollback:
             return {"action": "removed", "key": kwargs["key"]}
 
         registry = {"remove_from_cdb_list": mock_remove_from_cdb_list}
-        results = await _run_rollback(pb, [0, 1, 2, 3], variables, registry)
+        results, succeeded = await _run_rollback(pb, [0, 1, 2, 3], variables, registry)
 
         assert len(results) == 1
         assert results[0]["status"] == "completed"
         assert results[0]["rollback_for_step"] == 4  # human-readable (1-indexed)
         assert len(rollback_called) == 1
         assert rollback_called[0]["key"] == "1.2.3.4"
+        assert succeeded is True
 
     @pytest.mark.asyncio
     async def test_rollback_skipped_when_no_defs(self):
         from wazuh_mcp.tools.playbooks import _run_rollback
         pb = {"rollback_steps": []}
-        results = await _run_rollback(pb, [0, 1, 2], {}, {})
+        results, succeeded = await _run_rollback(pb, [0, 1, 2], {}, {})
         assert results == []
+        assert succeeded is True
 
     @pytest.mark.asyncio
     async def test_rollback_skipped_when_no_completed_steps(self):
@@ -152,8 +154,9 @@ class TestPlaybookRollback:
                  "params": {}, "rollback_for_step": 0}
             ]
         }
-        results = await _run_rollback(pb, [], {}, {})
+        results, succeeded = await _run_rollback(pb, [], {}, {})
         assert results == []
+        assert succeeded is True
 
     @pytest.mark.asyncio
     async def test_rollback_handles_tool_error_gracefully(self):
@@ -171,10 +174,11 @@ class TestPlaybookRollback:
             raise RuntimeError("Network error")
 
         registry = {"bad_tool": failing_tool}
-        results = await _run_rollback(pb, [0], {}, registry)
+        results, succeeded = await _run_rollback(pb, [0], {}, registry)
         assert len(results) == 1
         assert results[0]["status"] == "failed"
         assert "Network error" in results[0]["error"]
+        assert succeeded is False
 
     @pytest.mark.asyncio
     async def test_new_playbook_templates_registered(self):

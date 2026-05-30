@@ -4,13 +4,13 @@ Reads Content-Length header and returns HTTP 413 Request Entity Too Large when
 the declared or actual body exceeds the configured limit. Protects AuditMiddleware
 (which buffers the full body in memory) from memory-exhaustion DoS attacks.
 
-Configure with env var WAZUH_MCP_MAX_BODY_KB (default: 512 KB).
+Configure with env var WAZUH_MCP_MAX_BODY_KB (default: 4096 KB / 4 MB).
 """
 from __future__ import annotations
 
 import os
 
-_DEFAULT_MAX_KB = 512
+_DEFAULT_MAX_KB = 4096  # 4 MB — allows bulk IOC lists and rule XML uploads
 
 
 def _max_bytes() -> int:

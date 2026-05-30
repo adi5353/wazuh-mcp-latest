@@ -37,6 +37,28 @@ from ..state_store import save_monitor_state, load_monitor_state, clear_monitor_
 
 log = logging.getLogger("wazuh-mcp")
 
+
+def _autonomous_ar_allowed(cfg, ip: str | None) -> str | None:
+    """Gate for ANY automated active-response action taken by the monitor.
+
+    Returns None when the action is permitted, else a human-readable reason.
+
+    Defense in depth (Issue 6): the monitor today performs no auto-blocking — its
+    triage trees call read-only tools, plus auto-ticketing and a human-gated
+    suppression queue. This guard exists so that any current or future automated
+    AR path is held to a strict bar:
+      * requires BOTH WAZUH_ALLOW_WRITES=true AND WAZUH_MCP_AUTONOMOUS_AR=true
+      * refuses safe-listed IPs (WAZUH_MCP_AR_SAFE_IPS) and loopback / multicast /
+        private admin ranges (via validators.validate_active_response_target)
+    """
+    if not getattr(cfg, "allow_writes", False):
+        return "Autonomous active response blocked: WAZUH_ALLOW_WRITES is not enabled."
+    if os.getenv("WAZUH_MCP_AUTONOMOUS_AR", "false").strip().lower() != "true":
+        return "Autonomous active response blocked: set WAZUH_MCP_AUTONOMOUS_AR=true to enable."
+    from ..validators import validate_active_response_target
+    return validate_active_response_target(ip)
+
+
 # ── Shared state ──────────────────────────────────────────────────────────────
 _monitor_state: dict[str, Any] = {
     "running": False,
@@ -146,22 +168,31 @@ async def _run_triage_tree(rule_groups: list, agent_id: str, srcip: str,
     return []
 
 
-# ── False-positive scoring heuristic ─────────────────────────────────────────
+# ── False-positive scoring heuristic (Fix 4: env-var configurable) ──────────
+# Tune these without redeploying: set env vars before starting the server.
+_FP_NOISY_GROUPS: set[str] = set(
+    os.getenv("WAZUH_FP_NOISY_GROUPS",
+              "vulnerability-detector,syscheck,ossec,syslog").split(",")
+)
+_FP_NOISY_SCORE:    float = float(os.getenv("WAZUH_FP_NOISY_SCORE",   "0.3"))
+_FP_HIGH_VOL_THR:   int   = int(os.getenv("WAZUH_FP_HIGH_VOL_THR",   "50"))
+_FP_HIGH_VOL_SCORE: float = float(os.getenv("WAZUH_FP_HIGH_VOL_SCORE","0.4"))
+_FP_MED_VOL_THR:    int   = int(os.getenv("WAZUH_FP_MED_VOL_THR",    "20"))
+_FP_MED_VOL_SCORE:  float = float(os.getenv("WAZUH_FP_MED_VOL_SCORE", "0.2"))
+_FP_AUTO_SUPP_THR:  float = float(os.getenv("WAZUH_FP_SUPPRESS_THR",  "0.5"))
+
 def _fp_score(rule_id: str, rule_groups: list, alert_count_1h: int) -> float:
     """Return 0.0–1.0 false-positive likelihood for a rule.
 
     High score → candidate for auto-suppression queue.
     """
     score = 0.0
-    # Noisy rule groups historically produce high FP rates
-    noisy = {"vulnerability-detector", "syscheck", "ossec", "syslog"}
-    if noisy.intersection(set(rule_groups)):
-        score += 0.3
-    # High alert volume in short window → likely noisy rule
-    if alert_count_1h > 50:
-        score += 0.4
-    elif alert_count_1h > 20:
-        score += 0.2
+    if _FP_NOISY_GROUPS.intersection(set(rule_groups)):
+        score += _FP_NOISY_SCORE
+    if alert_count_1h > _FP_HIGH_VOL_THR:
+        score += _FP_HIGH_VOL_SCORE
+    elif alert_count_1h > _FP_MED_VOL_THR:
+        score += _FP_MED_VOL_SCORE
     return min(score, 1.0)
 
 
@@ -232,7 +263,7 @@ async def _maybe_create_ticket(alert_doc: dict, triage_results: list,
 def _maybe_queue_suppression(rule_id: str, rule_desc: str, rule_groups: list,
                               alert_count_1h: int) -> bool:
     fp = _fp_score(rule_id, rule_groups, alert_count_1h)
-    if fp < 0.5:
+    if fp < _FP_AUTO_SUPP_THR:
         return False
 
     # Don't queue the same rule twice

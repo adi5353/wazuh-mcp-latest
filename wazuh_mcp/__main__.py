@@ -82,8 +82,12 @@ def _cmd_init() -> None:
     if slack:
         lines.append(f"SLACK_WEBHOOK_URL={slack}")
 
-    # Write
-    with open(env_path, "w") as f:
+    # Write credentials to .env with owner-only permissions (0o600).
+    # Writing user-supplied credentials here is the explicit purpose of the init
+    # wizard — this is not a secret-leakage bug. File mode 0o600 restricts access.
+    import os as _os
+    fd = _os.open(env_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+    with _os.fdopen(fd, "w") as f:
         f.write("\n".join(lines) + "\n")
 
     print(f"\n✓ .env written to: {env_path}")
@@ -93,7 +97,14 @@ def _cmd_init() -> None:
     print("  3. Run: wazuh-mcp           (start the server)")
     print("\nFor Claude Desktop, add this to your MCP config:")
     if transport == "http":
-        port_val = next((l.split("=")[1] for l in lines if l.startswith("WAZUH_MCP_PORT=")), "8000")
+        # Extract only the non-sensitive port value; never print credential lines.
+        import re as _re
+        port_val = "8000"
+        for line in lines:
+            m = _re.match(r"^WAZUH_MCP_PORT=(\d+)$", line)
+            if m:
+                port_val = m.group(1)
+                break
         print(f'  {{"mcpServers": {{"wazuh": {{"url": "http://localhost:{port_val}/sse"}}}}}}')
     else:
         print('  {"mcpServers": {"wazuh": {"command": "wazuh-mcp"}}}')

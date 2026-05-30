@@ -31,8 +31,10 @@ _RETRY_BASE  = 1.0   # seconds — first delay before jitter
 _RETRY_CAP   = 10.0  # seconds — maximum delay before jitter
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
-_POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_INDEXER_POOL_SIZE",    "20"))
-_POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_INDEXER_MAX_KEEPALIVE", "10"))
+# Defaults raised to 100/40 to prevent pool saturation under real SOC load
+# (130+ concurrent tools + batch operations).  Tune down for low-resource deployments.
+_POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_INDEXER_POOL_SIZE",    "100"))
+_POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_INDEXER_MAX_KEEPALIVE",  "40"))
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -58,6 +60,8 @@ async def _retry_sleep(attempt: int) -> None:
 class WazuhIndexer:
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        # Fix 8: in-flight deduplication — concurrent identical queries share one response
+        self._inflight: dict[str, asyncio.Future] = {}
         self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
         self._client = httpx.AsyncClient(
             verify=self._ssl,
@@ -81,21 +85,33 @@ class WazuhIndexer:
         await self.aclose()
 
     async def search(self, body: dict, index: Optional[str] = None) -> dict:
-        """Run an OpenSearch query with circuit breaker + automatic retry on transient failures."""
+        """Run an OpenSearch query with circuit breaker + deduplication + retry."""
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(
                 f"OpenSearch circuit breaker open — backend unavailable. "
                 f"Retry in {s['circuit_resets_in_seconds']}s."
             )
+        # Fix 8: coalesce identical concurrent queries into one wire call
+        import json as _json
+        _idx = index or self.cfg.alerts_index
+        _key = _idx + ":" + _json.dumps(body, sort_keys=True, separators=(",", ":"))
+        if _key in self._inflight:
+            return await asyncio.shield(self._inflight[_key])
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._inflight[_key] = fut
         try:
             result = await self._search_impl(body, index)
             opensearch_breaker.record_success()
+            fut.set_result(result)
             return result
-        except Exception:
+        except Exception as exc:
             opensearch_breaker.record_failure()
+            fut.set_exception(exc)
             raise
-
+        finally:
+            self._inflight.pop(_key, None)
     async def _search_impl(self, body: dict, index: Optional[str] = None) -> dict:
         """Internal search with retry logic (no circuit breaker — called by search())."""
         idx = index or self.cfg.alerts_index

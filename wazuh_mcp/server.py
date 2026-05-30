@@ -21,6 +21,7 @@ Enhanced edition — adds:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -83,27 +84,42 @@ cfg = Config.from_env()
 wz = WazuhClient(cfg)
 idx = WazuhIndexer(cfg)
 
+# Per-session context variables — each asyncio task (i.e. each MCP request) gets
+# its own tenant client without affecting other concurrent sessions.
+_ctx_wz: contextvars.ContextVar[WazuhClient] = contextvars.ContextVar("_ctx_wz")
+_ctx_idx: contextvars.ContextVar[WazuhIndexer] = contextvars.ContextVar("_ctx_idx")
+_ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "_ctx_active_tenant", default={}
+)
+
 
 class _ClientProxy:
-    """Mutable proxy for WazuhClient/WazuhIndexer.
+    """Session-scoped proxy for WazuhClient/WazuhIndexer.
 
-    All tool-module closures capture this proxy object by reference.  When
-    switch_tenant() calls proxy.replace(new_client), every closure immediately
-    sees the new backend without needing to be re-registered.
+    All tool-module closures capture this proxy by reference.  Attribute access
+    resolves the underlying client from a per-task ContextVar, so switch_tenant()
+    only affects the calling session — other concurrent sessions are untouched.
     """
 
-    def __init__(self, client):
-        self._client = client
+    def __init__(self, default_client, ctx_var: contextvars.ContextVar):
+        self._default = default_client
+        self._ctx_var = ctx_var
 
-    def replace(self, new_client) -> None:
-        self._client = new_client
+    def replace(self, new_client) -> contextvars.Token:
+        """Bind *new_client* to the current asyncio task only."""
+        return self._ctx_var.set(new_client)
+
+    def reset(self, token: contextvars.Token) -> None:
+        """Restore the previous client binding for the current task."""
+        self._ctx_var.reset(token)
 
     def __getattr__(self, name: str):
-        return getattr(self._client, name)
+        client = self._ctx_var.get(self._default)
+        return getattr(client, name)
 
 
-_wz_proxy = _ClientProxy(wz)
-_idx_proxy = _ClientProxy(idx)
+_wz_proxy = _ClientProxy(wz, _ctx_wz)
+_idx_proxy = _ClientProxy(idx, _ctx_idx)
 
 MAX_RESULTS_GLOBAL = int(os.getenv("WAZUH_MAX_RESULTS_GLOBAL", "500"))
 SERVER_START_TIME = time.time()
@@ -280,7 +296,20 @@ async def set_session_role_tool(api_key: str) -> dict:
 
     If WAZUH_MCP_KEY_MAP is not set, this tool has no effect and the server
     falls back to WAZUH_MCP_USER_ROLE (single-user mode).
+
+    HTTP transport: this tool is DISABLED. A request's role is derived from the
+    authenticated bearer token in the request middleware, never from a tool
+    argument — otherwise any caller could self-elevate. Use stdio for the
+    single-local-user set-role workflow.
     """
+    if os.getenv("WAZUH_MCP_TRANSPORT", "stdio") == "http":
+        return {
+            "error": (
+                "set_session_role is only available in stdio transport. In HTTP "
+                "mode the session role is derived from your authenticated API key "
+                "(WAZUH_MCP_KEY_MAP); it cannot be set via a tool argument."
+            )
+        }
     role = resolve_role_for_key(api_key)
     if role is None:
         return {
@@ -301,10 +330,6 @@ async def set_session_role_tool(api_key: str) -> dict:
 # MSSP multi-tenant instance switching
 # ============================================================================
 
-# Active tenant state (None = use default single-instance config)
-_active_tenant: dict | None = None
-
-
 @mcp.tool()
 async def list_tenants() -> dict:
     """List all configured Wazuh tenants (MSSP mode).
@@ -317,9 +342,10 @@ async def list_tenants() -> dict:
             "mssp_mode": False,
             "message": "Single-instance mode. Set WAZUH_INSTANCES env var to enable MSSP multi-tenant mode.",
         }
+    active = _ctx_active_tenant.get({})
     return {
         "mssp_mode": True,
-        "active_tenant": _active_tenant["name"] if _active_tenant else "(default)",
+        "active_tenant": active.get("name", "(default)"),
         "tenants": [
             {"name": t.name, "manager_host": t.manager_host}
             for t in cfg.tenants
@@ -331,14 +357,13 @@ async def list_tenants() -> dict:
 async def switch_tenant(tenant_name: str) -> dict:
     """Switch the active Wazuh tenant for this session (MSSP mode).
 
-    After switching, all subsequent tool calls query the selected tenant's
-    Wazuh Manager and Indexer. Requires WAZUH_INSTANCES to be configured.
+    After switching, all subsequent tool calls in this session query the
+    selected tenant's Wazuh Manager and Indexer.  Other concurrent sessions
+    are not affected.  Requires WAZUH_INSTANCES to be configured.
 
     Args:
         tenant_name: The name of the tenant as defined in WAZUH_INSTANCES.
     """
-    global _active_tenant
-
     if not cfg.tenants:
         return {
             "error": "MSSP multi-tenant mode is not configured. "
@@ -367,27 +392,21 @@ async def switch_tenant(tenant_name: str) -> dict:
         indexer_pass=tenant.indexer_pass,
     )
 
-    # Close old connections before replacing to avoid leaking httpx connection pools
-    try:
-        await _wz_proxy._client.aclose()
-    except Exception:
-        pass
-    try:
-        await _idx_proxy._client.aclose()
-    except Exception:
-        pass
+    new_wz = _WC(tenant_cfg)
+    new_idx = _WI(tenant_cfg)
 
-    # Replace the inner clients on the proxies — all tool closures see new backends
-    _wz_proxy.replace(_WC(tenant_cfg))
-    _idx_proxy.replace(_WI(tenant_cfg))
-    _active_tenant = {"name": tenant.name, "manager_host": tenant.manager_host}
+    # Bind the new clients to this session's asyncio task context only.
+    # Other sessions continue using their own (possibly different) clients.
+    _wz_proxy.replace(new_wz)
+    _idx_proxy.replace(new_idx)
+    _ctx_active_tenant.set({"name": tenant.name, "manager_host": tenant.manager_host})
 
     log.info("MSSP tenant switched to '%s' (%s)", tenant.name, tenant.manager_host)
     return {
         "status": "ok",
         "active_tenant": tenant.name,
         "manager_host": tenant.manager_host,
-        "message": f"All subsequent tool calls now target tenant '{tenant.name}'.",
+        "message": f"All subsequent tool calls in this session now target tenant '{tenant.name}'.",
     }
 
 
@@ -895,13 +914,77 @@ End with: "I am ready to take my first shift." and list 3 things you would watch
 # Entry point — HTTP (SSE) or STDIO
 # ============================================================================
 
+def _is_loopback_host(host: str) -> bool:
+    """True if *host* binds only to the local machine (no remote exposure)."""
+    h = (host or "").strip().lower()
+    if h in ("localhost", "::1", ""):
+        return True
+    try:
+        import ipaddress as _ipaddress
+        return _ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def _check_bind_security(transport: str, host: str, api_key: str) -> None:
+    """Secure-by-default bind guard (Issue 1).
+
+    Refuse to expose the server on a non-loopback address without authentication
+    unless WAZUH_MCP_ALLOW_INSECURE_BIND=true is explicitly set (logs a warning).
+    Raises SystemExit(2) when refusing.
+    """
+    if transport != "http" or _is_loopback_host(host) or api_key:
+        return
+    allow_insecure = os.getenv("WAZUH_MCP_ALLOW_INSECURE_BIND", "false").strip().lower() == "true"
+    if not allow_insecure:
+        log.error(
+            "Refusing to start: WAZUH_MCP_HOST=%s is non-loopback but no "
+            "WAZUH_MCP_API_KEY is set. Either set WAZUH_MCP_API_KEY, bind to "
+            "127.0.0.1, or (NOT recommended) set WAZUH_MCP_ALLOW_INSECURE_BIND=true.",
+            host,
+        )
+        raise SystemExit(2)
+    log.warning(
+        "INSECURE BIND: serving on non-loopback host %s with NO API key "
+        "because WAZUH_MCP_ALLOW_INSECURE_BIND=true. Anyone who can reach "
+        "this port has full access. Set WAZUH_MCP_API_KEY immediately.",
+        host,
+    )
+
+
+def _origin_request_allowed(
+    origin: str,
+    *,
+    is_loopback: bool,
+    has_auth: bool,
+    allowed_origins: set,
+) -> bool:
+    """CSRF/origin decision (Issue 5). Pure function — easy to unit-test.
+
+    * No Origin header (SDK/curl): allowed, except on a non-loopback bind with no
+      API-key auth.
+    * Origin present + allowlist configured: enforce it.
+    * Origin present, no allowlist, non-loopback: deny browser origins by default.
+    * Origin present, no allowlist, loopback: passthrough (dev-friendly).
+    """
+    if not origin:
+        return is_loopback or has_auth
+    if allowed_origins:
+        return origin in allowed_origins
+    if not is_loopback:
+        return False
+    return True
+
+
 def main() -> None:
     import signal
 
     transport = os.getenv("WAZUH_MCP_TRANSPORT", "stdio")
-    host = os.getenv("WAZUH_MCP_HOST", "0.0.0.0")
+    host = os.getenv("WAZUH_MCP_HOST", "127.0.0.1")
     port = int(os.getenv("WAZUH_MCP_PORT", "8000"))
     api_key = os.getenv("WAZUH_MCP_API_KEY", "")
+
+    _check_bind_security(transport, host, api_key)
 
     log.info(
         "Starting Wazuh MCP server — transport=%s host=%s port=%s writes=%s manager=%s indexer=%s",
@@ -909,9 +992,18 @@ def main() -> None:
     )
 
     # ── Auto-resume autonomous monitor if it was running before restart (Gap 2) ──
+    # Gated behind WAZUH_MCP_AUTO_RESUME_MONITOR (default false): a background
+    # loop that acts on alerts must not silently restart on every reboot.
+    _auto_resume = os.getenv("WAZUH_MCP_AUTO_RESUME_MONITOR", "false").strip().lower() == "true"
     from .state_store import load_monitor_state
     _saved_monitor = load_monitor_state()
-    if _saved_monitor and _saved_monitor.get("running"):
+    if _saved_monitor and _saved_monitor.get("running") and not _auto_resume:
+        log.warning(
+            "Autonomous SOC monitor was active before restart but auto-resume is "
+            "disabled (set WAZUH_MCP_AUTO_RESUME_MONITOR=true to re-enable). "
+            "Call start_autonomous_monitor to resume manually."
+        )
+    if _saved_monitor and _saved_monitor.get("running") and _auto_resume:
         log.info(
             "Autonomous SOC monitor was active before restart — auto-resuming "
             "(interval=%ds threshold=%d)",
@@ -1104,6 +1196,18 @@ def main() -> None:
 
             # Cache stats
             from .cache import cache_stats
+
+            # Fix 9: secret backend connectivity check
+            try:
+                from .secrets_backend import _backend, _loaded, _cache as _sb_cache
+                checks["secrets_backend"] = {
+                    "backend": _backend or "env",
+                    "loaded": _loaded,
+                    "cached_secrets": len(_sb_cache),
+                    "status": "ok" if _loaded else "not_loaded",
+                }
+            except Exception as _sb_err:
+                checks["secrets_backend"] = {"status": f"error: {_sb_err}"}
             checks["cache"] = cache_stats()
 
             all_ok = all(
@@ -1192,6 +1296,16 @@ def main() -> None:
                     if auth_raw else "anonymous"
                 )
 
+                # ── Bind session role from the AUTHENTICATED bearer token (Issue 3) ──
+                # Role is derived from the verified key here, before tool dispatch,
+                # so it can never be set by a tool argument. Runs in the same task
+                # context as the downstream app, so the ContextVar propagates.
+                if auth_raw:
+                    _bearer = auth_raw.removeprefix("Bearer ").strip()
+                    _resolved_role = resolve_role_for_key(_bearer)
+                    if _resolved_role is not None:
+                        set_session_role(_resolved_role)
+
                 # ── Capture response status via wrapped send ───────────────
                 status_code: list[int] = [200]
 
@@ -1250,19 +1364,13 @@ def main() -> None:
         )
 
         class OriginValidationMiddleware:
-            def __init__(self, app) -> None:
+            def __init__(self, app, *, is_loopback: bool, has_auth: bool) -> None:
                 self._app = app
+                self._is_loopback = is_loopback
+                self._has_auth = has_auth
 
             async def __call__(self, scope, receive, send) -> None:
                 if scope["type"] != "http":
-                    await self._app(scope, receive, send)
-                    return
-
-                headers = dict(scope.get("headers", []))
-                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
-
-                # Non-browser clients (SDKs, curl) send no Origin — allow through
-                if not origin:
                     await self._app(scope, receive, send)
                     return
 
@@ -1271,21 +1379,52 @@ def main() -> None:
                     await self._app(scope, receive, send)
                     return
 
-                # If an allowlist is configured, enforce it
-                if _allowed_origins and origin not in _allowed_origins:
-                    response = Response(
-                        f"Origin '{origin}' not allowed. "
-                        f"Set WAZUH_MCP_ALLOWED_ORIGINS to permit it.",
-                        status_code=403,
+                headers = dict(scope.get("headers", []))
+                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
+
+                async def _deny(message: str) -> None:
+                    await Response(message, status_code=403)(scope, receive, send)
+
+                # Delegate to the module-level pure function (testable without HTTP).
+                if not _origin_request_allowed(
+                    origin,
+                    is_loopback=self._is_loopback,
+                    has_auth=self._has_auth,
+                    allowed_origins=_allowed_origins,
+                ):
+                    msg = (
+                        f"Origin '{origin}' not allowed. Set WAZUH_MCP_ALLOWED_ORIGINS "
+                        f"to permit it."
+                        if origin else
+                        "Origin-less requests require API-key authentication when "
+                        "bound to a non-loopback address. Set WAZUH_MCP_API_KEY."
                     )
-                    await response(scope, receive, send)
+                    await Response(msg, status_code=403)(scope, receive, send)
                     return
 
                 await self._app(scope, receive, send)
 
         # ── Assemble ASGI app ──────────────────────────────────────────────
+        # ── DNS-rebinding protection (Issue 2) ─────────────────────────────
+        # Enabled by default. Host header must match the server's bind host or
+        # an entry in WAZUH_MCP_ALLOWED_HOSTS. mcp-remote users behind a proxy
+        # or DNS name MUST add that name to WAZUH_MCP_ALLOWED_HOSTS.
+        _allowed_hosts_env = os.getenv("WAZUH_MCP_ALLOWED_HOSTS", "").strip()
+        _allowed_hosts: set[str] = {
+            host, f"{host}:{port}",
+            "localhost", f"localhost:{port}",
+            "127.0.0.1", f"127.0.0.1:{port}",
+        }
+        _allowed_hosts |= {h.strip() for h in _allowed_hosts_env.split(",") if h.strip()}
         mcp.settings.transport_security = TransportSecuritySettings(
-            enable_dns_rebinding_protection=False
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=sorted(_allowed_hosts),
+            allowed_origins=sorted(_allowed_origins),
+        )
+        log.info(
+            "DNS-rebinding protection enabled — allowed_hosts=%s (add your "
+            "server host to WAZUH_MCP_ALLOWED_HOSTS if mcp-remote gets HTTP 421)",
+            ", ".join(sorted(_allowed_hosts)),
         )
         mcp_asgi = mcp.sse_app()
 
@@ -1355,7 +1494,9 @@ def main() -> None:
             os.getenv("WAZUH_MCP_RATE_LIMIT_BURST", "10"),
         )
 
-        app = OriginValidationMiddleware(app)  # type: ignore[assignment]
+        app = OriginValidationMiddleware(  # type: ignore[assignment]
+            app, is_loopback=_is_loopback_host(host), has_auth=bool(api_key)
+        )
         if _allowed_origins:
             log.info("Origin validation enabled — allowed: %s", ", ".join(sorted(_allowed_origins)))
         else:
@@ -1387,7 +1528,7 @@ def main() -> None:
         app = MaxBodySizeMiddleware(app)  # type: ignore[assignment]
         log.info(
             "Body size limit: %s KB (override with WAZUH_MCP_MAX_BODY_KB)",
-            os.getenv("WAZUH_MCP_MAX_BODY_KB", "512"),
+            os.getenv("WAZUH_MCP_MAX_BODY_KB", "4096"),
         )
 
         log.info("SSE routes: /sse (GET), /messages (POST), /health (GET), /metrics (GET)")

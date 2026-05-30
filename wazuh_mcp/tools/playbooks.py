@@ -190,7 +190,7 @@ async def _run_rollback(
     completed_step_indices: list[int],
     variables: dict,
     registry: dict,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Execute rollback steps for any completed steps that have rollback definitions.
 
     Rollback steps are executed in reverse order (last completed first) and are
@@ -198,9 +198,10 @@ async def _run_rollback(
     """
     rollback_defs = pb.get("rollback_steps") or []
     if not rollback_defs or not completed_step_indices:
-        return []
+        return [], True
 
     results: list[dict] = []
+    any_failed = False
     # Rollback in reverse order of completion
     for step_idx in reversed(completed_step_indices):
         matching = [r for r in rollback_defs if r.get("rollback_for_step") == step_idx]
@@ -226,9 +227,12 @@ async def _run_rollback(
                 except Exception as exc:
                     rb_result["status"] = "failed"
                     rb_result["error"] = str(exc)
+                    any_failed = True
                     log.warning("Rollback step '%s' failed: %s", rb["name"], exc)
             results.append(rb_result)
-    return results
+    if any_failed:
+        log.error("Rollback partially failed — system state may be inconsistent; review rollback_steps")
+    return results, not any_failed
 
 
 def register(ctx: ToolContext) -> None:
@@ -389,7 +393,7 @@ def register(ctx: ToolContext) -> None:
                     run_record["status"] = "failed"
                     run_record["failed_at_step"] = i + 1
                     run_record["error"] = output["error"]
-                    run_record["rollback_steps"] = await _run_rollback(
+                    run_record["rollback_steps"], run_record["rollback_succeeded"] = await _run_rollback(
                         pb, completed_step_indices, variables, registry
                     )
                     _save(run_record)
@@ -401,7 +405,7 @@ def register(ctx: ToolContext) -> None:
                 run_record["steps"].append(step_result)
                 run_record["status"] = "failed"
                 run_record["failed_at_step"] = i + 1
-                run_record["rollback_steps"] = await _run_rollback(
+                run_record["rollback_steps"], run_record["rollback_succeeded"] = await _run_rollback(
                     pb, completed_step_indices, variables, registry
                 )
                 _save(run_record)
@@ -412,7 +416,7 @@ def register(ctx: ToolContext) -> None:
                 run_record["steps"].append(step_result)
                 run_record["status"] = "failed"
                 run_record["failed_at_step"] = i + 1
-                run_record["rollback_steps"] = await _run_rollback(
+                run_record["rollback_steps"], run_record["rollback_succeeded"] = await _run_rollback(
                     pb, completed_step_indices, variables, registry
                 )
                 _save(run_record)
@@ -505,7 +509,7 @@ def register(ctx: ToolContext) -> None:
                     record["steps"].append(step_result)
                     record["status"] = "failed"
                     record["error"] = output["error"]
-                    record["rollback_steps"] = await _run_rollback(
+                    record["rollback_steps"], record["rollback_succeeded"] = await _run_rollback(
                         pb, completed_step_indices, variables, registry
                     )
                     _save(record)
@@ -516,7 +520,7 @@ def register(ctx: ToolContext) -> None:
                 step_result["error"] = str(exc)
                 record["steps"].append(step_result)
                 record["status"] = "failed"
-                record["rollback_steps"] = await _run_rollback(
+                record["rollback_steps"], record["rollback_succeeded"] = await _run_rollback(
                     pb, completed_step_indices, variables, registry
                 )
                 _save(record)

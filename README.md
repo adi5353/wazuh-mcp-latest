@@ -2,13 +2,13 @@
 
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
-**130+ tools** across 33+ domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
+**239 tools** across 52 domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
 [![CI](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml/badge.svg)](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
-[![Tools](https://img.shields.io/badge/tools-130%2B-brightgreen)](#tool-reference)
+[![Tools](https://img.shields.io/badge/tools-239-brightgreen)](#tool-reference)
 
 ---
 
@@ -39,7 +39,7 @@ Targeted improvements across performance, alert quality, rules, compliance, and 
 
 | Area | Change | Details |
 |---|---|---|
-| **Connection pool** | Configurable via env vars | `WAZUH_HTTP_POOL_SIZE` (default 20) and `WAZUH_HTTP_MAX_KEEPALIVE` (default 10) — tune for high-throughput SOC deployments |
+| **Connection pool** | Configurable via env vars | `WAZUH_HTTP_POOL_SIZE` (default 100) and `WAZUH_HTTP_MAX_KEEPALIVE` (default 40) — sized for 130+ concurrent tools under real SOC load; tune down for low-resource deployments |
 | **Cache observability** | Hit/miss counters | `cache_stats()` now returns `hits`, `misses`, `hit_ratio` — see actual cache effectiveness. New `invalidate_tool(name)` flushes a single tool's cache without clearing everything |
 | **Alert pagination** | Cursor-based paging | `search_alerts` now accepts `page_token` (opaque base64 cursor using `search_after`) and returns `next_page_token` + `has_more` — safe to walk millions of alerts without memory spikes |
 
@@ -84,7 +84,7 @@ Infrastructure hardening and performance improvements. No breaking changes.
 | Area | Change | Details |
 |---|---|---|
 | **CI/CD** | GitHub Actions pipeline | Lint (ruff + mypy), security scan (bandit + pip-audit), pytest across Python 3.10/3.11/3.12 with 70% coverage gate, Docker build — runs on every push and PR |
-| **Performance** | HTTP connection pooling | `WazuhClient` and `WazuhIndexer` now share persistent `httpx.AsyncClient` pools (20 max connections, 10 keepalive) — eliminates per-request TCP handshake overhead |
+| **Performance** | HTTP connection pooling | `WazuhClient` and `WazuhIndexer` now share persistent `httpx.AsyncClient` pools (100 max connections, 40 keepalive) — eliminates per-request TCP handshake overhead and prevents pool saturation under concurrent SOC load |
 | **Security** | HTTPS GeoIP | `enrich_ip_geo` now uses **ipinfo.io over HTTPS** by default (was `http://ip-api.com`). Configurable via `WAZUH_GEOIP_PROVIDER`. Set `IPINFO_TOKEN` for 50k/mo free lookups |
 | **Operations** | Audit log rotation | `logs/audit.jsonl` now auto-rotates at 50 MB (configurable via `WAZUH_AUDIT_MAX_BYTES`), keeping 7 backups (`WAZUH_AUDIT_BACKUP_COUNT`) — prevents unbounded disk growth in production SOCs |
 
@@ -248,11 +248,19 @@ WAZUH_INDEXER_HOST=https://your-wazuh-indexer:9200
 WAZUH_INDEXER_USER=wazuh-readonly
 WAZUH_INDEXER_PASS=YourPassword
 
-WAZUH_VERIFY_SSL=false
+WAZUH_VERIFY_SSL=true          # set false only in a lab with self-signed certs
 WAZUH_MCP_TRANSPORT=http
-WAZUH_MCP_HOST=0.0.0.0
+WAZUH_MCP_HOST=127.0.0.1        # loopback default; see note below to expose remotely
 WAZUH_MCP_PORT=8000
+WAZUH_MCP_API_KEY=              # REQUIRED before binding to a non-loopback host
 ```
+
+> **Exposing beyond localhost:** the server binds to `127.0.0.1` by default and
+> **refuses to start** on a non-loopback host (e.g. `0.0.0.0`) unless
+> `WAZUH_MCP_API_KEY` is set — or you explicitly set
+> `WAZUH_MCP_ALLOW_INSECURE_BIND=true` (not recommended). When reaching the
+> server via a hostname/proxy, add that host to `WAZUH_MCP_ALLOWED_HOSTS` so
+> DNS-rebinding protection allows it.
 
 ### 3. Start the container
 
@@ -328,7 +336,7 @@ sudo systemctl status wazuh-mcp
 Verify:
 
 ```bash
-ss -tlnp | grep 8000   # must show 0.0.0.0:8000
+ss -tlnp | grep 8000   # shows 127.0.0.1:8000 by default (0.0.0.0:8000 if exposed)
 curl -si http://localhost:8000/sse | head -3
 ```
 
@@ -455,7 +463,7 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | Variable | Default | Description |
 |---|---|---|
 | `WAZUH_MCP_TRANSPORT` | `http` | `http` for Docker/remote, `stdio` for local Claude Desktop |
-| `WAZUH_MCP_HOST` | `0.0.0.0` | Bind address for HTTP mode |
+| `WAZUH_MCP_HOST` | `127.0.0.1` | Bind address for HTTP mode. Non-loopback values require `WAZUH_MCP_API_KEY` (or `WAZUH_MCP_ALLOW_INSECURE_BIND=true`) or the server refuses to start |
 | `WAZUH_MCP_PORT` | `8000` | Port for HTTP mode |
 
 ### Security & Access
@@ -465,8 +473,15 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `WAZUH_VERIFY_SSL` | `true` | Set `false` only in lab/dev with self-signed certs |
 | `WAZUH_CA_BUNDLE` | — | Path to custom CA cert bundle (PEM) for private CAs |
 | `WAZUH_ALLOW_WRITES` | `false` | Enable write tools (restart, active response, CDB edits) |
-| `WAZUH_MCP_API_KEY` | — | Bearer token required on all HTTP requests (recommended) |
-| `WAZUH_MCP_USER_ROLE` | `analyst` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin` |
+| `WAZUH_MCP_API_KEY` | — | Bearer token required on all HTTP requests (recommended). Also maps to a session role via `WAZUH_MCP_KEY_MAP` |
+| `WAZUH_MCP_ALLOW_INSECURE_BIND` | `false` | Allow binding a non-loopback host with no API key (NOT recommended) |
+| `WAZUH_MCP_ALLOWED_HOSTS` | — | Comma-separated extra Host header values permitted by DNS-rebinding protection (add your server hostname for mcp-remote) |
+| `WAZUH_MCP_USER_ROLE` | `viewer` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin`. Unknown values fail closed to `viewer` |
+| `WAZUH_MCP_SCRUB_PII` | `false` | Redact emails/SSNs/credit-card numbers from tool output. Off by default so IPs/emails that are the analyst's answer aren't mangled (secret + prompt-injection filtering are always on) |
+| `WAZUH_MCP_AR_ALLOWED_COMMANDS` | `firewall-drop,restart-wazuh` | Allowlist of permitted active-response command names |
+| `WAZUH_MCP_AR_SAFE_IPS` | — | Comma-separated never-block IP allowlist for active response |
+| `WAZUH_MCP_AUTO_RESUME_MONITOR` | `false` | Resume the autonomous monitor on startup if it was running before restart |
+| `WAZUH_MCP_AUTONOMOUS_AR` | `false` | Permit automated active-response actions by the monitor (also requires `WAZUH_ALLOW_WRITES=true`) |
 | `WAZUH_MCP_RATE_LIMIT_RPM` | `60` | Max requests per minute per API-key identity |
 | `WAZUH_MCP_RATE_LIMIT_BURST` | `10` | Burst allowance above RPM limit |
 | `WAZUH_AUDIT_LOG` | `logs/audit.jsonl` | Path for structured JSONL audit trail |
@@ -476,8 +491,11 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `IPINFO_TOKEN` | — | ipinfo.io token for 50k/mo free lookups (optional — works without token at lower limits) |
 | `WAZUH_REQUEST_TIMEOUT` | `30` | Per-request API timeout in seconds |
 | `WAZUH_MAX_RESULTS_GLOBAL` | `500` | Hard cap on results from any list tool |
-| `WAZUH_HTTP_POOL_SIZE` | `20` | Max simultaneous HTTP connections to Wazuh Manager |
-| `WAZUH_HTTP_MAX_KEEPALIVE` | `10` | Max keepalive connections in the pool |
+| `WAZUH_HTTP_POOL_SIZE` | `100` | Max simultaneous HTTP connections to Wazuh Manager |
+| `WAZUH_HTTP_MAX_KEEPALIVE` | `40` | Max keepalive connections in the Manager pool |
+| `WAZUH_INDEXER_POOL_SIZE` | `100` | Max simultaneous HTTP connections to Wazuh Indexer |
+| `WAZUH_INDEXER_MAX_KEEPALIVE` | `40` | Max keepalive connections in the Indexer pool |
+| `WAZUH_MCP_MAX_TOKENS` | `4000` | Token budget per tool response; list results are pruned to fit (0 = disabled) |
 | `WAZUH_AUDIT_LOG_SIGNING_KEY` | — | HMAC-SHA256 signing key for audit log tamper detection (enables `verify_audit_log_integrity`) |
 
 ### TLS for the MCP Endpoint
@@ -572,6 +590,12 @@ Tools requiring elevated roles return a descriptive error rather than failing si
 ---
 
 ## Tool Reference
+
+> Counts are generated, not hand-maintained. Run
+> `python scripts/generate_tool_table.py` to regenerate `docs/TOOL_TABLE.md` and
+> the headline totals (**239 tools across 52 modules**), or
+> `python scripts/generate_tool_table.py --check` in CI to fail the build if the
+> README count drifts.
 
 ### Agents (6 tools)
 
@@ -1177,7 +1201,7 @@ Every push and pull request runs four GitHub Actions jobs automatically:
 
 ### `HTTP 421 Invalid Host header` from mcp-remote
 
-The MCP SDK's DNS-rebinding protection blocks non-localhost `Host` headers. This is already disabled in `server.py` via `TransportSecuritySettings(enable_dns_rebinding_protection=False)`. Ensure you are running the latest code.
+DNS-rebinding protection is **enabled** (`TransportSecuritySettings(enable_dns_rebinding_protection=True)` in `server.py`) and only accepts `Host` headers matching the bind host plus localhost. If you reach the server via a hostname, reverse proxy, or non-loopback IP, add that value to `WAZUH_MCP_ALLOWED_HOSTS` (comma-separated), e.g. `WAZUH_MCP_ALLOWED_HOSTS=wazuh-mcp.internal,wazuh-mcp.internal:8000`. Then restart the server.
 
 ### `ECONNREFUSED` on port 8000
 
@@ -1186,7 +1210,10 @@ docker compose ps           # check container is Up
 docker compose logs wazuh-mcp | tail -30
 ```
 
-Ensure `WAZUH_MCP_HOST=0.0.0.0` is set in `.env`, not `127.0.0.1`.
+The default bind is `127.0.0.1` (localhost only). To accept connections from
+other hosts, set `WAZUH_MCP_HOST=0.0.0.0` **and** `WAZUH_MCP_API_KEY` in `.env`
+(the server refuses a non-loopback bind without an API key unless
+`WAZUH_MCP_ALLOW_INSECURE_BIND=true`).
 
 ### Empty results from alert/vulnerability tools
 

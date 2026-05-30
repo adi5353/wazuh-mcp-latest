@@ -376,6 +376,7 @@ let CFG = {
   key: localStorage.getItem('mcp_key') || '',
 };
 let activeTenant = null;
+let _mcpSessionId = localStorage.getItem("mcp_session_id") || "";
 let refreshTimer = null;
 let chatHistory = [];
 
@@ -388,7 +389,8 @@ async function callTool(toolName, args = {}) {
     params: { name: toolName, arguments: args },
   });
   try {
-    const r = await fetch(`${CFG.url}/`, { method: 'POST', headers, body });
+    const _sessUrl = _mcpSessionId ? `${CFG.url}/messages?session_id=${_mcpSessionId}` : `${CFG.url}/messages`;
+    const r = await fetch(_sessUrl, { method: 'POST', headers, body });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     // Extract result from JSON-RPC envelope
@@ -399,9 +401,35 @@ async function callTool(toolName, args = {}) {
     return { error: e.message };
   }
 }
+// ── MCP session bootstrap (Fix 5: correct SSE session handling) ─────────────
+async function initMcpSession() {
+  if (_mcpSessionId) return; // already have session
+  try {
+    const headers = {};
+    if (CFG.key) headers["Authorization"] = `Bearer ${CFG.key}`;
+    const es = new EventSource(`${CFG.url}/sse${CFG.key ? "?api_key=" + CFG.key : ""}`);
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => { es.close(); reject(new Error("timeout")); }, 5000);
+      es.onmessage = e => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === "endpoint" || msg.endpoint) {
+            const u = new URL(msg.endpoint || msg.url || "", CFG.url);
+            _mcpSessionId = u.searchParams.get("session_id") || "";
+            if (_mcpSessionId) localStorage.setItem("mcp_session_id", _mcpSessionId);
+          }
+        } catch {}
+        clearTimeout(t); es.close(); resolve();
+      };
+      es.onerror = () => { clearTimeout(t); es.close(); resolve(); };
+    });
+  } catch {}
+}
+
 
 // ── Connection test ────────────────────────────────────────────────────────
 async function checkConnection() {
+  await initMcpSession();
   const dot = document.querySelector('#conn-status .status-dot');
   const lbl = document.getElementById('conn-status');
   try {

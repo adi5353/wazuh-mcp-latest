@@ -15,7 +15,7 @@ or the ``X-MCP-Api-Key`` HTTP header (SSE/HTTP mode).
 Single-user setup
 -----------------
 Leave WAZUH_MCP_KEY_MAP unset.  The server falls back to
-``WAZUH_MCP_USER_ROLE`` (default: analyst) — existing behaviour unchanged.
+``WAZUH_MCP_USER_ROLE`` (default: viewer — fail closed).
 
 Injection lockout
 -----------------
@@ -103,10 +103,13 @@ def effective_role() -> ROLE:
     Priority order:
       1. Task-local role (set via set_session_role or set_session_role tool)
       2. WAZUH_MCP_USER_ROLE env var
-      3. Default: ANALYST
+      3. Default: VIEWER
+
+    Fails closed: an unknown/misspelled role name resolves to VIEWER
+    (least privilege) rather than ANALYST.
     """
     task_role = _ctx_role.get()
     if task_role is not None:
         return task_role
-    raw = os.getenv("WAZUH_MCP_USER_ROLE", "analyst").strip().lower()
-    return _NAME_TO_ROLE.get(raw, ROLE.ANALYST)
+    raw = os.getenv("WAZUH_MCP_USER_ROLE", "viewer").strip().lower()
+    return _NAME_TO_ROLE.get(raw, ROLE.VIEWER)
