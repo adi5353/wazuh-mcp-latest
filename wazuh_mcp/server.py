@@ -211,8 +211,25 @@ from . import tools as _tools_pkg  # noqa: E402
 
 _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
+_TOOL_MODULE_ALLOWLIST = frozenset({
+    "active_response", "agent_health", "agent_upgrades", "agents", "alerts",
+    "archive", "audit_mgmt", "autonomous_soc", "azure_devops", "baseline",
+    "cdb", "cluster", "compliance", "correlation", "credential_mgmt",
+    "cve_watchlist", "explain_alert", "export", "fim", "fleet", "geo_intel",
+    "health_check", "incidents", "index_mgmt", "integrations", "manager_audit",
+    "manager_config", "metrics", "mitre", "network_topology", "notifications",
+    "onboarding", "pagerduty", "playbooks", "prompt_advisor", "quick_wins",
+    "reporting", "roi", "rootcheck", "rule_wizard", "rules", "sca",
+    "scheduler", "servicenow", "suppression", "syslog_config", "threat_feeds",
+    "threat_hunting", "threat_intel", "ueba", "vulnerabilities", "workspaces",
+    "rule_wizard_generate", "rule_wizard_validate", "rule_wizard_deploy",
+})
+
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
+        continue
+    if _modname not in _TOOL_MODULE_ALLOWLIST:
+        log.warning("Skipping unrecognised tool module %r — not in allowlist", _modname)
         continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
@@ -323,6 +340,14 @@ async def set_session_role_tool(api_key: str) -> dict:
     argument — otherwise any caller could self-elevate. Use stdio for the
     single-local-user set-role workflow.
     """
+    if not os.getenv("WAZUH_MCP_KEY_MAP", "").strip():
+        return {
+            "error": (
+                "set_session_role requires WAZUH_MCP_KEY_MAP to be configured. "
+                "Without a key map, role is fixed to WAZUH_MCP_USER_ROLE env var "
+                "and cannot be changed via tool call."
+            )
+        }
     if os.getenv("WAZUH_MCP_TRANSPORT", "stdio") == "http":
         return {
             "error": (
@@ -1101,6 +1126,13 @@ def main() -> None:
                      "Add prometheus-client to requirements.txt to enable.")
 
         async def metrics_endpoint(request):  # type: ignore[no-untyped-def]
+            _metrics_api_key = os.getenv("WAZUH_MCP_API_KEY", "").strip()
+            if not await _health_caller_is_authenticated_fn(request, _metrics_api_key):
+                return Response(
+                    '{"error": "Authentication required"}',
+                    media_type="application/json",
+                    status_code=401,
+                )
             if not _metrics_enabled:
                 return Response(
                     "# prometheus_client not installed\n",
