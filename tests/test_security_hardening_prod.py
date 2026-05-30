@@ -66,6 +66,7 @@ def test_issue02_transport_security_settings_field_names():
 @pytest.mark.asyncio
 async def test_issue03_http_set_session_role_tool_is_noop(monkeypatch):
     monkeypatch.setenv("WAZUH_MCP_TRANSPORT", "http")
+    monkeypatch.setenv("WAZUH_MCP_KEY_MAP", "viewer:key1,admin:key2")
     import wazuh_mcp.server as server
     fn = server._TOOL_REGISTRY["set_session_role_tool"]
     result = await fn(api_key="anything")

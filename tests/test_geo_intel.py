@@ -239,6 +239,8 @@ class TestThreatFeeds:
 
 class TestPlaybooks:
     def _register(self):
+        import os
+        from unittest.mock import patch
         from wazuh_mcp.tools import playbooks
         mcp = MagicMock()
         registered = {}
@@ -248,8 +250,9 @@ class TestPlaybooks:
                 return fn
             return dec
         mcp.tool = capture_tool
-        ctx = ToolContext(mcp=mcp, wz=AsyncMock(), idx=AsyncMock(), cfg=MagicMock(), cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
-        playbooks.register(ctx)
+        with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+            ctx = ToolContext(mcp=mcp, wz=AsyncMock(), idx=AsyncMock(), cfg=MagicMock(), cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
+            playbooks.register(ctx)
         return registered, playbooks
 
     def test_list_playbooks_returns_all(self):
@@ -274,7 +277,8 @@ class TestPlaybooks:
     def test_run_playbook_missing_param_returns_error(self):
         async def run():
             fns, _ = self._register()
-            result = await fns["run_playbook"]("isolate-compromised-host", dry_run=True)
+            with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await fns["run_playbook"]("isolate-compromised-host", dry_run=True)
             assert "error" in result
             assert "agent_id" in str(result)
         asyncio.run(run())
@@ -282,9 +286,10 @@ class TestPlaybooks:
     def test_run_playbook_dry_run_shows_steps(self):
         async def run():
             fns, _ = self._register()
-            result = await fns["run_playbook"](
-                "isolate-compromised-host", dry_run=True, agent_id="001"
-            )
+            with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await fns["run_playbook"](
+                    "isolate-compromised-host", dry_run=True, agent_id="001"
+                )
             assert result["dry_run"] is True
             assert "steps" in result
             assert len(result["steps"]) > 0
@@ -294,9 +299,10 @@ class TestPlaybooks:
     def test_run_playbook_dry_run_resolves_params(self):
         async def run():
             fns, _ = self._register()
-            result = await fns["run_playbook"](
-                "brute-force-response", dry_run=True, ip="1.2.3.4"
-            )
+            with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await fns["run_playbook"](
+                    "brute-force-response", dry_run=True, ip="1.2.3.4"
+                )
             assert result["dry_run"] is True
             first_step = result["steps"][0]
             assert "1.2.3.4" in str(first_step["params"])
@@ -305,16 +311,18 @@ class TestPlaybooks:
     def test_get_playbook_status_not_found(self):
         async def run():
             fns, _ = self._register()
-            result = await fns["get_playbook_status"]("nonexistent-run-id")
+            with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await fns["get_playbook_status"]("nonexistent-run-id")
             assert "error" in result
         asyncio.run(run())
 
     def test_run_playbook_live_creates_run_record(self):
         async def run():
             fns, pb_module = self._register()
-            result = await fns["run_playbook"](
-                "isolate-compromised-host", dry_run=False, agent_id="001"
-            )
+            with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await fns["run_playbook"](
+                    "isolate-compromised-host", dry_run=False, agent_id="001"
+                )
             assert "run_id" in result
             run_id = result["run_id"]
             assert run_id in pb_module._RUN_HISTORY

@@ -12,7 +12,7 @@ def _make_env(tmp_path):
     mcp.tool = lambda: (lambda fn: tools.__setitem__(fn.__name__, fn) or fn)
     cfg = MagicMock()
 
-    with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+    with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
         from wazuh_mcp.tools.workspaces import register
         ctx = ToolContext(mcp=mcp, wz=None, idx=None, cfg=cfg, cap=lambda x: x, require_writes=lambda: None, truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value=dict()), incident_recommendations=lambda a: [])
         register(ctx)
@@ -23,7 +23,7 @@ class TestCreateWorkspace:
     def test_create_returns_id(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             result = asyncio.run(
                 tools["create_workspace"]("Ransomware Investigation")
             )
@@ -33,7 +33,7 @@ class TestCreateWorkspace:
     def test_workspace_file_created(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             result = asyncio.run(
                 tools["create_workspace"]("Test WS")
             )
@@ -44,7 +44,7 @@ class TestCreateWorkspace:
     def test_empty_name_rejected(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             result = asyncio.run(
                 tools["create_workspace"]("")
             )
@@ -55,7 +55,7 @@ class TestAddToWorkspace:
     def test_add_note(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             created = asyncio.run(
                 tools["create_workspace"]("Incident WS")
             )
@@ -68,7 +68,7 @@ class TestAddToWorkspace:
     def test_add_alert_id(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             created = asyncio.run(
                 tools["create_workspace"]("Incident WS 2")
             )
@@ -81,7 +81,7 @@ class TestAddToWorkspace:
     def test_nonexistent_workspace_returns_error(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             result = asyncio.run(
                 tools["add_to_workspace"]("nonexistent-id", item_type="note", content="test")
             )
@@ -92,7 +92,7 @@ class TestGetWorkspace:
     def test_get_returns_items(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             created = asyncio.run(
                 tools["create_workspace"]("Get Test")
             )
@@ -109,7 +109,7 @@ class TestGetWorkspace:
     def test_get_nonexistent_returns_error(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             result = asyncio.run(
                 tools["get_workspace"]("does-not-exist")
             )
@@ -120,7 +120,7 @@ class TestExportWorkspace:
     def test_export_json(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             created = asyncio.run(
                 tools["create_workspace"]("Export Test")
             )
@@ -138,7 +138,7 @@ class TestExportWorkspace:
     def test_export_markdown(self, tmp_path):
         import asyncio
         tools, _ = _make_env(tmp_path)
-        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path)}):
+        with patch.dict(os.environ, {"WAZUH_WORKSPACE_DIR": str(tmp_path), "WAZUH_MCP_USER_ROLE": "responder"}):
             created = asyncio.run(
                 tools["create_workspace"]("MD Export")
             )

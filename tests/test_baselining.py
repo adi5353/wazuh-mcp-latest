@@ -250,7 +250,7 @@ class TestScheduler:
     def test_create_schedule_invalid_type(self):
         async def run():
             reg, wz, idx, sched = self._register()
-            with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None):
+            with patch("wazuh_mcp.tools.scheduler.responder_only", return_value=None):
                 result = await reg["create_report_schedule"]("test", "invalid_type")
             assert "error" in result
         asyncio.run(run())
@@ -258,7 +258,7 @@ class TestScheduler:
     def test_create_schedule_invalid_interval(self):
         async def run():
             reg, wz, idx, sched = self._register()
-            with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None):
+            with patch("wazuh_mcp.tools.scheduler.responder_only", return_value=None):
                 result = await reg["create_report_schedule"](
                     "test", "daily_summary", interval="biweekly"
                 )
@@ -269,7 +269,7 @@ class TestScheduler:
         async def run():
             reg, wz, idx, sched = self._register()
             sched._SCHEDULES.clear()
-            with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None), \
+            with patch("wazuh_mcp.tools.scheduler.responder_only", return_value=None), \
                  patch.object(sched, "_save_schedules"), \
                  patch.object(sched, "_ensure_scheduler_running"):
                 result = await reg["create_report_schedule"](
@@ -284,7 +284,7 @@ class TestScheduler:
         async def run():
             reg, wz, idx, sched = self._register()
             sched._SCHEDULES.clear()
-            with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None):
+            with patch("wazuh_mcp.tools.scheduler.responder_only", return_value=None):
                 result = await reg["delete_report_schedule"]("nonexistent")
             assert "error" in result
         asyncio.run(run())
@@ -296,7 +296,7 @@ class TestScheduler:
                 "schedule_id": "abc123", "name": "Test", "report_type": "daily_summary",
                 "interval": "daily", "enabled": True,
             }
-            with patch("wazuh_mcp.tools.scheduler.analyst_only", return_value=None), \
+            with patch("wazuh_mcp.tools.scheduler.responder_only", return_value=None), \
                  patch.object(sched, "_save_schedules"):
                 result = await reg["delete_report_schedule"]("abc123")
             assert result["status"] == "deleted"
@@ -313,7 +313,7 @@ class TestScheduler:
     def test_create_schedule_rbac(self):
         async def run():
             reg, wz, idx, sched = self._register()
-            with patch("wazuh_mcp.tools.scheduler.analyst_only",
+            with patch("wazuh_mcp.tools.scheduler.responder_only",
                        return_value={"error": "analyst only"}):
                 result = await reg["create_report_schedule"]("test", "daily_summary")
             assert "error" in result
