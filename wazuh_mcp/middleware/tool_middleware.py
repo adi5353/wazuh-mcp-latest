@@ -41,50 +41,58 @@ class ToolMiddleware:
             @functools.wraps(fn)
             async def wrapped(*fn_args: Any, **fn_kwargs: Any) -> Any:
                 from ..input_sanitizer import sanitize_input_value
-                from ..identity import record_injection_attempt
+                from ..identity import record_injection_attempt, _ctx_identity_key
                 from ..audit import sanitize_response, cap_response_size, sanitize_string
+                from ..logging_config import bind_request_context, clear_request_context
 
-                # ── INPUT sanitization ────────────────────────────────────
-                clean_kwargs: dict = {}
-                for field, value in fn_kwargs.items():
+                # ── Structured-logging context (Improvement 3) ───────────
+                # Bind a per-call trace_id + tool + identity so EVERY log line
+                # emitted during this single tool execution can be correlated.
+                bind_request_context(fn.__name__, _ctx_identity_key.get(None) or "local")
+                try:
+                    # ── INPUT sanitization ────────────────────────────────
+                    clean_kwargs: dict = {}
+                    for field, value in fn_kwargs.items():
+                        try:
+                            clean_kwargs[field] = sanitize_input_value(value, field)
+                        except ValueError as exc:
+                            locked_out = record_injection_attempt()
+                            msg = f"Input rejected: {exc}"
+                            if locked_out:
+                                msg += " [session locked to VIEWER after repeated violations]"
+                            return {"error": msg}
+
+                    # ── Tool execution (with timing) ──────────────────────
+                    t0 = time.monotonic()
+                    result = await fn(*fn_args, **clean_kwargs)
+                    duration = time.monotonic() - t0
+
                     try:
-                        clean_kwargs[field] = sanitize_input_value(value, field)
-                    except ValueError as exc:
-                        locked_out = record_injection_attempt()
-                        msg = f"Input rejected: {exc}"
-                        if locked_out:
-                            msg += " [session locked to VIEWER after repeated violations]"
-                        return {"error": msg}
+                        from ..core.roi_tracker import record_call
+                        record_call(fn.__name__, duration)
+                    except Exception:
+                        pass
+                    try:
+                        from ..tools.metrics import record_tool_call
+                        record_tool_call(fn.__name__, duration)
+                    except Exception:
+                        pass
 
-                # ── Tool execution (with timing) ──────────────────────────
-                t0 = time.monotonic()
-                result = await fn(*fn_args, **clean_kwargs)
-                duration = time.monotonic() - t0
+                    # ── OUTPUT sanitization ───────────────────────────────
+                    if isinstance(result, dict):
+                        result = sanitize_response(result)
+                    elif isinstance(result, str):
+                        result = sanitize_string(result)
+                    elif isinstance(result, list):
+                        result = [
+                            sanitize_response(item) if isinstance(item, dict)
+                            else (sanitize_string(item) if isinstance(item, str) else item)
+                            for item in result
+                        ]
 
-                try:
-                    from ..core.roi_tracker import record_call
-                    record_call(fn.__name__, duration)
-                except Exception:
-                    pass
-                try:
-                    from ..tools.metrics import record_tool_call
-                    record_tool_call(fn.__name__, duration)
-                except Exception:
-                    pass
-
-                # ── OUTPUT sanitization ───────────────────────────────────
-                if isinstance(result, dict):
-                    result = sanitize_response(result)
-                elif isinstance(result, str):
-                    result = sanitize_string(result)
-                elif isinstance(result, list):
-                    result = [
-                        sanitize_response(item) if isinstance(item, dict)
-                        else (sanitize_string(item) if isinstance(item, str) else item)
-                        for item in result
-                    ]
-
-                return cap_response_size(result)
+                    return cap_response_size(result)
+                finally:
+                    clear_request_context()
 
             # Register the middleware-wrapped function so playbook / autonomous
             # SOC calls pass through input sanitization and output capping too.

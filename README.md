@@ -258,10 +258,10 @@ WAZUH_MCP_API_KEY=              # REQUIRED before binding to a non-loopback host
 
 > **Exposing beyond localhost:** the server binds to `127.0.0.1` by default and
 > **refuses to start** on a non-loopback host (e.g. `0.0.0.0`) unless
-> `WAZUH_MCP_API_KEY` is set — or you explicitly set
-> `WAZUH_MCP_ALLOW_INSECURE_BIND=true` (not recommended). When reaching the
-> server via a hostname/proxy, add that host to `WAZUH_MCP_ALLOWED_HOSTS` so
-> DNS-rebinding protection allows it.
+> `WAZUH_MCP_API_KEY` is set. This is mandatory and cannot be overridden — the
+> former `WAZUH_MCP_ALLOW_INSECURE_BIND` escape hatch has been **removed**. When
+> reaching the server via a hostname/proxy, add that host to
+> `WAZUH_MCP_ALLOWED_HOSTS` so DNS-rebinding protection allows it.
 
 ### 3. Start the container
 
@@ -464,7 +464,7 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | Variable | Default | Description |
 |---|---|---|
 | `WAZUH_MCP_TRANSPORT` | `http` | `http` for Docker/remote, `stdio` for local Claude Desktop |
-| `WAZUH_MCP_HOST` | `127.0.0.1` | Bind address for HTTP mode. Non-loopback values require `WAZUH_MCP_API_KEY` (or `WAZUH_MCP_ALLOW_INSECURE_BIND=true`) or the server refuses to start |
+| `WAZUH_MCP_HOST` | `127.0.0.1` | Bind address for HTTP mode. Non-loopback values **always require** `WAZUH_MCP_API_KEY` or the server refuses to start (no insecure override) |
 | `WAZUH_MCP_PORT` | `8000` | Port for HTTP mode |
 
 ### Security & Access
@@ -475,10 +475,11 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `WAZUH_CA_BUNDLE` | — | Path to custom CA cert bundle (PEM) for private CAs |
 | `WAZUH_ALLOW_WRITES` | `false` | Enable write tools (restart, active response, CDB edits) |
 | `WAZUH_MCP_API_KEY` | — | Bearer token required on all HTTP requests (recommended). Also maps to a session role via `WAZUH_MCP_KEY_MAP` |
-| `WAZUH_MCP_ALLOW_INSECURE_BIND` | `false` | Allow binding a non-loopback host with no API key (NOT recommended) |
 | `WAZUH_MCP_ALLOWED_HOSTS` | — | Comma-separated extra Host header values permitted by DNS-rebinding protection (add your server hostname for mcp-remote) |
 | `WAZUH_MCP_USER_ROLE` | `viewer` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin`. Unknown values fail closed to `viewer` |
-| `WAZUH_MCP_SCRUB_PII` | `false` | Redact emails/SSNs/credit-card numbers from tool output. Off by default so IPs/emails that are the analyst's answer aren't mangled (secret + prompt-injection filtering are always on) |
+| `WAZUH_MCP_SCRUB_PII` | `false` | Redact emails/SSNs/credit-card numbers from tool output. Off by default so IPs/emails that are the analyst's answer aren't mangled (secret + prompt-injection filtering are always on). When off **and** a remote cloud LLM is suspected, the server logs a loud compliance warning on boot |
+| `WAZUH_MCP_LOCAL_LLM` | `false` | Declare that an on-prem/local model (e.g. Ollama) consumes output — suppresses the PII boot warning |
+| `WAZUH_MCP_PII_SCRUB_ACK` | `false` | Explicitly acknowledge running with PII scrubbing off to a cloud LLM — downgrades the boot error to a warning |
 | `WAZUH_MCP_AR_ALLOWED_COMMANDS` | `firewall-drop,restart-wazuh` | Allowlist of permitted active-response command names |
 | `WAZUH_MCP_AR_SAFE_IPS` | — | Comma-separated never-block IP allowlist for active response |
 | `WAZUH_MCP_AUTO_RESUME_MONITOR` | `false` | Resume the autonomous monitor on startup if it was running before restart |
@@ -1213,8 +1214,8 @@ docker compose logs wazuh-mcp | tail -30
 
 The default bind is `127.0.0.1` (localhost only). To accept connections from
 other hosts, set `WAZUH_MCP_HOST=0.0.0.0` **and** `WAZUH_MCP_API_KEY` in `.env`
-(the server refuses a non-loopback bind without an API key unless
-`WAZUH_MCP_ALLOW_INSECURE_BIND=true`).
+(the server always refuses a non-loopback bind without an API key — there is no
+insecure override).
 
 ### Empty results from alert/vulnerability tools
 
