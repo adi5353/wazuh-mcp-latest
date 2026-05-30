@@ -162,6 +162,15 @@ class WazuhIndexer:
             self._inflight.pop(_key, None)
     async def _search_impl(self, body: dict, index: Optional[str] = None) -> dict:
         """Internal search with retry logic (no circuit breaker — called by search())."""
+        # Enforce server-side pagination cap: never request more than 500 docs in one call.
+        # Callers should use search_after / page_token for large result sets.
+        _MAX_PAGE_SIZE = 500
+        if "size" in body:
+            assert body["size"] <= _MAX_PAGE_SIZE, (
+                f"Indexer size={body['size']} exceeds hard cap of {_MAX_PAGE_SIZE}. "
+                "Use pagination (search_after) for large result sets."
+            )
+            body = {**body, "size": min(body["size"], _MAX_PAGE_SIZE)}
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_search"
         last_exc: Exception = RuntimeError("No attempts made")
