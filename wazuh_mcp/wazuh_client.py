@@ -17,6 +17,7 @@ import os
 import random
 import time
 from typing import Any, Optional
+from urllib.parse import unquote
 
 import httpx
 
@@ -72,13 +73,35 @@ def _validate_manager_file_path(path: str) -> None:
 
     Guards against path traversal (``..``) and arbitrary-endpoint writes. The
     query string (``?overwrite=true``) is ignored for prefix matching.
+
+    Traversal is checked *after* repeatedly URL-decoding the route, so encoded
+    (``%2e%2e``) and double-encoded (``%252e``) forms are caught. Backslashes
+    are treated as separators (Windows-style traversal) and absolute/scheme-
+    relative paths (``//host``) are rejected.
     """
     if not isinstance(path, str) or not path:
         raise ValueError("upload path must be a non-empty string")
     route = path.split("?", 1)[0]
-    if ".." in route:
+
+    # Repeatedly percent-decode until stable to defeat multi-layer encoding,
+    # then normalise backslashes to forward slashes before the traversal check.
+    decoded = route
+    for _ in range(5):
+        nxt = unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+    decoded = decoded.replace("\\", "/")
+
+    if ".." in decoded or ".." in route:
         raise ValueError(f"Refusing upload path containing '..': {path!r}")
-    if not route.startswith(_ALLOWED_UPLOAD_PREFIXES):
+    # Reject scheme-relative / protocol-relative paths that could redirect the
+    # write to another host (e.g. ``//evil/rules/files/x``).
+    if decoded.startswith("//"):
+        raise ValueError(f"Refusing scheme-relative upload path: {path!r}")
+    if not decoded.startswith(_ALLOWED_UPLOAD_PREFIXES) or not route.startswith(
+        _ALLOWED_UPLOAD_PREFIXES
+    ):
         raise ValueError(
             f"Refusing upload to disallowed path {path!r}. "
             f"Allowed prefixes: {_ALLOWED_UPLOAD_PREFIXES}"

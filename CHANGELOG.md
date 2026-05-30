@@ -8,6 +8,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Code-Review Response (2026-05-30)
+
+Addressed actionable findings from an external architecture/security review.
+
+**Path-traversal hardening** — `_validate_manager_file_path` in `wazuh_client.py`
+now repeatedly URL-decodes the route (defeating `%2e%2e` and double-encoded
+`%252e` traversal), normalises backslashes, and rejects scheme-relative (`//host`)
+paths before the allowlist-prefix check. Added regression cases for each vector.
+
+**Prompt extraction** — The 15 MCP prompt builders were moved out of the
+1,600-line `server.py` god-module into a dedicated `wazuh_mcp/prompts.py`. They
+are re-exported from `server` (and registered via `register_prompts(mcp)`), so
+behaviour and the `server.<prompt>` import surface are unchanged.
+
+**Deterministic test suite** — Added an autouse `reset_session_identity` fixture
+in `tests/conftest.py` that clears the task-local role / injection-counter
+ContextVars between tests, fixing an order-dependent RBAC state leak.
+
+**Test hygiene** — Renamed the ambiguously-named `test_security_hardening_new.py`,
+`_new2.py`, and `_prod.py` to `_severity.py`, `_approval_rbac.py`, and
+`_regressions.py` respectively (history preserved via `git mv`).
+
+**Docs** — Removed the duplicate `.env.example`; `env.example` (referenced by the
+README, CONTRIBUTING, pre-commit, and tests) is now the single source of truth.
+
 ### Security Fixes — Security-Hardening Branch (2026-05-29)
 
 Second hardening pass addressing 15 additional findings from the security review.

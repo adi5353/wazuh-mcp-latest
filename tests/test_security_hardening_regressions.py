@@ -263,6 +263,16 @@ def test_issue11_upload_xml_rejects_traversal_and_bad_routes():
         "/manager/configuration",
         "",
         "/security/user/password",
+        # URL-encoded traversal
+        "/rules/files/%2e%2e/%2e%2e/etc/passwd",
+        # double-encoded traversal
+        "/rules/files/%252e%252e/etc/passwd",
+        # backslash (Windows-style) traversal
+        "/rules/files/..\\..\\etc\\passwd",
+        # scheme-relative redirect to another host
+        "//evil/rules/files/x.xml",
+        # encoded path that decodes to a disallowed route
+        "%2fagents",
     ]:
         with pytest.raises(ValueError):
             _validate_manager_file_path(bad)
