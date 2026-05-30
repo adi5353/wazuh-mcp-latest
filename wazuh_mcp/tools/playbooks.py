@@ -16,6 +16,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from ..rbac import responder_only
+
 log = logging.getLogger("wazuh-mcp")
 
 _BUILTIN_PLAYBOOKS: list[dict[str, Any]] = [
@@ -298,6 +300,10 @@ def register(ctx: ToolContext) -> None:
         playbook_id: 'isolate-compromised-host', 'brute-force-response',
                      'cve-triage', or 'incident-response'
         """
+        err = responder_only()
+        if err:
+            return err
+
         pb = _get_playbook(playbook_id)
         if pb is None:
             return {"error": f"Playbook '{playbook_id}' not found. Use list_playbooks()."}
@@ -455,6 +461,10 @@ def register(ctx: ToolContext) -> None:
         approved=True: continue execution past the gate.
         approved=False: abort the playbook.
         """
+        err = responder_only()
+        if err:
+            return err
+
         record = _load(run_id)
         if not record:
             return {"error": f"Run ID '{run_id}' not found."}

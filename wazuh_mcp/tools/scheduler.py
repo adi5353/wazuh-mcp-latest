@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..rbac import analyst_only
+from ..rbac import analyst_only, responder_only
 from ..state_store import _state_dir
 
 log = logging.getLogger("wazuh-mcp")
@@ -189,9 +189,9 @@ def register(ctx: ToolContext) -> None:
         interval: 'hourly', 'daily', 'weekly', 'monthly' (default: daily)
 
         Reports run in the background and results are stored in schedule status.
-        Requires role: analyst or above.
+        Requires role: responder or above.
         """
-        err = analyst_only()
+        err = responder_only()
         if err:
             return err
 
@@ -258,9 +258,9 @@ def register(ctx: ToolContext) -> None:
         """Delete a report schedule by its ID.
 
         schedule_id: returned by create_report_schedule or list_report_schedules.
-        Requires role: analyst or above.
+        Requires role: responder or above.
         """
-        err = analyst_only()
+        err = responder_only()
         if err:
             return err
 
