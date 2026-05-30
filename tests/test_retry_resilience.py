@@ -341,13 +341,13 @@ class TestPrometheusMetrics:
         assert '"/metrics"' in source or "'/metrics'" in source
 
     def test_prometheus_client_in_requirements(self):
-        """prometheus-client must be in requirements.txt."""
-        req_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "requirements.txt"
+        """prometheus-client must be in pyproject.toml dev deps."""
+        pyproject_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "pyproject.toml"
         )
-        with open(req_path) as f:
+        with open(pyproject_path) as f:
             content = f.read()
-        assert "prometheus-client" in content
+        assert "prometheus_client" in content or "prometheus-client" in content
 
     def test_prometheus_client_importable(self):
         """prometheus-client must be installed in the container."""

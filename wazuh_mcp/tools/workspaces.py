@@ -17,10 +17,20 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import json
+import logging
 import os
 import time
 import uuid
 from pathlib import Path
+
+_wdir = os.getenv("WAZUH_WORKSPACE_DIR", "/app/workspaces")
+if _wdir.startswith("/tmp") or not os.path.ismount(_wdir):
+    logging.getLogger("wazuh-mcp").warning(
+        "WAZUH_WORKSPACE_DIR=%r may not be on a persistent volume. "
+        "Investigation workspaces will be lost on container restart. "
+        "Mount a named volume at this path.",
+        _wdir,
+    )
 
 
 def _workspace_dir() -> Path:
@@ -57,6 +67,7 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     cfg = ctx.cfg
 
+    from ..rbac import responder_only
     from ..validators import safe_validate, validate_free_text
 
     @mcp.tool()
@@ -69,6 +80,10 @@ def register(ctx: ToolContext) -> None:
         Returns a workspace_id to use in subsequent add_to_workspace calls.
         The workspace persists on disk at WAZUH_WORKSPACE_DIR (default /app/workspaces).
         """
+        err = responder_only()
+        if err:
+            return err
+
         if not name or not name.strip():
             return {"error": "name must not be empty."}
         _, err = safe_validate(validate_free_text, name, "name", max_len=200)
@@ -110,6 +125,10 @@ def register(ctx: ToolContext) -> None:
         content:      The evidence content (note text, alert ID, agent ID, etc.).
         label:        Optional short label for the item (e.g. "Initial access vector").
         """
+        err = responder_only()
+        if err:
+            return err
+
         ws = _load_ws(workspace_id)
         if ws is None:
             return {"error": f"Workspace '{workspace_id}' not found."}

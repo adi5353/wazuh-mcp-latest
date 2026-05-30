@@ -274,7 +274,11 @@ def validate_active_response_target(src_ip: str | None) -> str | None:
 # Default allowlist of active-response command names. Override with
 # WAZUH_MCP_AR_ALLOWED_COMMANDS (comma-separated). Commands outside this set are
 # rejected before any PUT /active-response is issued (Issue 10).
-_AR_DEFAULT_COMMANDS = "firewall-drop,restart-wazuh"
+#
+# M3 security hardening: default reduced to "firewall-drop" only.
+# "restart-wazuh" is a high-impact operation that can interrupt security monitoring
+# and must be explicitly opted-in via WAZUH_MCP_AR_ALLOWED_COMMANDS.
+_AR_DEFAULT_COMMANDS = "firewall-drop"
 
 
 def ar_allowed_commands() -> set[str]:

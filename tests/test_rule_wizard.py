@@ -125,7 +125,7 @@ class TestPushCustomRule:
     <description>Test</description>
   </rule>
 </group>"""
-        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+        with patch("wazuh_mcp.tools.rule_wizard_deploy.admin_only", return_value=None):
             result = asyncio.run(
                 tools["push_custom_rule"](xml, dry_run=True)
             )
@@ -150,7 +150,7 @@ class TestPushCustomRule:
     <description>Test push</description>
   </rule>
 </group>"""
-        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+        with patch("wazuh_mcp.tools.rule_wizard_deploy.admin_only", return_value=None):
             result = asyncio.run(
                 tools["push_custom_rule"](xml, dry_run=False)
             )
@@ -179,7 +179,7 @@ class TestPushCustomDecoder:
         xml = """<decoder name="my-app">
   <prematch>^MyApp </prematch>
 </decoder>"""
-        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+        with patch("wazuh_mcp.tools.rule_wizard_deploy.admin_only", return_value=None):
             result = asyncio.run(
                 tools["push_custom_decoder"](xml, dry_run=True)
             )
@@ -203,7 +203,7 @@ class TestPushCustomDecoder:
         xml = """<decoder name="my-app">
   <prematch>^MyApp </prematch>
 </decoder>"""
-        with patch("wazuh_mcp.tools.rule_wizard.admin_only", return_value=None):
+        with patch("wazuh_mcp.tools.rule_wizard_deploy.admin_only", return_value=None):
             result = asyncio.run(
                 tools["push_custom_decoder"](xml, dry_run=False)
             )

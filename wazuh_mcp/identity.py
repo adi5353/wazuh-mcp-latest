@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+import threading
 from typing import Optional
 
 from .rbac import ROLE, _NAME_TO_ROLE
@@ -41,8 +42,46 @@ _ctx_role: contextvars.ContextVar[Optional[ROLE]] = contextvars.ContextVar(
 _ctx_injection_count: contextvars.ContextVar[int] = contextvars.ContextVar(
     "_ctx_injection_count", default=0
 )
+# ContextVar holding the identity key (API key hash or session ID) so that the
+# persistent cross-request counter can be keyed per identity.
+_ctx_identity_key: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_ctx_identity_key", default=None
+)
 
 INJECTION_LOCKOUT_THRESHOLD = 3
+
+# M2: Persistent injection counter across requests — keyed by identity.
+# Uses a process-wide dict protected by a lock so concurrent asyncio tasks can
+# each increment atomically without interfering with each other.
+_persistent_injection_counts: dict[str, int] = {}
+_persistent_injection_lock = threading.Lock()
+
+
+def set_identity_key(key: str) -> None:
+    """Bind an identity key (e.g. hashed API key) to the current task context."""
+    import hashlib
+    # Store only a hash, never the raw key.
+    _ctx_identity_key.set(hashlib.sha256(key.encode()).hexdigest()[:16])
+
+
+def get_persistent_injection_count(identity: str) -> int:
+    """Return the cross-request injection count for *identity*."""
+    with _persistent_injection_lock:
+        return _persistent_injection_counts.get(identity, 0)
+
+
+def _increment_persistent(identity: str) -> int:
+    """Atomically increment and return the new count for *identity*."""
+    with _persistent_injection_lock:
+        new = _persistent_injection_counts.get(identity, 0) + 1
+        _persistent_injection_counts[identity] = new
+        return new
+
+
+def reset_persistent_injection_count(identity: str) -> None:
+    """Reset the persistent counter (e.g. after an admin override)."""
+    with _persistent_injection_lock:
+        _persistent_injection_counts.pop(identity, None)
 
 
 # ── Key map (parsed once at import) ──────────────────────────────────────────
@@ -85,13 +124,33 @@ def get_session_role() -> Optional[ROLE]:
 
 
 def record_injection_attempt() -> bool:
-    """Increment injection counter. Returns True if lockout threshold is reached."""
-    count = _ctx_injection_count.get() + 1
-    _ctx_injection_count.set(count)
-    if count >= INJECTION_LOCKOUT_THRESHOLD:
+    """Increment injection counters (per-task and cross-request).
+
+    M2: In addition to the per-task ContextVar counter (resets each new MCP
+    request), also increments a persistent cross-request counter keyed by the
+    identity key so that repeated attempts across separate requests accumulate.
+
+    Returns True if the lockout threshold is reached on either counter.
+    """
+    # Per-task counter (original behaviour)
+    task_count = _ctx_injection_count.get() + 1
+    _ctx_injection_count.set(task_count)
+
+    # M2: Cross-request persistent counter
+    identity = _ctx_identity_key.get()
+    persistent_count = _increment_persistent(identity) if identity else task_count
+
+    # Lockout on either counter reaching the threshold
+    reached = task_count >= INJECTION_LOCKOUT_THRESHOLD or (
+        identity and persistent_count >= INJECTION_LOCKOUT_THRESHOLD
+    )
+    if reached:
         _ctx_role.set(ROLE.VIEWER)
         log.warning(
-            "Session locked to VIEWER after %d injection attempts", count
+            "Session locked to VIEWER after %d injection attempts "
+            "(task_count=%d, persistent_count=%d, identity=%s)",
+            max(task_count, persistent_count), task_count, persistent_count,
+            identity or "anonymous",
         )
         return True
     return False

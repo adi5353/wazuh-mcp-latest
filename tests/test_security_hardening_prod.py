@@ -66,6 +66,7 @@ def test_issue02_transport_security_settings_field_names():
 @pytest.mark.asyncio
 async def test_issue03_http_set_session_role_tool_is_noop(monkeypatch):
     monkeypatch.setenv("WAZUH_MCP_TRANSPORT", "http")
+    monkeypatch.setenv("WAZUH_MCP_KEY_MAP", "viewer:key1,admin:key2")
     import wazuh_mcp.server as server
     fn = server._TOOL_REGISTRY["set_session_role_tool"]
     result = await fn(api_key="anything")
@@ -229,8 +230,11 @@ def test_issue09_prompt_injection_still_blocked():
 def test_issue10_ar_command_not_in_allowlist_rejected(monkeypatch):
     monkeypatch.delenv("WAZUH_MCP_AR_ALLOWED_COMMANDS", raising=False)
     from wazuh_mcp.validators import validate_ar_command
+    # M3 hardening: default is now firewall-drop only.
     assert validate_ar_command("firewall-drop") is None
-    assert validate_ar_command("restart-wazuh") is None
+    # restart-wazuh is no longer in the default set (see M3).
+    err_restart = validate_ar_command("restart-wazuh")
+    assert err_restart and "not allowed" in err_restart
     err = validate_ar_command("rm -rf /")
     assert err and "not allowed" in err
 

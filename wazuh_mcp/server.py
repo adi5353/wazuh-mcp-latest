@@ -79,6 +79,27 @@ except ImportError:
     log = logging.getLogger("wazuh-mcp")  # type: ignore[assignment]
     _structlog_available = False
 
+# ── H1: /health auth check — pure function, module-level for testability ──────
+
+import hmac as _hmac_module  # noqa: E402 — placed here to keep close to usage
+
+
+async def _health_caller_is_authenticated_fn(request: Any, api_key: str) -> bool:
+    """Return True when *request* carries the valid API-key bearer token.
+
+    Pure function (no globals) so tests can call it directly.
+    Returns False if *api_key* is empty — no key configured means no
+    authenticated health callers (prevents timing-oracle on an empty secret).
+    """
+    if not api_key:
+        return False
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if not token:
+        return False
+    return _hmac_module.compare_digest(token.encode(), api_key.encode())
+
+
 # ── Global config ─────────────────────────────────────────────────────────────
 cfg = Config.from_env()
 wz = WazuhClient(cfg)
@@ -190,8 +211,25 @@ from . import tools as _tools_pkg  # noqa: E402
 
 _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
+_TOOL_MODULE_ALLOWLIST = frozenset({
+    "active_response", "agent_health", "agent_upgrades", "agents", "alerts",
+    "archive", "audit_mgmt", "autonomous_soc", "azure_devops", "baseline",
+    "cdb", "cluster", "compliance", "correlation", "credential_mgmt",
+    "cve_watchlist", "explain_alert", "export", "fim", "fleet", "geo_intel",
+    "health_check", "incidents", "index_mgmt", "integrations", "manager_audit",
+    "manager_config", "metrics", "mitre", "network_topology", "notifications",
+    "onboarding", "pagerduty", "playbooks", "prompt_advisor", "quick_wins",
+    "reporting", "roi", "rootcheck", "rule_wizard", "rules", "sca",
+    "scheduler", "servicenow", "suppression", "syslog_config", "threat_feeds",
+    "threat_hunting", "threat_intel", "ueba", "vulnerabilities", "workspaces",
+    "rule_wizard_generate", "rule_wizard_validate", "rule_wizard_deploy",
+})
+
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
+        continue
+    if _modname not in _TOOL_MODULE_ALLOWLIST:
+        log.warning("Skipping unrecognised tool module %r — not in allowlist", _modname)
         continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
@@ -302,6 +340,14 @@ async def set_session_role_tool(api_key: str) -> dict:
     argument — otherwise any caller could self-elevate. Use stdio for the
     single-local-user set-role workflow.
     """
+    if not os.getenv("WAZUH_MCP_KEY_MAP", "").strip():
+        return {
+            "error": (
+                "set_session_role requires WAZUH_MCP_KEY_MAP to be configured. "
+                "Without a key map, role is fixed to WAZUH_MCP_USER_ROLE env var "
+                "and cannot be changed via tool call."
+            )
+        }
     if os.getenv("WAZUH_MCP_TRANSPORT", "stdio") == "http":
         return {
             "error": (
@@ -1080,6 +1126,13 @@ def main() -> None:
                      "Add prometheus-client to requirements.txt to enable.")
 
         async def metrics_endpoint(request):  # type: ignore[no-untyped-def]
+            _metrics_api_key = os.getenv("WAZUH_MCP_API_KEY", "").strip()
+            if not await _health_caller_is_authenticated_fn(request, _metrics_api_key):
+                return Response(
+                    '{"error": "Authentication required"}',
+                    media_type="application/json",
+                    status_code=401,
+                )
             if not _metrics_enabled:
                 return Response(
                     "# prometheus_client not installed\n",
@@ -1091,14 +1144,32 @@ def main() -> None:
         # ── OpenAPI spec endpoint ──────────────────────────────────────────
         async def openapi_endpoint(request):  # type: ignore[no-untyped-def]
             """Auto-generated OpenAPI 3.1 spec from registered MCP tool schemas."""
+            # L3: mcp._tools is a private SDK attribute that may change between
+            # releases.  Use it when available; fall back to the public tool-list
+            # API or the locally-maintained _TOOL_REGISTRY as a last resort.
             tools_list = []
-            for tool in mcp._tools.values():  # type: ignore[attr-defined]
-                schema = getattr(tool, "parameters", {}) or {}
-                tools_list.append({
-                    "name": tool.name,
-                    "description": (tool.description or "")[:300],
-                    "inputSchema": schema,
-                })
+            try:
+                # Preferred: public API (MCP SDK >= 1.2)
+                tool_iter = mcp.get_tools() if callable(getattr(mcp, "get_tools", None)) else None
+                if tool_iter is None:
+                    # Fall back to private attr (MCP SDK < 1.2) under try/except
+                    _raw = mcp._tools  # type: ignore[attr-defined]
+                    tool_iter = _raw.values()
+                for tool in tool_iter:
+                    schema = getattr(tool, "parameters", None) or getattr(tool, "inputSchema", {}) or {}
+                    tools_list.append({
+                        "name": getattr(tool, "name", str(tool)),
+                        "description": (getattr(tool, "description", None) or "")[:300],
+                        "inputSchema": schema,
+                    })
+            except AttributeError:
+                # Private SDK attribute unavailable — use local registry as fallback.
+                for tool_name in _TOOL_REGISTRY:
+                    tools_list.append({
+                        "name": tool_name,
+                        "description": "",
+                        "inputSchema": {},
+                    })
             spec = {
                 "openapi": "3.1.0",
                 "info": {
@@ -1147,6 +1218,14 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
         # ── /health endpoint (deep component health) ───────────────────────
+        # H1: unauthenticated callers receive ONLY {status, uptime_seconds}.
+        # Authenticated callers (valid WAZUH_MCP_API_KEY bearer) get full detail.
+        _health_api_key = os.getenv("WAZUH_MCP_API_KEY", "").strip()
+
+        async def _health_caller_is_authenticated(request) -> bool:  # type: ignore[no-untyped-def]
+            """Delegate to module-level pure function (testable)."""
+            return await _health_caller_is_authenticated_fn(request, _health_api_key)
+
         async def health_check(request):  # type: ignore[no-untyped-def]
             checks: dict = {}
             latencies: dict = {}
@@ -1215,18 +1294,21 @@ def main() -> None:
                 for k, v in checks.items()
                 if k in ("manager_api", "indexer", "audit_log")
             )
-            return JSONResponse(
-                {
-                    "status": "healthy" if all_ok else "degraded",
-                    "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+            # H1: restrict detailed health intel to authenticated callers only.
+            status_str = "healthy" if all_ok else "degraded"
+            public_body = {
+                "status": status_str,
+                "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+            }
+            if await _health_caller_is_authenticated(request):
+                full_body = {
+                    **public_body,
                     "manager_version": mgr_version,
                     "checks": checks,
                     "latency_ms": latencies,
-                    # Operational intelligence omitted from public /health to prevent
-                    # unauthenticated reconnaissance (Gap 8 fix).
-                },
-                status_code=200 if all_ok else 503,
-            )
+                }
+                return JSONResponse(full_body, status_code=200 if all_ok else 503)
+            return JSONResponse(public_body, status_code=200 if all_ok else 503)
 
         # ── Audit middleware — pure ASGI (no BaseHTTPMiddleware) ─────────────
         # BaseHTTPMiddleware consumes the request body stream, preventing the
@@ -1349,6 +1431,10 @@ def main() -> None:
                     # Constant-time comparison prevents timing-attack brute force
                     if not _hmac.compare_digest(token, self._key):
                         return Response("Unauthorized", status_code=401)
+                    # M2: bind token as identity key so cross-request injection
+                    # counter accumulates per authenticated caller across requests.
+                    from .identity import set_identity_key as _set_id_key
+                    _set_id_key(token)
                 return await call_next(request)
 
         # ── Origin validation middleware (CSRF protection) ─────────────────
@@ -1478,11 +1564,19 @@ def main() -> None:
             lifespan=_lifespan,
         )
 
-        # Middleware stack ordering (outermost runs FIRST on request, LAST on response):
-        # 1. APIKeyMiddleware       — reject unauthenticated requests
-        # 2. OriginValidationMiddleware — CSRF: block disallowed browser origins
-        # 3. RateLimitMiddleware    — throttle authenticated requests
-        # 4. AuditMiddleware        — log only authenticated, rate-allowed requests
+        # Middleware stack — each app = Foo(app) wraps an extra OUTER layer.
+        # The LAST assignment is the outermost layer and therefore runs FIRST on
+        # each incoming request.  Wrapping order (innermost → outermost):
+        #
+        #   innermost (runs last)
+        #   4. AuditMiddleware          — log after auth + rate-limit checks pass
+        #   3. RateLimitMiddleware      — throttle authenticated requests
+        #   2. OriginValidationMiddleware — CSRF / origin check
+        #   1. APIKeyMiddleware         — reject unauthenticated requests        ← outermost (runs first)
+        #   0. IPFilterMiddleware       — block banned IPs (if configured)       ← outermost when enabled
+        #  -1. SecurityHeadersMiddleware — inject HSTS / CSP response headers    ← very outermost
+        #
+        # L4 fix: comment now reflects actual ASGI wrap/execution order above.
 
         app = AuditMiddleware(app)  # type: ignore[assignment]
         log.info("Audit logging enabled → %s", os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))

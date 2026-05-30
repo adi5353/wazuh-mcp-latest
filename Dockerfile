@@ -7,10 +7,10 @@ RUN groupadd --gid 1001 wazuhmcp \
 WORKDIR /app
 
 # ── Dependencies (cached layer — only reinstall when pyproject.toml changes) ──
-COPY pyproject.toml .
+COPY pyproject.toml requirements.lock ./
 # Stub wazuh_mcp package so pip can resolve the dynamic version attr at install time
 COPY wazuh_mcp/__init__.py ./wazuh_mcp/__init__.py
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -r requirements.lock && pip install --no-cache-dir --no-deps -e .
 
 # ── Application source (separate layer — changes here don't bust dep cache) ───
 COPY wazuh_mcp/ ./wazuh_mcp/

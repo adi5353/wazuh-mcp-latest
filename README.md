@@ -2,7 +2,8 @@
 
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
-**239 tools** across 52 domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
+<!-- auto-generated: run scripts/generate_tool_table.py to update -->
+**239 tools** across 54 domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
 [![CI](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml/badge.svg)](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
@@ -593,7 +594,7 @@ Tools requiring elevated roles return a descriptive error rather than failing si
 
 > Counts are generated, not hand-maintained. Run
 > `python scripts/generate_tool_table.py` to regenerate `docs/TOOL_TABLE.md` and
-> the headline totals (**239 tools across 52 modules**), or
+> the headline totals (**239 tools across 54 modules**), or
 > `python scripts/generate_tool_table.py --check` in CI to fail the build if the
 > README count drifts.
 
