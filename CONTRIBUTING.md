@@ -134,9 +134,14 @@ make docker      # build + start with docker compose
 - [ ] Tool has a `require_role()` guard
 - [ ] Tool has a docstring (one-line summary + Args section)
 - [ ] Test added or extended — `make test` passes
+- [ ] Tests assert real behaviour (outputs/side-effects), **not** just `isinstance(x, dict)`. Breadth-only checks against mocks belong under the `smoke` marker and must not count toward coverage.
 - [ ] `make lint` passes without new errors
 - [ ] `make security` passes (no new bandit findings above medium)
 - [ ] Entry added to `CHANGELOG.md` under `[Unreleased]`
+
+For anything headed toward release, work against the
+[Production Readiness checklist](docs/production-readiness.md) — the project's
+definition of "done". Do not lower a quality gate to make CI pass; gates ratchet up.
 
 ---
 
