@@ -201,58 +201,47 @@ _ctx = ToolContext(
 )
 
 # ── Auto-discover and register all tool modules ───────────────────────────────
-# Each module in wazuh_mcp/tools/ exposes register(ctx: ToolContext).
-# Modules are registered in alphabetical order except that `notifications`
-# is deferred to the end so compliance and reporting can write their callables
-# into ctx.shared first.
+# Every module in wazuh_mcp/tools/ that exposes a ``register(ctx: ToolContext)``
+# callable is auto-discovered — there is NO hardcoded allowlist to maintain.
+# Dropping a new ``*.py`` file with a ``register`` function into tools/ is all it
+# takes to wire up a tool (Open-Closed Principle). Modules without a ``register``
+# function are simply support/helper modules and are ignored silently.
+#
+# Modules are registered in alphabetical order except that `notifications` is
+# deferred to the end so compliance and reporting can write their callables into
+# ctx.shared first.
 import importlib  # noqa: E402
 import pkgutil    # noqa: E402
 from . import tools as _tools_pkg  # noqa: E402
 
 _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
-_TOOL_MODULE_ALLOWLIST = frozenset({
-    "active_response", "agent_health", "agent_upgrades", "agents", "alerts",
-    "archive", "audit_mgmt", "autonomous_soc", "azure_devops", "baseline",
-    "cdb", "cluster", "compliance", "correlation", "credential_mgmt",
-    "cve_watchlist", "explain_alert", "export", "fim", "fleet", "geo_intel",
-    "health_check", "incidents", "index_mgmt", "integrations", "manager_audit",
-    "manager_config", "metrics", "mitre", "network_topology", "notifications",
-    "onboarding", "pagerduty", "playbooks", "prompt_advisor", "quick_wins",
-    "reporting", "roi", "rootcheck", "rule_wizard", "rules", "sca",
-    "scheduler", "servicenow", "suppression", "syslog_config", "threat_feeds",
-    "threat_hunting", "threat_intel", "ueba", "vulnerabilities", "workspaces",
-    "rule_wizard_generate", "rule_wizard_validate", "rule_wizard_deploy",
-    "routing",
-})
-
 from . import tool_contexts as _tool_contexts  # noqa: E402
 
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
         continue
-    if _modname not in _TOOL_MODULE_ALLOWLIST:
-        log.warning("Skipping unrecognised tool module %r — not in allowlist", _modname)
-        continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
-    if hasattr(_mod, "register"):
-        # Dynamic role-based tool registration: skip modules the session role
-        # cannot access. This keeps LLM context lean — a VIEWER session sees
-        # ~60 tools instead of 130+, reducing hallucinated tool selection.
-        _required = getattr(_mod, "REQUIRED_ROLE", ROLE.VIEWER)
-        if _current_role() < _required:
-            log.info(
-                "Skipping tool module '%s' (requires %s, current session role is lower)",
-                _modname, _ROLE_NAMES.get(_required, str(_required)),
-            )
-            continue
-        try:
-            _tool_contexts.set_registering_module(_modname)
-            _mod.register(_ctx)
-        except Exception as _e:
-            log.error("Failed to register tool module %s: %s", _modname, _e)
-        finally:
-            _tool_contexts.set_registering_module(None)
+    if not hasattr(_mod, "register"):
+        # Not a tool module — a shared helper imported by others. Skip quietly.
+        continue
+    # Dynamic role-based tool registration: skip modules the session role
+    # cannot access. This keeps LLM context lean — a VIEWER session sees
+    # ~60 tools instead of 130+, reducing hallucinated tool selection.
+    _required = getattr(_mod, "REQUIRED_ROLE", ROLE.VIEWER)
+    if _current_role() < _required:
+        log.info(
+            "Skipping tool module '%s' (requires %s, current session role is lower)",
+            _modname, _ROLE_NAMES.get(_required, str(_required)),
+        )
+        continue
+    try:
+        _tool_contexts.set_registering_module(_modname)
+        _mod.register(_ctx)
+    except Exception as _e:
+        log.error("Failed to register tool module %s: %s", _modname, _e)
+    finally:
+        _tool_contexts.set_registering_module(None)
 
 # Register deferred modules (those that depend on ctx.shared populated above)
 for _modname in _DEFERRED:
@@ -555,26 +544,106 @@ def _is_loopback_host(host: str) -> bool:
 def _check_bind_security(transport: str, host: str, api_key: str) -> None:
     """Secure-by-default bind guard (Issue 1).
 
-    Refuse to expose the server on a non-loopback address without authentication
-    unless WAZUH_MCP_ALLOW_INSECURE_BIND=true is explicitly set (logs a warning).
-    Raises SystemExit(2) when refusing.
+    Binding to a non-loopback interface over HTTP *always* requires an API key —
+    there is no escape hatch. Raises SystemExit(2) when refusing.
+
+    The former ``WAZUH_MCP_ALLOW_INSECURE_BIND`` opt-out has been removed: it let
+    operators expose the Wazuh API completely unauthenticated to the network. If
+    the deprecated variable is still set we log a loud warning so the operator
+    knows it no longer has any effect.
     """
+    if os.getenv("WAZUH_MCP_ALLOW_INSECURE_BIND", "").strip():
+        log.warning(
+            "WAZUH_MCP_ALLOW_INSECURE_BIND is DEPRECATED and IGNORED. Binding to a "
+            "non-loopback address now always requires WAZUH_MCP_API_KEY — there is "
+            "no insecure override. Remove this variable from your configuration."
+        )
+
     if transport != "http" or _is_loopback_host(host) or api_key:
         return
-    allow_insecure = os.getenv("WAZUH_MCP_ALLOW_INSECURE_BIND", "false").strip().lower() == "true"
-    if not allow_insecure:
-        log.error(
-            "Refusing to start: WAZUH_MCP_HOST=%s is non-loopback but no "
-            "WAZUH_MCP_API_KEY is set. Either set WAZUH_MCP_API_KEY, bind to "
-            "127.0.0.1, or (NOT recommended) set WAZUH_MCP_ALLOW_INSECURE_BIND=true.",
-            host,
-        )
-        raise SystemExit(2)
-    log.warning(
-        "INSECURE BIND: serving on non-loopback host %s with NO API key "
-        "because WAZUH_MCP_ALLOW_INSECURE_BIND=true. Anyone who can reach "
-        "this port has full access. Set WAZUH_MCP_API_KEY immediately.",
+
+    log.error(
+        "Refusing to start: WAZUH_MCP_HOST=%s is non-loopback but no "
+        "WAZUH_MCP_API_KEY is set. Binding to a network-reachable interface "
+        "without an API key would expose the Wazuh API completely "
+        "unauthenticated. Either set WAZUH_MCP_API_KEY or bind to 127.0.0.1.",
         host,
+    )
+    raise SystemExit(2)
+
+
+# Environment variables that strongly suggest a *remote cloud* LLM is consuming
+# this server's output (Claude/OpenAI/Gemini/etc.). If any are present and PII
+# scrubbing is off, raw SIEM logs (SSNs, CC numbers, emails) could be shipped to
+# a third-party endpoint — a GDPR/HIPAA/SOC2 risk worth a loud boot warning.
+_CLOUD_LLM_ENV_SIGNALS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "COHERE_API_KEY",
+    "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
+    "PERPLEXITY_API_KEY",
+)
+
+
+def _cloud_llm_suspected() -> bool:
+    """Heuristic: is a remote cloud LLM likely consuming this server's output?
+
+    Suppressed when the operator declares a local model via
+    ``WAZUH_MCP_LOCAL_LLM=true`` (e.g. an on-prem Ollama deployment). Otherwise
+    a remote HTTP transport or any well-known cloud-provider API key counts as a
+    signal.
+    """
+    if os.getenv("WAZUH_MCP_LOCAL_LLM", "false").strip().lower() == "true":
+        return False
+    if os.getenv("WAZUH_MCP_TRANSPORT", "stdio").strip().lower() == "http":
+        return True
+    return any(os.getenv(name, "").strip() for name in _CLOUD_LLM_ENV_SIGNALS)
+
+
+def _check_pii_scrub_config() -> None:
+    """Loud boot warning when PII scrubbing is disabled and a cloud LLM is likely.
+
+    PII scrubbing (WAZUH_MCP_SCRUB_PII) is opt-in because analysts legitimately
+    need real IPs/emails. But pushing raw logs containing SSNs, credit-card
+    numbers, or sensitive emails to a public LLM endpoint can violate GDPR,
+    HIPAA, or SOC2. Operators who have weighed this can silence the warning by
+    explicitly acknowledging the opt-out via WAZUH_MCP_PII_SCRUB_ACK=true.
+    """
+    from .audit import _scrub_pii_enabled
+
+    if _scrub_pii_enabled() or not _cloud_llm_suspected():
+        return
+    if os.getenv("WAZUH_MCP_PII_SCRUB_ACK", "false").strip().lower() == "true":
+        log.warning(
+            "PII scrubbing is DISABLED (WAZUH_MCP_SCRUB_PII=false) and a remote "
+            "cloud LLM is suspected. Opt-out acknowledged via "
+            "WAZUH_MCP_PII_SCRUB_ACK=true — raw SIEM data (incl. SSNs, card "
+            "numbers, emails) may be sent to a third-party LLM endpoint."
+        )
+        return
+
+    log.error(
+        "\n"
+        "================================================================================\n"
+        "  ⚠  DATA COMPLIANCE WARNING: PII SCRUBBING IS DISABLED  ⚠\n"
+        "================================================================================\n"
+        "  WAZUH_MCP_SCRUB_PII=false and a remote cloud LLM appears to be in use.\n"
+        "  Raw SIEM logs — which can contain SSNs, credit-card numbers, and sensitive\n"
+        "  emails — may be transmitted to a third-party LLM endpoint (e.g. Anthropic,\n"
+        "  OpenAI, Google). This can violate GDPR, HIPAA, and SOC2 obligations.\n"
+        "\n"
+        "  To remediate, choose ONE:\n"
+        "    • Set WAZUH_MCP_SCRUB_PII=true to redact PII before it leaves this host.\n"
+        "    • Point the deployment at a local/on-prem model and set\n"
+        "      WAZUH_MCP_LOCAL_LLM=true.\n"
+        "    • If this exposure is intentional and approved, acknowledge it with\n"
+        "      WAZUH_MCP_PII_SCRUB_ACK=true to downgrade this to a warning.\n"
+        "================================================================================"
     )
 
 
@@ -611,6 +680,7 @@ def main() -> None:
     api_key = os.getenv("WAZUH_MCP_API_KEY", "")
 
     _check_bind_security(transport, host, api_key)
+    _check_pii_scrub_config()
 
     log.info(
         "Starting Wazuh MCP server — transport=%s host=%s port=%s writes=%s manager=%s indexer=%s",

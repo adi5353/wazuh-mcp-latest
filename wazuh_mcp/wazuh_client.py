@@ -17,7 +17,8 @@ import os
 import random
 import time
 from typing import Any, Optional
-from urllib.parse import unquote
+import posixpath
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -71,37 +72,54 @@ _ALLOWED_UPLOAD_PREFIXES = ("/rules/files/", "/decoders/files/", "/lists/files/"
 def _validate_manager_file_path(path: str) -> None:
     """Reject any upload path outside the Manager rules/decoders file API.
 
-    Guards against path traversal (``..``) and arbitrary-endpoint writes. The
-    query string (``?overwrite=true``) is ignored for prefix matching.
+    Rather than hand-rolling normalisation (notoriously easy to bypass with
+    esoteric encodings), this relies on the standard library:
 
-    Traversal is checked *after* repeatedly URL-decoding the route, so encoded
-    (``%2e%2e``) and double-encoded (``%252e``) forms are caught. Backslashes
-    are treated as separators (Windows-style traversal) and absolute/scheme-
-    relative paths (``//host``) are rejected.
+    1. Strip the query string (``?overwrite=true``) — only the route is checked.
+    2. Repeatedly percent-decode with :func:`urllib.parse.unquote` until stable,
+       so encoded (``%2e%2e``) and double-encoded (``%252e``) traversal is caught.
+    3. Normalise backslashes to forward slashes (Windows-style separators).
+    4. Reject any URL carrying a scheme or network location (``http://evil/...``
+       or ``//evil/...``) via :func:`urllib.parse.urlsplit`.
+    5. Collapse ``.`` / ``..`` segments deterministically with
+       :func:`posixpath.normpath`.
+    6. Require the *resolved* path to strictly start with an allowed prefix. Any
+       traversal that escapes the API root collapses to a path that no longer
+       matches and is rejected.
     """
     if not isinstance(path, str) or not path:
         raise ValueError("upload path must be a non-empty string")
+
     route = path.split("?", 1)[0]
 
-    # Repeatedly percent-decode until stable to defeat multi-layer encoding,
-    # then normalise backslashes to forward slashes before the traversal check.
+    # Repeatedly percent-decode until stable to defeat multi-layer encoding.
     decoded = route
     for _ in range(5):
         nxt = unquote(decoded)
         if nxt == decoded:
             break
         decoded = nxt
-    decoded = decoded.replace("\\", "/")
 
-    if ".." in decoded or ".." in route:
-        raise ValueError(f"Refusing upload path containing '..': {path!r}")
-    # Reject scheme-relative / protocol-relative paths that could redirect the
-    # write to another host (e.g. ``//evil/rules/files/x``).
-    if decoded.startswith("//"):
-        raise ValueError(f"Refusing scheme-relative upload path: {path!r}")
-    if not decoded.startswith(_ALLOWED_UPLOAD_PREFIXES) or not route.startswith(
-        _ALLOWED_UPLOAD_PREFIXES
-    ):
+    # Treat backslashes as separators so Windows-style traversal collapses too.
+    normalized = decoded.replace("\\", "/")
+
+    # Reject scheme-relative / absolute-URL forms that could redirect the write
+    # to another host (e.g. ``//evil/rules/files/x`` or ``http://evil/...``).
+    split = urlsplit(normalized)
+    if split.scheme or split.netloc:
+        raise ValueError(f"Refusing non-relative upload path: {path!r}")
+
+    # posixpath.normpath collapses ".." / "." segments. A path that escapes the
+    # API root (e.g. ``/rules/files/../../etc/passwd`` -> ``/etc/passwd``) will
+    # no longer match an allowed prefix and is rejected below.
+    resolved = posixpath.normpath(normalized)
+
+    # Defence in depth: normpath preserves a leading "//" and surfaces escaping
+    # traversal as a leading "../" — reject either outright.
+    if resolved.startswith("//") or resolved.startswith("../") or resolved == "..":
+        raise ValueError(f"Refusing upload path that escapes the API root: {path!r}")
+
+    if not resolved.startswith(_ALLOWED_UPLOAD_PREFIXES):
         raise ValueError(
             f"Refusing upload to disallowed path {path!r}. "
             f"Allowed prefixes: {_ALLOWED_UPLOAD_PREFIXES}"

@@ -1,5 +1,5 @@
 # ── Stage 1: builder — install dependencies into an isolated venv ─────────────
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ COPY wazuh_mcp/ ./wazuh_mcp/
 RUN python -m compileall -q wazuh_mcp
 
 # ── Stage 2: runtime — only the venv + source, dropped to a non-root user ─────
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 # Non-root user
 RUN groupadd --gid 1001 wazuhmcp \

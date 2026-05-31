@@ -35,10 +35,15 @@ def test_issue01_nonloopback_without_key_refuses(monkeypatch):
     _check_bind_security("stdio", "0.0.0.0", "")
 
 
-def test_issue01_insecure_override_allows(monkeypatch):
+def test_issue01_insecure_override_is_removed(monkeypatch):
+    """The WAZUH_MCP_ALLOW_INSECURE_BIND escape hatch is removed: even when the
+    deprecated variable is set, a non-loopback bind with no API key must refuse."""
     from wazuh_mcp.server import _check_bind_security
     monkeypatch.setenv("WAZUH_MCP_ALLOW_INSECURE_BIND", "true")
-    _check_bind_security("http", "0.0.0.0", "")  # warns, does not raise
+    with pytest.raises(SystemExit):
+        _check_bind_security("http", "0.0.0.0", "")
+    # A key still satisfies the guard regardless of the deprecated variable.
+    _check_bind_security("http", "0.0.0.0", "secret-key")
 
 
 # ── Issue 2: DNS-rebinding protection enabled ─────────────────────────────────

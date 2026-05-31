@@ -51,7 +51,7 @@ addopts = [
     "--cov=wazuh_mcp",
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
-    "--cov-fail-under=41",   # ratchet only upward as tool-module tests are added; never lower
+    "--cov-fail-under=80",   # enterprise gate — covers input sanitization, RBAC, and client/comms layers
 ]
 markers = [
     "requires_indexer: marks tests that need a live Wazuh Indexer (exclude from default CI run with --ignore=tests/test_roi_autonomous.py)",
