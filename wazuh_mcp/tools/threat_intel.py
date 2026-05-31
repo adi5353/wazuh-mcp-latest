@@ -277,8 +277,10 @@ def register(ctx: ToolContext) -> None:
         Requires VIRUSTOTAL_API_KEY in .env.
         """
         import re
-        # Basic domain validation — no URLs, just hostname
-        domain = domain.strip().lstrip("https://").lstrip("http://").split("/")[0]
+        # Basic domain validation — strip any scheme + path, keep the hostname.
+        # NB: use a prefix regex, not str.lstrip("https://"), which strips a
+        # *character set* and would mangle hosts like "stackoverflow.com".
+        domain = re.sub(r"^https?://", "", domain.strip(), flags=re.IGNORECASE).split("/")[0]
         if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$', domain):
             return {"error": f"'{domain}' does not look like a valid domain name."}
 

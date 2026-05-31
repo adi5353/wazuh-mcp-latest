@@ -109,8 +109,10 @@ idx = WazuhIndexer(cfg)
 # its own tenant client without affecting other concurrent sessions.
 _ctx_wz: contextvars.ContextVar[WazuhClient] = contextvars.ContextVar("_ctx_wz")
 _ctx_idx: contextvars.ContextVar[WazuhIndexer] = contextvars.ContextVar("_ctx_idx")
+# No mutable default: a shared default dict would be visible across every
+# session that never calls .set(). Readers pass their own fallback: .get({}).
 _ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
-    "_ctx_active_tenant", default={}
+    "_ctx_active_tenant"
 )
 
 
@@ -850,6 +852,9 @@ def main() -> None:
 
         # ── Gap 10: Graceful SIGTERM shutdown ──────────────────────────────
         _uvicorn_server: list = []  # populated after server starts
+        # Hold strong references to shutdown tasks: create_task() only keeps a
+        # weak ref, so without this the GC can cancel cleanup mid-flight.
+        _shutdown_tasks: set = set()
 
         def _sigterm_handler(signum, frame):  # type: ignore[no-untyped-def]
             log.info(
@@ -863,9 +868,14 @@ def main() -> None:
             from .tools.threat_intel import close_shared_ti_clients
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(_wz_proxy._client.aclose())
-                loop.create_task(_idx_proxy._client.aclose())
-                loop.create_task(close_shared_ti_clients())
+                for _coro in (
+                    _wz_proxy._client.aclose(),
+                    _idx_proxy._client.aclose(),
+                    close_shared_ti_clients(),
+                ):
+                    _task = loop.create_task(_coro)
+                    _shutdown_tasks.add(_task)
+                    _task.add_done_callback(_shutdown_tasks.discard)
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
