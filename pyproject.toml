@@ -51,11 +51,16 @@ addopts = [
     "--cov=wazuh_mcp",
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
-    "--cov-fail-under=80",   # enterprise gate — covers input sanitization, RBAC, and client/comms layers
+    # Honest baseline. The gate is measured ONLY over behaviour-asserting tests:
+    # `-m "not smoke"` excludes the coverage-padding suites (see `smoke` marker).
+    # This number reflects real verified surface — ratchet it UP over time, never down.
+    "--cov-fail-under=48",
+    "-m", "not smoke",
 ]
 markers = [
     "requires_indexer: marks tests that need a live Wazuh Indexer (exclude from default CI run with --ignore=tests/test_roi_autonomous.py)",
     "integration: marks integration tests that need live Wazuh infrastructure",
+    "smoke: breadth tests against mocked clients; catch crashes/imports but assert little. Excluded from the coverage gate. Run explicitly with `pytest -m smoke`.",
 ]
 
 [tool.coverage.run]

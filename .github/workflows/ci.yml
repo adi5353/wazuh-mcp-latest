@@ -57,15 +57,30 @@ jobs:
           cache: pip
       - name: Install project + dev deps
         run: pip install -e ".[dev]"
-      - name: Run tests with coverage
+      - name: Run behaviour tests with coverage (honest gate)
+        # Coverage gate is measured over behaviour-asserting tests only.
+        # `-m "not smoke"` (from pyproject addopts) excludes the coverage-padding
+        # suites so the gate reflects real verified surface. Ratchet --cov-fail-under
+        # UP as honest coverage improves; never lower it to make CI pass.
         run: |
           pytest \
             --cov=wazuh_mcp \
             --cov-report=term-missing \
             --cov-report=xml \
-            --cov-fail-under=80 \
             -q \
             --ignore=tests/test_roi_autonomous.py
+        env:
+          WAZUH_HOST: http://localhost:55000
+          WAZUH_USER: admin
+          WAZUH_PASS: admin
+          WAZUH_INDEXER_HOST: http://localhost:9200
+          WAZUH_INDEXER_PASS: admin
+          WAZUH_WORKSPACE_DIR: ${{ runner.temp }}/workspaces
+          WAZUH_AUDIT_LOG: ${{ runner.temp }}/audit.jsonl
+      - name: Run smoke tests (crash/import guard, not gated)
+        # The quarantined breadth suites still run so a broad breakage trips CI,
+        # but they do NOT contribute to the coverage gate.
+        run: pytest -m smoke -q --no-cov --ignore=tests/test_roi_autonomous.py
         env:
           WAZUH_HOST: http://localhost:55000
           WAZUH_USER: admin
