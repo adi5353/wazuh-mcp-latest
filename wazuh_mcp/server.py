@@ -216,6 +216,8 @@ from . import tools as _tools_pkg  # noqa: E402
 
 _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
+from . import tool_contexts as _tool_contexts  # noqa: E402
+
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
         continue
@@ -234,18 +236,24 @@ for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
         )
         continue
     try:
+        _tool_contexts.set_registering_module(_modname)
         _mod.register(_ctx)
     except Exception as _e:
         log.error("Failed to register tool module %s: %s", _modname, _e)
+    finally:
+        _tool_contexts.set_registering_module(None)
 
 # Register deferred modules (those that depend on ctx.shared populated above)
 for _modname in _DEFERRED:
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
         try:
+            _tool_contexts.set_registering_module(_modname)
             _mod.register(_ctx)
         except Exception as _e:
             log.error("Failed to register deferred tool module %s: %s", _modname, _e)
+        finally:
+            _tool_contexts.set_registering_module(None)
 
 # ── MCP Resources ─────────────────────────────────────────────────────────────
 from . import resources as _resources_module  # noqa: E402

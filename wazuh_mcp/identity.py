@@ -64,6 +64,15 @@ def set_identity_key(key: str) -> None:
     _ctx_identity_key.set(hashlib.sha256(key.encode()).hexdigest()[:16])
 
 
+def get_identity_key() -> str:
+    """Return the current task's identity key (hashed API key), or 'anonymous'.
+
+    Used to key per-caller state such as the tool-failure circuit breaker so one
+    caller's retry loop cannot trip another caller's tools.
+    """
+    return _ctx_identity_key.get() or "anonymous"
+
+
 def get_persistent_injection_count(identity: str) -> int:
     """Return the cross-request injection count for *identity*."""
     with _persistent_injection_lock:
