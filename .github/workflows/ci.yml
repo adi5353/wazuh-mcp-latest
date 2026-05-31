@@ -154,32 +154,62 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
 
-  # ── 5. Smoke tests against containerised Wazuh (on PR merge only) ─────────
+  # ── 5. Live integration tests against a real Wazuh stack (push to main only) ─
+  # Stands up the canonical wazuh/wazuh-docker single-node stack (manager +
+  # indexer) and runs the `-m integration` contract tests against it. Runs on
+  # push only to keep PR CI fast; a real backend is heavy to provision.
   integration:
-    name: Integration smoke tests
+    name: Integration (live Wazuh)
     runs-on: ubuntu-latest
-    # Only run on push to main/master to keep PR CI fast
     if: github.event_name == 'push'
-    services:
-      wazuh-mock:
-        image: python:3.11-slim
-        options: --health-cmd "python -c 'import sys; sys.exit(0)'" --health-interval 5s
+    timeout-minutes: 30
+    env:
+      # Pinned upstream stack + its documented single-node default credentials.
+      WAZUH_DOCKER_REF: v4.9.2
+      WAZUH_HOST: https://localhost:55000
+      WAZUH_USER: wazuh-wui
+      WAZUH_PASS: MyS3cr37P450r.*-
+      WAZUH_INDEXER_HOST: https://localhost:9200
+      WAZUH_INDEXER_USER: admin
+      WAZUH_INDEXER_PASS: SecretPassword
+      WAZUH_VERIFY_SSL: "false"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install project
+      - name: Install project + dev deps
         run: pip install -e ".[dev]"
-      - name: Run integration-tagged tests (skipped if none exist)
+      - name: Raise vm.max_map_count for the Indexer (OpenSearch)
+        run: sudo sysctl -w vm.max_map_count=262144
+      - name: Check out wazuh-docker single-node stack
+        run: git clone --depth 1 -b "$WAZUH_DOCKER_REF" https://github.com/wazuh/wazuh-docker.git
+      - name: Generate Indexer certificates
+        working-directory: wazuh-docker/single-node
+        run: docker compose -f generate-indexer-certs.yml run --rm generator
+      - name: Start Wazuh manager + indexer
+        working-directory: wazuh-docker/single-node
+        run: docker compose up -d wazuh.manager wazuh.indexer
+      - name: Wait for Manager API to accept auth
         run: |
-          pytest -m integration -q --no-header 2>/dev/null \
-            || echo "No integration tests found — add @pytest.mark.integration to smoke tests"
-        env:
-          WAZUH_HOST: http://localhost:55000
-          WAZUH_USER: admin
-          WAZUH_PASS: admin
-          WAZUH_INDEXER_HOST: http://localhost:9200
-          WAZUH_INDEXER_PASS: admin
-          WAZUH_AUDIT_LOG: ${{ runner.temp }}/audit.jsonl
+          for i in $(seq 1 60); do
+            if curl -sk -u "$WAZUH_USER:$WAZUH_PASS" \
+                 "$WAZUH_HOST/security/user/authenticate" | grep -q token; then
+              echo "Wazuh Manager API is ready"; exit 0
+            fi
+            echo "waiting for Manager API ($i/60)…"; sleep 10
+          done
+          echo "::error::Manager API never became ready"
+          docker compose -f wazuh-docker/single-node/docker-compose.yml logs --tail=120 || true
+          exit 1
+      - name: Run live integration tests
+        run: pytest -m integration --no-cov -v
+      - name: Dump stack logs on failure
+        if: failure()
+        working-directory: wazuh-docker/single-node
+        run: docker compose logs --tail=200 || true
+      - name: Tear down stack
+        if: always()
+        working-directory: wazuh-docker/single-node
+        run: docker compose down -v || true

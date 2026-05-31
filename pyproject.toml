@@ -55,7 +55,7 @@ addopts = [
     # `-m "not smoke"` excludes the coverage-padding suites (see `smoke` marker).
     # This number reflects real verified surface — ratchet it UP over time, never down.
     "--cov-fail-under=48",
-    "-m", "not smoke and not perf",
+    "-m", "not smoke and not perf and not integration",
 ]
 markers = [
     "requires_indexer: marks tests that need a live Wazuh Indexer (exclude from default CI run with --ignore=tests/test_roi_autonomous.py)",
