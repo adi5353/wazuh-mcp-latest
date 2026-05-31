@@ -3,6 +3,13 @@ body-size and security-header middleware, the alert pre-computer, the triage
 engine, MITRE enrichment, payload helpers, and the TTL cache."""
 from __future__ import annotations
 
+import pytest
+
+# Quarantined from the coverage gate: these exercise code paths against mocked
+# clients to catch crashes/imports, but assert little real behaviour. Run via
+# `pytest -m smoke`; excluded from the gated run by `-m "not smoke"` (pyproject).
+pytestmark = pytest.mark.smoke
+
 import asyncio
 
 import pytest

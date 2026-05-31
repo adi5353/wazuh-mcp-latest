@@ -1,6 +1,13 @@
 """Additional tests to push coverage above the 40% CI gate."""
 from __future__ import annotations
 
+import pytest
+
+# Quarantined from the coverage gate: these exercise code paths against mocked
+# clients to catch crashes/imports, but assert little real behaviour. Run via
+# `pytest -m smoke`; excluded from the gated run by `-m "not smoke"` (pyproject).
+pytestmark = pytest.mark.smoke
+
 import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
