@@ -22,7 +22,9 @@ jobs:
       - name: ruff check
         run: ruff check wazuh_mcp
       - name: mypy
-        run: mypy wazuh_mcp --ignore-missing-imports --no-error-summary
+        # Config in pyproject ([tool.mypy]) enables check_untyped_defs so this
+        # actually checks function bodies instead of reporting a hollow "Success".
+        run: mypy wazuh_mcp
 
   # ── 2. Security scan ──────────────────────────────────────────────────────
   security:

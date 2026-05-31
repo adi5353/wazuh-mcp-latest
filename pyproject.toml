@@ -55,12 +55,13 @@ addopts = [
     # `-m "not smoke"` excludes the coverage-padding suites (see `smoke` marker).
     # This number reflects real verified surface — ratchet it UP over time, never down.
     "--cov-fail-under=48",
-    "-m", "not smoke",
+    "-m", "not smoke and not perf",
 ]
 markers = [
     "requires_indexer: marks tests that need a live Wazuh Indexer (exclude from default CI run with --ignore=tests/test_roi_autonomous.py)",
     "integration: marks integration tests that need live Wazuh infrastructure",
     "smoke: breadth tests against mocked clients; catch crashes/imports but assert little. Excluded from the coverage gate. Run explicitly with `pytest -m smoke`.",
+    "perf: wall-clock timing benchmarks; environment-dependent and non-gating. Run explicitly with `pytest -m perf`.",
 ]
 
 [tool.coverage.run]
@@ -100,6 +101,16 @@ skips = [
 ]
 severity = "medium"
 confidence = "medium"
+
+# ── mypy type checking ────────────────────────────────────────────────────────
+# `check_untyped_defs` gives the gate teeth: without it mypy skips the bodies of
+# unannotated functions and reports a hollow "Success" while checking almost
+# nothing. This is the honest baseline — ratchet stricter over time (e.g. enable
+# disallow_untyped_defs on the security spine: rbac/identity/input_sanitizer/audit).
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
 
 # ── Ruff linting ──────────────────────────────────────────────────────────────
 [tool.ruff]

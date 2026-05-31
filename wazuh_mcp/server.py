@@ -799,8 +799,10 @@ def main() -> None:
             # API or the locally-maintained _TOOL_REGISTRY as a last resort.
             tools_list = []
             try:
-                # Preferred: public API (MCP SDK >= 1.2)
-                tool_iter = mcp.get_tools() if callable(getattr(mcp, "get_tools", None)) else None
+                # Preferred: public API (MCP SDK >= 1.2). Access via getattr so the
+                # call type-checks across SDK versions that lack the method.
+                _get_tools = getattr(mcp, "get_tools", None)
+                tool_iter = _get_tools() if callable(_get_tools) else None
                 if tool_iter is None:
                     # Fall back to private attr (MCP SDK < 1.2) under try/except
                     _raw = mcp._tools  # type: ignore[attr-defined]
