@@ -63,7 +63,7 @@ jobs:
             --cov=wazuh_mcp \
             --cov-report=term-missing \
             --cov-report=xml \
-            --cov-fail-under=40 \
+            --cov-fail-under=41 \
             -q \
             --ignore=tests/test_roi_autonomous.py
         env:

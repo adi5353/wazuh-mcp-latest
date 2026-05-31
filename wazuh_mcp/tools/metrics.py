@@ -90,6 +90,13 @@ def register(ctx: ToolContext) -> None:
         except Exception:
             circuit_status = {"error": "circuit breaker unavailable"}
 
+        # Tool-failure breaker — open circuits from repeated identical failures
+        try:
+            from ..tool_failure_breaker import tool_failure_breaker
+            tool_failure_circuits = tool_failure_breaker.open_circuits()
+        except Exception:
+            tool_failure_circuits = []
+
         # Prometheus text format (for /metrics scraping)
         prom_lines = [
             f"# HELP wazuh_mcp_uptime_seconds MCP server uptime",
@@ -111,6 +118,7 @@ def register(ctx: ToolContext) -> None:
             "calls_per_hour":  round(total_calls / uptime_h, 1) if uptime_h > 0 else 0,
             "tool_stats":      tool_stats,
             "circuit_breakers": circuit_status,
+            "tool_failure_circuits": tool_failure_circuits,
             "prometheus_text": "\n".join(prom_lines),
             "note": "prometheus_text can be scraped directly — also available at GET /metrics",
         }

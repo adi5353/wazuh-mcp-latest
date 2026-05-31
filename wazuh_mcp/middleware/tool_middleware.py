@@ -41,8 +41,9 @@ class ToolMiddleware:
             @functools.wraps(fn)
             async def wrapped(*fn_args: Any, **fn_kwargs: Any) -> Any:
                 from ..input_sanitizer import sanitize_input_value
-                from ..identity import record_injection_attempt
+                from ..identity import record_injection_attempt, get_identity_key
                 from ..audit import sanitize_response, cap_response_size, sanitize_string
+                from ..tool_failure_breaker import tool_failure_breaker as _tfb
 
                 # ── INPUT sanitization ────────────────────────────────────
                 clean_kwargs: dict = {}
@@ -56,10 +57,38 @@ class ToolMiddleware:
                             msg += " [session locked to VIEWER after repeated violations]"
                         return {"error": msg}
 
+                _tool_name = fn.__name__
+                _identity = get_identity_key()
+
+                # ── Operational-context gating ─────────────────────────────
+                # No-op unless WAZUH_MCP_CONTEXT_GATING is enabled. Keeps inert
+                # any tool whose context the caller has not entered.
+                from ..tool_contexts import is_tool_allowed, gate_message
+                if not is_tool_allowed(_tool_name, _identity):
+                    return gate_message(_tool_name)
+
+                # ── Failure circuit breaker (stop LLM retry loops) ─────────
+                # Keyed per (caller, tool, args): if this exact call has failed
+                # repeatedly, short-circuit before touching the backend.
+                _open = _tfb.check(_identity, _tool_name, clean_kwargs)
+                if _open is not None:
+                    return _open
+
                 # ── Tool execution (with timing) ──────────────────────────
                 t0 = time.monotonic()
-                result = await fn(*fn_args, **clean_kwargs)
+                try:
+                    result = await fn(*fn_args, **clean_kwargs)
+                except Exception:
+                    _tfb.record_failure(_identity, _tool_name, clean_kwargs)
+                    raise
                 duration = time.monotonic() - t0
+
+                # A tool that returns {"error": ...} counts as a failure for the
+                # breaker; any other shape resets the streak.
+                if isinstance(result, dict) and "error" in result:
+                    _tfb.record_failure(_identity, _tool_name, clean_kwargs)
+                else:
+                    _tfb.record_success(_identity, _tool_name, clean_kwargs)
 
                 try:
                     from ..core.roi_tracker import record_call
@@ -85,6 +114,14 @@ class ToolMiddleware:
                     ]
 
                 return cap_response_size(result)
+
+            # Tag the tool with its operational context (based on the module
+            # currently registering) so call-time gating can be enforced.
+            try:
+                from ..tool_contexts import tag_tool
+                tag_tool(fn.__name__)
+            except Exception:
+                pass
 
             # Register the middleware-wrapped function so playbook / autonomous
             # SOC calls pass through input sanitization and output capping too.
