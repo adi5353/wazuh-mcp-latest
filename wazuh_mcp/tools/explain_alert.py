@@ -9,6 +9,21 @@ from ..tool_context import ToolContext
 import datetime
 
 
+def _pair_mitre(ids: list, tactics: list | None) -> list[tuple]:
+    """Pair each MITRE technique ID with its tactic by position.
+
+    Wazuh's ``rule.mitre.id`` and ``rule.mitre.tactic`` are independent lists
+    that are not guaranteed to be the same length. A plain ``zip`` would
+    silently drop the trailing technique IDs when there are fewer tactics, so
+    pad with "" instead — every ID is always represented.
+    """
+    tactics = tactics or []
+    return [
+        (tid, tactics[i] if i < len(tactics) else "")
+        for i, tid in enumerate(ids)
+    ]
+
+
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
@@ -99,7 +114,7 @@ def register(ctx: ToolContext) -> None:
         # MITRE context
         mitre_context = ""
         if mitre_ids:
-            pairs = list(zip(mitre_ids, mitre_tactics or [""] * len(mitre_ids)))
+            pairs = _pair_mitre(mitre_ids, mitre_tactics)
             mitre_context = "; ".join(
                 f"{mid} ({tac})" if tac else mid for mid, tac in pairs
             )
@@ -226,7 +241,7 @@ def register(ctx: ToolContext) -> None:
             mitre_tactics = rule.get("mitre", {}).get("tactic", [])
             mitre_context = ""
             if mitre_ids:
-                pairs = list(zip(mitre_ids, mitre_tactics or [""] * len(mitre_ids)))
+                pairs = _pair_mitre(mitre_ids, mitre_tactics)
                 mitre_context = "; ".join(
                     f"{m} ({t})" if t else m for m, t in pairs
                 )
