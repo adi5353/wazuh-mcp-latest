@@ -10,26 +10,53 @@ Configuration (env vars):
 from __future__ import annotations
 from ..tool_context import ToolContext
 
+import contextlib
 import os
 
+import httpx
 from ..rbac import ROLE
 REQUIRED_ROLE = ROLE.ANALYST
 
+# Shared, pooled httpx client. Building a fresh AsyncClient per call paid a new
+# TLS handshake every time; a reused client keeps connections warm. Closed on
+# shutdown via close_snow_client().
+_SNOW_CLIENT: "httpx.AsyncClient | None" = None
+
 
 def _client():
-    import httpx
+    """Return (shared_client, None) when configured, else (None, error_message).
+
+    The returned client is a process-wide pooled singleton — callers must wrap it
+    in ``contextlib.nullcontext`` (not ``async with client``) so a single request
+    does not close the shared connection pool.
+    """
+    global _SNOW_CLIENT
     instance = os.getenv("SERVICENOW_INSTANCE", "")
     user = os.getenv("SERVICENOW_USER", "")
     password = os.getenv("SERVICENOW_PASS", "")
     if not all([instance, user, password]):
         return None, "ServiceNow not configured. Set SERVICENOW_INSTANCE, SERVICENOW_USER, SERVICENOW_PASS."
-    base_url = f"https://{instance}.service-now.com/api/now"
-    return httpx.AsyncClient(
-        base_url=base_url,
-        auth=(user, password),
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
-        timeout=30,
-    ), None
+    if _SNOW_CLIENT is None or _SNOW_CLIENT.is_closed:
+        base_url = f"https://{instance}.service-now.com/api/now"
+        _SNOW_CLIENT = httpx.AsyncClient(
+            base_url=base_url,
+            auth=(user, password),
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=30,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _SNOW_CLIENT, None
+
+
+async def close_snow_client() -> None:
+    """Close the shared ServiceNow client on server shutdown."""
+    global _SNOW_CLIENT
+    if _SNOW_CLIENT and not _SNOW_CLIENT.is_closed:
+        try:
+            await _SNOW_CLIENT.aclose()
+        except Exception:
+            pass
+    _SNOW_CLIENT = None
 
 
 _PRIORITY_MAP = {"critical": "1", "high": "2", "medium": "3", "low": "4"}
@@ -77,7 +104,7 @@ def register(ctx: ToolContext) -> None:
             payload["caller_id"] = caller_id
 
         try:
-            async with client:
+            async with contextlib.nullcontext(client):
                 r = await client.post("/table/incident", json=payload)
                 r.raise_for_status()
                 data = r.json().get("result", {})
@@ -99,7 +126,7 @@ def register(ctx: ToolContext) -> None:
             return {"error": err}
 
         try:
-            async with client:
+            async with contextlib.nullcontext(client):
                 r = await client.get(
                     f"/table/incident/{sys_id}",
                     params={"sysparm_fields": "sys_id,number,short_description,state,priority,assigned_to,assignment_group,opened_at,resolved_at"},
@@ -151,7 +178,7 @@ def register(ctx: ToolContext) -> None:
             return {"error": "No update fields provided."}
 
         try:
-            async with client:
+            async with contextlib.nullcontext(client):
                 r = await client.patch(f"/table/incident/{sys_id}", json=payload)
                 r.raise_for_status()
                 data = r.json().get("result", {})

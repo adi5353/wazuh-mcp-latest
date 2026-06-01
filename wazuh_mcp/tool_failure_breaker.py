@@ -58,6 +58,23 @@ def _reset_seconds() -> int:
         return 60
 
 
+def is_failure_result(result: object) -> bool:
+    """Whether a tool result represents a hard failure.
+
+    Tools don't all use the same key. This is the single contract used by both
+    the failure breaker and the metrics error counter so detection is reliable:
+
+      • ``{"error": ...}``         — canonical failure shape (most tools)
+      • ``{"execute_error": ...}`` — deferred-execution failure (e.g. quick_wins)
+
+    A ``{"degraded": true}`` result is *partial success* (primary data is valid,
+    an enrichment sub-query failed) and intentionally does NOT count as a failure
+    here — it is surfaced to the caller but must not trip the breaker for an
+    otherwise-working tool.
+    """
+    return isinstance(result, dict) and ("error" in result or "execute_error" in result)
+
+
 def _args_fingerprint(args: dict | None) -> str:
     """Stable short hash of the call arguments, order-independent."""
     try:

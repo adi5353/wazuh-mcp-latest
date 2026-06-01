@@ -904,12 +904,16 @@ def main() -> None:
                 _uvicorn_server[0].should_exit = True
             # Release HTTP connection pools
             from .tools.threat_intel import close_shared_ti_clients
+            from .tools.notifications import close_soar_client
+            from .tools.servicenow import close_snow_client
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 for _coro in (
                     _wz_proxy._client.aclose(),
                     _idx_proxy._client.aclose(),
                     close_shared_ti_clients(),
+                    close_soar_client(),
+                    close_snow_client(),
                 ):
                     _task = loop.create_task(_coro)
                     _shutdown_tasks.add(_task)
@@ -1244,7 +1248,16 @@ def main() -> None:
             yield
             _pc.stop()
             _cleanup_task.cancel()
-            log.info("Background AlertPrecomputer and approval cleanup stopped")
+            # Release shared HTTP connection pools on graceful shutdown.
+            from .tools.threat_intel import close_shared_ti_clients
+            from .tools.notifications import close_soar_client
+            from .tools.servicenow import close_snow_client
+            for _closer in (close_shared_ti_clients, close_soar_client, close_snow_client):
+                try:
+                    await _closer()
+                except Exception:
+                    pass
+            log.info("Background AlertPrecomputer and approval cleanup stopped; HTTP pools released")
 
         from .ws_alerts import ws_alerts_handler
         from starlette.routing import WebSocketRoute

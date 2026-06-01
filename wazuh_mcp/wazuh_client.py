@@ -52,10 +52,8 @@ class _SecretStr:
 # Wazuh JWT tokens default to 900 seconds; refresh ~100s early for safety.
 TOKEN_TTL_SECONDS = 800
 
-# ── Retry configuration ────────────────────────────────────────────────────────
-_MAX_RETRIES  = 3
-_RETRY_BASE   = 1.0   # seconds — first delay before jitter
-_RETRY_CAP    = 10.0  # seconds — maximum delay before jitter
+# ── Retry configuration (shared policy — see wazuh_mcp/http_policy.py) ─────────
+from .http_policy import MAX_RETRIES as _MAX_RETRIES, is_retryable as _is_retryable, retry_sleep as _retry_sleep_shared
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
 # Defaults raised to 100/40 to prevent pool saturation under real SOC load
@@ -128,22 +126,9 @@ def _validate_manager_file_path(path: str) -> None:
         )
 
 
-def _is_retryable(exc: Exception) -> bool:
-    """Return True if the exception warrants a retry."""
-    if isinstance(exc, httpx.RequestError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return status >= 500 or status == 429
-    return False
-
-
 async def _retry_sleep(attempt: int) -> None:
-    """Exponential backoff with ±1s uniform jitter."""
-    delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP) + random.uniform(0, 1)
-    log.warning("Wazuh Manager: transient error on attempt %d/%d — retrying in %.1fs",
-                attempt + 1, _MAX_RETRIES, delay)
-    await asyncio.sleep(delay)
+    """Exponential backoff with ±1s uniform jitter (shared policy)."""
+    await _retry_sleep_shared(attempt, label="Wazuh Manager")
 
 
 _TOKEN_PROACTIVE_REFRESH_WINDOW = 100  # seconds before expiry to trigger background refresh

@@ -61,10 +61,8 @@ def _validate_query_fields(body: dict) -> None:
 
 log = logging.getLogger(__name__)
 
-# ── Retry configuration (same policy as WazuhClient) ─────────────────────────
-_MAX_RETRIES = 3
-_RETRY_BASE  = 1.0   # seconds — first delay before jitter
-_RETRY_CAP   = 10.0  # seconds — maximum delay before jitter
+# ── Retry configuration (shared policy — see wazuh_mcp/http_policy.py) ─────────
+from .http_policy import MAX_RETRIES as _MAX_RETRIES, is_retryable as _is_retryable, retry_sleep as _retry_sleep_shared
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
 # Defaults raised to 100/40 to prevent pool saturation under real SOC load
@@ -73,24 +71,9 @@ _POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_INDEXER_POOL_SIZE",    "100"))
 _POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_INDEXER_MAX_KEEPALIVE",  "40"))
 
 
-def _is_retryable(exc: Exception) -> bool:
-    """Return True when the exception warrants a retry."""
-    if isinstance(exc, httpx.RequestError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return status >= 500 or status == 429
-    return False
-
-
 async def _retry_sleep(attempt: int) -> None:
-    """Exponential backoff with ±1s uniform jitter."""
-    delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP) + random.uniform(0, 1)
-    log.warning(
-        "Wazuh Indexer: transient error on attempt %d/%d — retrying in %.1fs",
-        attempt + 1, _MAX_RETRIES, delay,
-    )
-    await asyncio.sleep(delay)
+    """Exponential backoff with ±1s uniform jitter (shared policy)."""
+    await _retry_sleep_shared(attempt, label="Wazuh Indexer")
 
 
 class WazuhIndexer:
@@ -174,14 +157,16 @@ class WazuhIndexer:
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_search"
         last_exc: Exception = RuntimeError("No attempts made")
-        for attempt in range(_MAX_RETRIES):
+        # _MAX_RETRIES + 1 total attempts (matches WazuhClient + the shared
+        # backoff schedule: 3 sleeps of ~1s/2s/4s between 4 attempts).
+        for attempt in range(_MAX_RETRIES + 1):
             try:
                 r = await self._client.post(url, json=body)
                 r.raise_for_status()
                 return r.json()
             except Exception as exc:
                 last_exc = exc
-                if _is_retryable(exc) and attempt < _MAX_RETRIES - 1:
+                if _is_retryable(exc) and attempt < _MAX_RETRIES:
                     await _retry_sleep(attempt)
                     continue
                 raise
@@ -218,14 +203,15 @@ class WazuhIndexer:
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_count"
         last_exc: Exception = RuntimeError("No attempts made")
-        for attempt in range(_MAX_RETRIES):
+        # _MAX_RETRIES + 1 total attempts (matches WazuhClient + _search_impl).
+        for attempt in range(_MAX_RETRIES + 1):
             try:
                 r = await self._client.post(url, json={"query": query})
                 r.raise_for_status()
                 return r.json()["count"]
             except Exception as exc:
                 last_exc = exc
-                if _is_retryable(exc) and attempt < _MAX_RETRIES - 1:
+                if _is_retryable(exc) and attempt < _MAX_RETRIES:
                     await _retry_sleep(attempt)
                     continue
                 raise

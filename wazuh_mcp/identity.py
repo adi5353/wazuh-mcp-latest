@@ -52,9 +52,15 @@ _ctx_identity_key: contextvars.ContextVar[Optional[str]] = contextvars.ContextVa
 INJECTION_LOCKOUT_THRESHOLD = 3
 
 # M2: Persistent injection counter across requests — keyed by identity.
-# Uses a process-wide dict protected by a lock so concurrent asyncio tasks can
-# each increment atomically without interfering with each other.
-_persistent_injection_counts: dict[str, int] = {}
+# Uses a process-wide store protected by a lock so concurrent asyncio tasks can
+# each increment atomically without interfering with each other. Bounded by
+# size + idle-TTL so the counter map can't grow without limit across callers.
+from .bounded_state import BoundedTTLStore
+
+_persistent_injection_counts: BoundedTTLStore[int] = BoundedTTLStore(
+    max_entries=int(os.getenv("WAZUH_MCP_MAX_TRACKED_IDENTITIES", "10000")),
+    ttl_seconds=float(os.getenv("WAZUH_MCP_IDENTITY_TTL_SECONDS", "86400")),
+)
 _persistent_injection_lock = threading.Lock()
 
 
@@ -77,21 +83,23 @@ def get_identity_key() -> str:
 def get_persistent_injection_count(identity: str) -> int:
     """Return the cross-request injection count for *identity*."""
     with _persistent_injection_lock:
-        return _persistent_injection_counts.get(identity, 0)
+        return _persistent_injection_counts.get(identity) or 0
 
 
 def _increment_persistent(identity: str) -> int:
     """Atomically increment and return the new count for *identity*."""
     with _persistent_injection_lock:
-        new = _persistent_injection_counts.get(identity, 0) + 1
-        _persistent_injection_counts[identity] = new
+        new = (_persistent_injection_counts.get(identity) or 0) + 1
+        _persistent_injection_counts.set(identity, new)
         return new
 
 
 def reset_persistent_injection_count(identity: str) -> None:
     """Reset the persistent counter (e.g. after an admin override)."""
     with _persistent_injection_lock:
-        _persistent_injection_counts.pop(identity, None)
+        # BoundedTTLStore.pop takes a single key and is a no-op if absent
+        # (it does dict.pop(key, None) internally) — no default arg here.
+        _persistent_injection_counts.pop(identity)
 
 
 # ── Key map (parsed once at import) ──────────────────────────────────────────

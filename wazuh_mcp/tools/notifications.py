@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 from typing import Any
 
+import contextlib
 import datetime
 import logging
 import os
@@ -11,13 +12,43 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import httpx
-
 from ..rbac import ROLE
 REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
 
 _SOAR_TIMEOUT = 15
+
+# Shared, pooled httpx client for SOAR/webhook posts (Slack, Teams). Creating a
+# fresh AsyncClient per call pays a new TLS handshake every time; a reused client
+# keeps connections warm. Closed on shutdown via close_soar_client().
+_SOAR_CLIENT: "httpx.AsyncClient | None" = None
+
+
+def _get_soar_client() -> httpx.AsyncClient:
+    global _SOAR_CLIENT
+    if _SOAR_CLIENT is None or _SOAR_CLIENT.is_closed:
+        _SOAR_CLIENT = httpx.AsyncClient(
+            timeout=_SOAR_TIMEOUT,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _SOAR_CLIENT
+
+
+def _soar_client():
+    """Yield the shared SOAR client without closing it on block exit."""
+    return contextlib.nullcontext(_get_soar_client())
+
+
+async def close_soar_client() -> None:
+    """Close the shared SOAR client on server shutdown."""
+    global _SOAR_CLIENT
+    if _SOAR_CLIENT and not _SOAR_CLIENT.is_closed:
+        try:
+            await _SOAR_CLIENT.aclose()
+        except Exception:
+            pass
+    _SOAR_CLIENT = None
 
 
 def register(ctx: ToolContext) -> None:
@@ -44,7 +75,7 @@ def register(ctx: ToolContext) -> None:
     async def _post_slack_blocks(channel: str, blocks: list, fallback: str) -> dict:
         if _SLACK_WEBHOOK:
             try:
-                async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                async with _soar_client() as client:
                     r = await client.post(
                         _SLACK_WEBHOOK,
                         json={"blocks": blocks, "text": fallback},
@@ -56,7 +87,7 @@ def register(ctx: ToolContext) -> None:
 
         if _SLACK_BOT_TOKEN:
             try:
-                async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                async with _soar_client() as client:
                     r = await client.post(
                         "https://slack.com/api/chat.postMessage",
                         json={"channel": channel, "blocks": blocks, "text": fallback},
@@ -116,7 +147,7 @@ def register(ctx: ToolContext) -> None:
 
         if _SLACK_WEBHOOK:
             try:
-                async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                async with _soar_client() as client:
                     r = await client.post(_SLACK_WEBHOOK, json={"attachments": [attachment]})
                 r.raise_for_status()
                 log.info("Slack message sent via webhook severity=%s", severity)
@@ -125,7 +156,7 @@ def register(ctx: ToolContext) -> None:
                 return {"error": f"Slack webhook failed: {e}"}
 
         try:
-            async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+            async with _soar_client() as client:
                 r = await client.post(
                     "https://slack.com/api/chat.postMessage",
                     json={"channel": target_channel, "attachments": [attachment]},
@@ -480,7 +511,7 @@ def register(ctx: ToolContext) -> None:
         if not _TEAMS_WEBHOOK:
             return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
         try:
-            async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+            async with _soar_client() as client:
                 r = await client.post(
                     _TEAMS_WEBHOOK,
                     json=card,

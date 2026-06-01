@@ -1,13 +1,13 @@
 """MCP server self-monitoring tools — Prometheus metrics, tool usage stats, slow query detection."""
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
 
 import os
 import time
 import logging
 from collections import defaultdict
 
-from ..rbac import ROLE
 REQUIRED_ROLE = ROLE.VIEWER
 
 log = logging.getLogger("wazuh-mcp")
@@ -99,6 +99,17 @@ def register(ctx: ToolContext) -> None:
             tool_failure_circuits = tool_failure_breaker.open_circuits()
         except Exception:
             tool_failure_circuits = []
+
+        # Bounded per-identity state sizes (watch for leaks / abnormal growth)
+        try:
+            from ..tool_contexts import tracked_identity_count
+            from .. import identity as _identity
+            tracked_identities = {
+                "active_contexts": tracked_identity_count(),
+                "injection_counters": len(_identity._persistent_injection_counts),
+            }
+        except Exception:
+            tracked_identities = {}
 
         # Prometheus text format (for /metrics scraping)
         prom_lines = [
