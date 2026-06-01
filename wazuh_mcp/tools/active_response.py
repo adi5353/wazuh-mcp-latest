@@ -26,6 +26,7 @@ def register(ctx: ToolContext) -> None:
     idx = ctx.idx
     cfg = ctx.cfg
     _cap = ctx.cap
+    _require_writes = ctx.require_writes
 
     @mcp.tool()
     async def get_active_responses(time_range: str = "24h", limit: int = 50) -> dict:
@@ -243,7 +244,10 @@ def register(ctx: ToolContext) -> None:
         from ..approval import approval_store
 
         params = {"command": command, "agent_id": agent_id, "src_ip": src_ip}
-        token  = approval_store.create("run_active_response", params, ttl=300)
+        # Use the async store API: the sync create() calls
+        # loop.run_until_complete() which raises inside the already-running
+        # event loop when the Redis backend is configured.
+        token  = await approval_store.acreate("run_active_response", params, ttl=300)
 
         # Auto-expire: schedule cleanup via asyncio (best-effort, approval_store
         # already tracks expire_at so approve() will reject stale tokens)
@@ -314,8 +318,15 @@ def register(ctx: ToolContext) -> None:
         if err:
             return err
 
+        # Honour the global WAZUH_ALLOW_WRITES kill-switch on this execution
+        # path too — approve_response fires a destructive PUT /active-response
+        # just like run_active_response, so it must respect the same gate.
+        blocked = _require_writes()
+        if blocked:
+            return blocked
+
         from ..approval import approval_store
-        entry = approval_store.approve(token)
+        entry = await approval_store.aapprove(token)
         if entry is None:
             return {
                 "error": (
@@ -370,7 +381,7 @@ def register(ctx: ToolContext) -> None:
             return err
 
         from ..approval import approval_store
-        denied = approval_store.deny(token)
+        denied = await approval_store.adeny(token)
         if not denied:
             return {
                 "error": (
