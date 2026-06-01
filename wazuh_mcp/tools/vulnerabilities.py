@@ -6,6 +6,8 @@ import httpx
 
 from ..helpers import trim_vuln, severities_at_or_above
 from ..validators import safe_validate, validate_severity, validate_cve_id, validate_agent_id
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 _EPSS_API = "https://api.first.org/data/v1/epss"
 _KEV_URL  = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"

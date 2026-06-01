@@ -7,6 +7,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import datetime
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 
 def register(ctx: ToolContext) -> None:

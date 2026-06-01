@@ -3,6 +3,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 from ..helpers import time_window
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 
 def register(ctx: ToolContext) -> None:

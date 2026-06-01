@@ -8,17 +8,63 @@ Usage in server.py::
     from .middleware import ToolMiddleware
     _TOOL_REGISTRY: dict[str, Any] = {}
     mcp.tool = ToolMiddleware(mcp, _TOOL_REGISTRY).tool
+
+RBAC enforcement
+----------------
+Every tool registered through this middleware has its required role enforced
+before the tool body runs.  The effective role is resolved in priority order:
+
+  1. ``role=`` kwarg passed directly to ``@mcp.tool(role=ROLE.ADMIN)``
+  2. Module-level ``REQUIRED_ROLE`` on the module that defines the tool
+  3. Fallback: ``ROLE.VIEWER`` (fail-closed — least privilege)
+
+A WARNING is emitted on server startup for any tool whose module lacks a
+``REQUIRED_ROLE`` declaration, so missing annotations surface immediately.
 """
 from __future__ import annotations
 
 import functools
+import logging
+import sys
 import time
 from typing import Any
+
+log = logging.getLogger("wazuh-mcp")
+
+
+def _resolve_tool_role(fn: Any, explicit_role: Any) -> Any:
+    """Return the RBAC role that must be enforced for *fn*.
+
+    Resolution order:
+    1. *explicit_role* — passed as ``role=`` kwarg to ``@mcp.tool()``
+    2. ``REQUIRED_ROLE`` declared on the tool's own module
+    3. ``ROLE.VIEWER`` fallback with a startup WARNING so the gap is visible.
+    """
+    if explicit_role is not None:
+        return explicit_role
+
+    module = sys.modules.get(fn.__module__)
+    if module is not None:
+        required = getattr(module, "REQUIRED_ROLE", None)
+        if required is not None:
+            return required
+
+    # No role declared — emit a loud warning so it surfaces in logs.
+    log.warning(
+        "Tool '%s' (module '%s') has no REQUIRED_ROLE declaration and no "
+        "explicit role= kwarg. Defaulting to VIEWER (least privilege). "
+        "Add REQUIRED_ROLE to the module to silence this warning.",
+        fn.__name__,
+        fn.__module__,
+    )
+    from ..rbac import ROLE
+    return ROLE.VIEWER
 
 
 class ToolMiddleware:
     """Wraps FastMCP.tool() to compose input sanitization, output sanitization,
-    ROI/metrics timing, and tool registry capture in a single decorator pass."""
+    ROI/metrics timing, tool registry capture, and RBAC enforcement in a single
+    decorator pass."""
 
     def __init__(self, mcp: Any, registry: dict[str, Any]) -> None:
         self._mcp = mcp
@@ -28,31 +74,52 @@ class ToolMiddleware:
     def tool(self, *args: Any, **kwargs: Any) -> Any:
         """Drop-in replacement for mcp.tool().
 
+        Accepts an optional ``role=`` kwarg (not forwarded to FastMCP) that
+        sets the minimum RBAC role required to call this tool.  When omitted,
+        the module-level ``REQUIRED_ROLE`` is used as the fallback.
+
         Wraps each registered function to:
-        1. Sanitize input kwargs (injection, length, dangerous chars)
-        2. Enforce operational-context gating + the failure circuit breaker
-        3. Run the tool and record timing for ROI + Prometheus metrics
-        4. Sanitize output (strip injection tokens, PII, secrets, cap size)
-        5. Register the function by name in the tool registry
+        1. Enforce the minimum RBAC role (structural — cannot be bypassed)
+        2. Sanitize input kwargs (injection, length, dangerous chars)
+        3. Enforce operational-context gating + the failure circuit breaker
+        4. Run the tool and record timing for ROI + Prometheus metrics
+        5. Sanitize output (strip injection tokens, PII, secrets, cap size)
+        6. Register the function by name in the tool registry
         """
+        # Pop our custom kwarg before forwarding to FastMCP — it doesn't know
+        # about role= and would raise on an unexpected keyword argument.
+        explicit_role = kwargs.pop("role", None)
         decorator = self._original_tool(*args, **kwargs)
         registry = self._registry
 
         def capturing_decorator(fn: Any) -> Any:
+            # Resolve the role once at registration time (not per call) so there
+            # is zero per-call overhead and the decision is visible in logs during
+            # server startup.
+            _required_role = _resolve_tool_role(fn, explicit_role)
+
             @functools.wraps(fn)
             async def wrapped(*fn_args: Any, **fn_kwargs: Any) -> Any:
                 from ..input_sanitizer import sanitize_input_value
                 from ..identity import record_injection_attempt, _ctx_identity_key, get_identity_key
                 from ..audit import sanitize_response, cap_response_size, sanitize_string
                 from ..logging_config import bind_request_context, clear_request_context
-                from ..tool_failure_breaker import tool_failure_breaker as _tfb
+                from ..tool_failure_breaker import tool_failure_breaker as _tfb, is_failure_result
                 from ..tool_contexts import is_tool_allowed, gate_message
 
-                # ── Structured-logging context (Improvement 3) ───────────
+                # ── Structured-logging context ────────────────────────────
                 # Bind a per-call trace_id + tool + identity so EVERY log line
                 # emitted during this single tool execution can be correlated.
                 bind_request_context(fn.__name__, _ctx_identity_key.get(None) or "local")
                 try:
+                    # ── RBAC enforcement (structural — runs before everything) ──
+                    # Enforced here in the middleware so it is impossible to bypass
+                    # by forgetting an inline require_role() call in the tool body.
+                    from ..rbac import require_role as _require_role
+                    _rbac_err = _require_role(_required_role)
+                    if _rbac_err:
+                        return _rbac_err
+
                     # ── INPUT sanitization ────────────────────────────────
                     clean_kwargs: dict = {}
                     for field, value in fn_kwargs.items():
@@ -91,9 +158,13 @@ class ToolMiddleware:
                         raise
                     duration = time.monotonic() - t0
 
-                    # A tool that returns {"error": ...} counts as a failure
-                    # for the breaker; any other shape resets the streak.
-                    if isinstance(result, dict) and "error" in result:
+                    # Single failure contract (see tool_failure_breaker): any
+                    # standardized failure shape ({"error"} or {"execute_error"})
+                    # trips the breaker and counts as an error in metrics; any
+                    # other shape resets the streak. Keeps detection reliable
+                    # across tools that use different keys.
+                    _failed = is_failure_result(result)
+                    if _failed:
                         _tfb.record_failure(_identity, _tool_name, clean_kwargs)
                     else:
                         _tfb.record_success(_identity, _tool_name, clean_kwargs)
@@ -105,7 +176,7 @@ class ToolMiddleware:
                         pass
                     try:
                         from ..tools.metrics import record_tool_call
-                        record_tool_call(fn.__name__, duration)
+                        record_tool_call(fn.__name__, duration, had_error=_failed)
                     except Exception:
                         pass
 

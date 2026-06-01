@@ -32,7 +32,8 @@ import uuid
 
 import httpx
 
-from ..rbac import admin_only, analyst_or_above
+from ..rbac import admin_only, analyst_or_above, ROLE
+REQUIRED_ROLE = ROLE.RESPONDER
 from ..state_store import save_monitor_state, load_monitor_state, clear_monitor_state
 
 log = logging.getLogger("wazuh-mcp")

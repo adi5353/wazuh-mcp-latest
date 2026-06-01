@@ -4,6 +4,8 @@ Reads ossec.conf sections via the Manager REST API.
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 _COMMON_SECTIONS = [
     "global", "alerts", "logging", "remote", "rootcheck", "syscheck",

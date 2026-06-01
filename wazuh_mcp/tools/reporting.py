@@ -1,4 +1,4 @@
-﻿"""Reporting tools â€” alert volume comparison, rule anomaly detection, weekly summary, shift handover."""
+"""Reporting tools â€” alert volume comparison, rule anomaly detection, weekly summary, shift handover."""
 from __future__ import annotations
 from ..tool_context import ToolContext
 
@@ -6,6 +6,10 @@ import asyncio
 import datetime
 
 from ..helpers import time_window
+
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
 
 
 def register(ctx: ToolContext) -> None:

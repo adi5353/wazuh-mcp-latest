@@ -2,7 +2,8 @@
 from __future__ import annotations
 from ..tool_context import ToolContext
 
-from ..rbac import responder_only, admin_only
+from ..rbac import responder_only, admin_only, ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 from ..validators import validate_active_response_target, validate_ar_command
 
 

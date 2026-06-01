@@ -8,7 +8,8 @@ import os
 
 import httpx
 
-from ..rbac import responder_only
+from ..rbac import responder_only, ROLE
+REQUIRED_ROLE = ROLE.RESPONDER
 from ..validators import safe_validate, validate_time_range, validate_rule_id
 
 log = logging.getLogger("wazuh-mcp")

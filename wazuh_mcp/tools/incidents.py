@@ -9,6 +9,10 @@ import httpx
 
 from ..helpers import trim_alert, time_window
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp

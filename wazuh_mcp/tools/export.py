@@ -9,6 +9,10 @@ from ..tool_context import ToolContext
 import csv
 import io
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def _to_csv(rows: list[dict], fieldnames: list[str] | None = None) -> str:
     if not rows:

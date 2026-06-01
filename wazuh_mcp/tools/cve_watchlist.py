@@ -22,6 +22,10 @@ from ..tool_context import ToolContext
 import re
 from datetime import datetime, timedelta, timezone
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 _CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 _CDB_LIST = "cve-watchlist"
 

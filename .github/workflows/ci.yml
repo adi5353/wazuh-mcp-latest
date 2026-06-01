@@ -23,6 +23,10 @@ jobs:
         run: ruff check wazuh_mcp
       - name: mypy
         run: mypy wazuh_mcp --ignore-missing-imports --no-error-summary
+      - name: Version & tool-count consistency
+        run: python scripts/generate_tool_table.py --check
+      - name: RBAC role declarations
+        run: python scripts/lint_tool_roles.py
 
   # ── 2. Security scan ──────────────────────────────────────────────────────
   security:

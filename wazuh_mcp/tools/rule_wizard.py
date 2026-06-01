@@ -17,6 +17,8 @@ from ..tool_context import ToolContext
 from .rule_wizard_generate import register_generate, _sigma_to_wazuh_level, _extract_sigma_field_conditions  # noqa: F401
 from .rule_wizard_validate import register_validate, _validate_rule_xml_impl  # noqa: F401
 from .rule_wizard_deploy import register_deploy  # noqa: F401
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 
 def register(ctx: ToolContext) -> None:

@@ -6,6 +6,9 @@ import re
 from ..helpers import trim_alert
 from ..validators import safe_validate, validate_time_range, validate_min_level, validate_agent_id, validate_ip_address, validate_limit
 
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
+
 
 def _double_time_range(time_range: str) -> str:
     """Return an ES date-math expression for 2× the given time range.

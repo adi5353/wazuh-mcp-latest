@@ -6,6 +6,8 @@ import os
 
 from ..helpers import trim_alert, time_window
 from ..validators import safe_validate, validate_time_range
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 
 def register(ctx: ToolContext) -> None:

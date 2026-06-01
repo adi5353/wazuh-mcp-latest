@@ -8,6 +8,10 @@ import datetime
 import time as _time
 from typing import Any
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 # ── Natural-language patterns → OpenSearch DSL fragments ──────────────────────
 
