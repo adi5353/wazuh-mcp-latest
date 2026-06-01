@@ -322,6 +322,125 @@ class TestSetSessionRoleKeyMapGuard:
         asyncio.run(run())
 
 
+# ── Active-response approval path: async store + writes kill-switch ────────────
+
+class TestActiveResponseApprovalPath:
+    """Regression tests for two safety holes in tools/active_response.py:
+
+    1. The approval tools must use the ASYNC approval-store API (acreate/aapprove/
+       adeny). The sync create/approve/deny call loop.run_until_complete(), which
+       raises inside the already-running event loop when REDIS_URL is configured —
+       silently breaking the human-in-the-loop gate on destructive AR.
+    2. approve_response must honour WAZUH_ALLOW_WRITES, like every other
+       destructive tool. It fires PUT /active-response and previously skipped the
+       kill-switch entirely.
+    """
+
+    def _register(self, *, allow_writes: bool, wz):
+        from wazuh_mcp.tools.active_response import register
+        from wazuh_mcp.tool_context import ToolContext
+
+        tools: dict = {}
+        mcp = MagicMock()
+        mcp.tool = lambda: (lambda fn: tools.__setitem__(fn.__name__, fn) or fn)
+        cfg = MagicMock()
+        cfg.allow_writes = allow_writes
+        require_writes = (
+            (lambda: None)
+            if allow_writes
+            else (lambda: {"error": "Write operations are disabled."})
+        )
+        ctx = ToolContext(
+            mcp=mcp, wz=wz, idx=AsyncMock(), cfg=cfg,
+            cap=lambda x: x, require_writes=require_writes,
+            truncate=lambda s, n=300: s, enrich_mitre_ids=lambda ids: [],
+            geoip_lookup=AsyncMock(return_value=dict()),
+            incident_recommendations=lambda a: [],
+        )
+        register(ctx)
+        return tools
+
+    def _async_store_mock(self):
+        """A MagicMock standing in for approval_store with async a* methods."""
+        store = MagicMock()
+        store.acreate = AsyncMock(return_value="tok-123")
+        store.aapprove = AsyncMock(return_value={
+            "action": "run_active_response",
+            "params": {"command": "firewall-drop", "agent_id": "001", "src_ip": "1.2.3.4"},
+        })
+        store.adeny = AsyncMock(return_value=True)
+        return store
+
+    def test_propose_uses_async_store(self):
+        async def run():
+            store = self._async_store_mock()
+            tools = self._register(allow_writes=True, wz=AsyncMock())
+            with patch("wazuh_mcp.approval.approval_store", store), \
+                 patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder", "SLACK_WEBHOOK_URL": ""}):
+                result = await tools["propose_active_response"]("firewall-drop", "001", "1.2.3.4")
+            store.acreate.assert_awaited_once()      # async API, not sync create()
+            assert result["token"] == "tok-123"
+        asyncio.run(run())
+
+    def test_approve_uses_async_store_and_executes(self):
+        async def run():
+            store = self._async_store_mock()
+            wz = AsyncMock()
+            wz.request = AsyncMock(return_value={"data": "ok"})
+            tools = self._register(allow_writes=True, wz=wz)
+            with patch("wazuh_mcp.approval.approval_store", store), \
+                 patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await tools["approve_response"]("tok-123")
+            store.aapprove.assert_awaited_once()     # async API, not sync approve()
+            wz.request.assert_awaited_once()         # AR actually fired
+            assert result["status"] == "executed"
+        asyncio.run(run())
+
+    def test_approve_blocked_when_writes_disabled(self):
+        async def run():
+            store = self._async_store_mock()
+            wz = AsyncMock()
+            wz.request = AsyncMock()
+            tools = self._register(allow_writes=False, wz=wz)
+            with patch("wazuh_mcp.approval.approval_store", store), \
+                 patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
+                result = await tools["approve_response"]("tok-123")
+            assert "error" in result
+            assert "disabled" in result["error"].lower()
+            wz.request.assert_not_awaited()          # kill-switch honoured: no AR fired
+            store.aapprove.assert_not_awaited()      # short-circuits before token lookup
+        asyncio.run(run())
+
+    def test_async_store_round_trips_in_running_loop_with_redis(self):
+        """The async API must work inside a running loop even with a Redis backend —
+        this is exactly where the sync run_until_complete() shim blows up."""
+        async def run():
+            import importlib
+            with patch.dict(os.environ, {"REDIS_URL": "redis://localhost:6379"}):
+                import wazuh_mcp.approval as mod
+                importlib.reload(mod)
+                store = mod.ApprovalStore()
+                # Stand in for the redis.asyncio client.
+                fake_redis = MagicMock()
+                stored: dict = {}
+                async def _setex(key, ttl, val):
+                    stored[key] = val
+                async def _get(key):
+                    return stored.get(key)
+                async def _delete(key):
+                    return 1 if stored.pop(key, None) is not None else 0
+                fake_redis.setex = _setex
+                fake_redis.get = _get
+                fake_redis.delete = _delete
+                store._redis = fake_redis
+                token = await store.acreate("run_active_response", {"ip": "1.2.3.4"}, ttl=60)
+                entry = await store.aapprove(token)
+                assert entry is not None
+                assert entry["action"] == "run_active_response"
+            importlib.reload(mod)  # restore in-memory module state for other tests
+        asyncio.run(run())
+
+
 # ── Workspace persistence warning ─────────────────────────────────────────────
 
 class TestWorkspacePersistenceWarning:

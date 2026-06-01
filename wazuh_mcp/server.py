@@ -479,10 +479,24 @@ async def switch_tenant(tenant_name: str) -> dict:
     new_wz = _WC(tenant_cfg)
     new_idx = _WI(tenant_cfg)
 
+    # Capture the clients currently bound to THIS session so their connection
+    # pools can be released after the swap. Without this, a session that hops
+    # tenants leaks one httpx pool per switch until the process exits. Never
+    # close the shared module-level defaults (wz/idx) — other sessions use them.
+    _prev_wz = _ctx_wz.get(None)
+    _prev_idx = _ctx_idx.get(None)
+
     # Bind the new clients to this session's asyncio task context only.
     # Other sessions continue using their own (possibly different) clients.
     _wz_proxy.replace(new_wz)
     _idx_proxy.replace(new_idx)
+
+    for _prev in (_prev_wz, _prev_idx):
+        if _prev is not None and _prev is not wz and _prev is not idx:
+            try:
+                await _prev.aclose()
+            except Exception as _close_err:  # never fail the switch on cleanup
+                log.warning("Failed to close previous tenant client: %s", _close_err)
     _ctx_active_tenant.set({"name": tenant.name, "manager_host": tenant.manager_host})
 
     log.info("MSSP tenant switched to '%s' (%s)", tenant.name, tenant.manager_host)
