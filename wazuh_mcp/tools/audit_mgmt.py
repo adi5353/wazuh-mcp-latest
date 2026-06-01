@@ -9,6 +9,7 @@ from ..rbac import ROLE
 
 REQUIRED_ROLE = ROLE.ADMIN
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -37,37 +38,42 @@ def register(ctx: ToolContext) -> None:
         if not log_path.exists():
             return {"error": "Audit log file not found.", "path": str(log_path)}
 
-        try:
-            stat = log_path.stat()
-            lines = 0
-            errors = 0
-            first_ts = None
-            last_ts = None
-            with log_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    lines += 1
-                    try:
-                        record = json.loads(line)
-                        ts = record.get("ts")
-                        if ts:
-                            if first_ts is None:
-                                first_ts = ts
-                            last_ts = ts
-                    except json.JSONDecodeError:
-                        errors += 1
-            return {
-                "path": str(log_path),
-                "size_bytes": stat.st_size,
-                "total_records": lines,
-                "parse_errors": errors,
-                "first_record_ts": first_ts,
-                "last_record_ts": last_ts,
-            }
-        except Exception as e:
-            return {"error": str(e)}
+        def _read_stats() -> dict:
+            try:
+                stat = log_path.stat()
+                lines = 0
+                errors = 0
+                first_ts = None
+                last_ts = None
+                with log_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        lines += 1
+                        try:
+                            record = json.loads(line)
+                            ts = record.get("ts")
+                            if ts:
+                                if first_ts is None:
+                                    first_ts = ts
+                                last_ts = ts
+                        except json.JSONDecodeError:
+                            errors += 1
+                return {
+                    "path": str(log_path),
+                    "size_bytes": stat.st_size,
+                    "total_records": lines,
+                    "parse_errors": errors,
+                    "first_record_ts": first_ts,
+                    "last_record_ts": last_ts,
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        # Reading the whole log is blocking I/O — run it off the event loop so
+        # concurrent requests aren't stalled.
+        return await asyncio.to_thread(_read_stats)
 
     @mcp.tool()
     async def search_audit_log(
@@ -95,32 +101,36 @@ def register(ctx: ToolContext) -> None:
         if not log_path.exists():
             return {"error": "Audit log not found.", "path": str(log_path)}
 
-        results = []
-        try:
-            with log_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if tool_name and record.get("tool") != tool_name:
-                        continue
-                    if identity and not record.get("identity", "").startswith(identity):
-                        continue
-                    if result_code and record.get("result_code") != result_code:
-                        continue
-                    results.append(record)
+        def _search() -> dict:
+            results = []
+            try:
+                with log_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if tool_name and record.get("tool") != tool_name:
+                            continue
+                        if identity and not record.get("identity", "").startswith(identity):
+                            continue
+                        if result_code and record.get("result_code") != result_code:
+                            continue
+                        results.append(record)
 
-            results = results[-_cap(limit):]
-            return {
-                "total_matching": len(results),
-                "records": results,
-            }
-        except Exception as e:
-            return {"error": str(e)}
+                results = results[-_cap(limit):]
+                return {
+                    "total_matching": len(results),
+                    "records": results,
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        # Scanning the log is blocking I/O — keep it off the event loop.
+        return await asyncio.to_thread(_search)
 
     @mcp.tool()
     async def verify_audit_log_integrity() -> dict:
@@ -151,44 +161,48 @@ def register(ctx: ToolContext) -> None:
                 "note": "Set WAZUH_AUDIT_LOG_SIGNING_KEY to enable integrity verification.",
             }
 
-        valid = invalid = unsigned = 0
-        tampered_records = []
+        def _verify() -> dict:
+            valid = invalid = unsigned = 0
+            tampered_records = []
 
-        with log_path.open("r", encoding="utf-8") as f:
-            for line_no, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+            with log_path.open("r", encoding="utf-8") as f:
+                for line_no, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-                stored_hmac = record.pop("hmac", None)
-                if stored_hmac is None:
-                    unsigned += 1
-                    continue
+                    stored_hmac = record.pop("hmac", None)
+                    if stored_hmac is None:
+                        unsigned += 1
+                        continue
 
-                canonical = json.dumps(record, sort_keys=True, default=str)
-                expected = hmac_mod.new(
-                    signing_key.encode(), canonical.encode(), hashlib.sha256
-                ).hexdigest()
+                    canonical = json.dumps(record, sort_keys=True, default=str)
+                    expected = hmac_mod.new(
+                        signing_key.encode(), canonical.encode(), hashlib.sha256
+                    ).hexdigest()
 
-                if hmac_mod.compare_digest(stored_hmac, expected):
-                    valid += 1
-                else:
-                    invalid += 1
-                    tampered_records.append({
-                        "line": line_no,
-                        "ts": record.get("ts"),
-                        "tool": record.get("tool"),
-                    })
+                    if hmac_mod.compare_digest(stored_hmac, expected):
+                        valid += 1
+                    else:
+                        invalid += 1
+                        tampered_records.append({
+                            "line": line_no,
+                            "ts": record.get("ts"),
+                            "tool": record.get("tool"),
+                        })
 
-        return {
-            "signing_enabled": True,
-            "valid_records": valid,
-            "invalid_records": invalid,
-            "unsigned_records": unsigned,
-            "tampered": tampered_records[:20],
-            "integrity": "ok" if invalid == 0 else "COMPROMISED",
-        }
+            return {
+                "signing_enabled": True,
+                "valid_records": valid,
+                "invalid_records": invalid,
+                "unsigned_records": unsigned,
+                "tampered": tampered_records[:20],
+                "integrity": "ok" if invalid == 0 else "COMPROMISED",
+            }
+
+        # Hashing every record is blocking work — run it off the event loop.
+        return await asyncio.to_thread(_verify)
