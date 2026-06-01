@@ -11,11 +11,37 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any  # noqa: F401 – re-exported for kv helpers
 
 log = logging.getLogger("wazuh-mcp")
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* atomically.
+
+    Writes to a temp file in the same directory, flushes + fsyncs it, then
+    ``os.replace`` swaps it into place — an atomic rename on both POSIX and
+    Windows. A crash mid-write therefore leaves the previous file intact rather
+    than a half-written, unparseable JSON file (which the loaders would silently
+    discard, losing compliance baselines and rule backups across a restart).
+    """
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        # Best-effort cleanup of the temp file; never leave it lingering.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _state_dir() -> Path:
@@ -40,7 +66,7 @@ def _safe_id(run_id: str) -> str:
 def save_run(run_id: str, data: dict) -> None:
     p = _runs_dir() / f"{_safe_id(run_id)}.json"
     try:
-        p.write_text(json.dumps(data, indent=2, default=str))
+        _atomic_write_text(p, json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.warning("state_store: failed to save run %s: %s", run_id, exc)
 
@@ -87,7 +113,7 @@ def save_monitor_state(state: dict) -> None:
     try:
         serializable = {k: v for k, v in state.items() if k != "task"}
         serializable["saved_at"] = datetime.now(timezone.utc).isoformat()
-        p.write_text(json.dumps(serializable, indent=2, default=str))
+        _atomic_write_text(p, json.dumps(serializable, indent=2, default=str))
     except Exception as exc:
         log.warning("state_store: failed to save monitor state: %s", exc)
 
@@ -133,7 +159,7 @@ def save_kv(key: str, data: Any) -> None:
     """
     p = _kv_dir() / f"{_safe_key(key)}.json"
     try:
-        p.write_text(json.dumps(data, indent=2, default=str))
+        _atomic_write_text(p, json.dumps(data, indent=2, default=str))
     except Exception as exc:
         log.warning("state_store: failed to save kv '%s': %s", key, exc)
 

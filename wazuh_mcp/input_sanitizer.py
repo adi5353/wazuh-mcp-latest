@@ -14,9 +14,40 @@ import urllib.parse
 from typing import Any
 
 # ── Hard limits ───────────────────────────────────────────────────────────────
-MAX_STRING_LEN: int = 1000   # per-parameter string length cap
+MAX_STRING_LEN: int = 1000   # default per-parameter string length cap
 MAX_LIST_ITEMS: int = 200    # per-parameter list length cap
 MAX_DICT_KEYS:  int = 50     # nested dict key count cap
+
+# Per-field length overrides for parameters that legitimately carry large
+# payloads. The default 1000-char cap is right for identifiers, IPs, rule IDs
+# and free-text notes, but far too small for full rule XML, Sigma YAML, raw log
+# samples, or Lucene/DSL queries — those tools were silently failing validation.
+# Keyed by the exact tool parameter name (the ``field`` passed to the sanitizer).
+# Injection screening still runs on these fields; only the length ceiling rises.
+MAX_STRING_LEN_OVERRIDES: dict[str, int] = {
+    # Rule / decoder / Sigma payloads — full XML or YAML documents
+    "xml_content":  65536,
+    "rule_xml":     65536,
+    "decoder_xml":  65536,
+    "yaml_content": 65536,
+    "sigma_yaml":   65536,
+    "sigma_rule":   65536,
+    # Raw log lines tested against rules/decoders (single or batch — list items
+    # recurse with the same field name, so the batch key needs the override too)
+    "log_sample":   16384,
+    "log_samples":  16384,
+    "log":          16384,
+    "log_line":     16384,
+    # Search expressions — Lucene / OpenSearch DSL / natural-language query
+    "query":         8192,
+    "query_string":  8192,
+    "dsl":           8192,
+}
+
+
+def max_len_for(field: str) -> int:
+    """Return the length cap for *field* — its override, or the global default."""
+    return MAX_STRING_LEN_OVERRIDES.get(field, MAX_STRING_LEN)
 
 # ── Patterns rejected in all tool string inputs ───────────────────────────────
 # Each entry is (compiled_pattern, human_readable_label).
@@ -79,9 +110,10 @@ def sanitize_input_string(value: str, field: str = "input") -> str:
 
     Raises ValueError on any violation. Returns original value unchanged when clean.
     """
-    if len(value) > MAX_STRING_LEN:
+    cap = max_len_for(field)
+    if len(value) > cap:
         raise ValueError(
-            f"'{field}' exceeds maximum allowed length of {MAX_STRING_LEN} chars "
+            f"'{field}' exceeds maximum allowed length of {cap} chars "
             f"(got {len(value)})"
         )
     # Check all variants: original, normalized, URL-decoded, base64-decoded

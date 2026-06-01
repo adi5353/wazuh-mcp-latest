@@ -74,7 +74,7 @@ def register(ctx: ToolContext) -> None:
     idx = ctx.idx
     cfg = ctx.cfg
 
-    from ..validators import safe_validate, validate_cve_id, validate_free_text, safe_validate
+    from ..validators import safe_validate, validate_cve_id, validate_free_text
 
     @mcp.tool()
     async def add_cve_to_watchlist(

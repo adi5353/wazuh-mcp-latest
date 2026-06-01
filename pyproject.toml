@@ -128,8 +128,9 @@ ignore = [
     "E741",   # ambiguous variable name — pre-existing (l in list comprehensions)
     "F401",   # imported but unused — many are re-exported or conditionally used
     "F541",   # f-string without placeholders — pre-existing in wizard prompts
-    "F601",   # duplicate dict key — pre-existing in tool registry
-    "F811",   # redefinition of unused name — intentional override pattern
-    "F821",   # undefined name — occurs in optional/conditional scopes
-    "F841",   # local variable assigned but never used — pre-existing
+    "F841",   # local variable assigned but never used — pre-existing (84 sites)
+    # NOTE: F821 (undefined name), F601 (duplicate dict key) and F811
+    # (redefinition of unused name) are intentionally NOT ignored — they catch
+    # genuine bugs (NameError, silently-dropped dict entries, shadowed imports),
+    # not style. The codebase is clean of them; keep it that way.
 ]
