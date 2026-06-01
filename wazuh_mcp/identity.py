@@ -25,6 +25,7 @@ the event is logged. Counter resets on each new session (ContextVar default).
 from __future__ import annotations
 
 import contextvars
+import hmac
 import logging
 import os
 import threading
@@ -118,8 +119,27 @@ _KEY_MAP: dict[str, ROLE] = _parse_key_map()
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def resolve_role_for_key(api_key: str) -> Optional[ROLE]:
-    """Return the role for a given API key, or None if unknown."""
-    return _KEY_MAP.get(api_key)
+    """Return the role for a given API key, or None if unknown.
+
+    Uses a constant-time scan over the key map instead of ``dict.get`` so the
+    response time does not leak whether a guessed key is a valid prefix. When
+    ``WAZUH_MCP_KEY_MAP`` is the only auth gate (no single ``WAZUH_MCP_API_KEY``
+    in front), this lookup *is* the authentication decision, so a plain dict
+    lookup would expose a timing oracle for key discovery.
+
+    Every entry is compared with :func:`hmac.compare_digest` and the loop never
+    short-circuits — the same work is done regardless of match position. Returns
+    the matched role, or ``None`` if no key matches.
+    """
+    # Encode to bytes: compare_digest on str rejects non-ASCII with TypeError,
+    # which a hostile caller could exploit as a separate oracle. Bytes comparison
+    # accepts any input and stays constant-time.
+    candidate = api_key.encode("utf-8", "surrogatepass")
+    matched: Optional[ROLE] = None
+    for known_key, role in _KEY_MAP.items():
+        if hmac.compare_digest(candidate, known_key.encode("utf-8", "surrogatepass")):
+            matched = role
+    return matched
 
 
 def set_session_role(role: ROLE) -> None:

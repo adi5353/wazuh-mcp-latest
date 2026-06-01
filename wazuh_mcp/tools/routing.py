@@ -12,6 +12,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 from .. import tool_contexts as tc
 from ..identity import get_identity_key
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 
 def register(ctx: ToolContext) -> None:

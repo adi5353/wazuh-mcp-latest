@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 
 import httpx
 
-from ..rbac import responder_only
+from ..rbac import responder_only, ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
 

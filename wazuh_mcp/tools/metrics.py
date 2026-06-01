@@ -7,6 +7,9 @@ import time
 import logging
 from collections import defaultdict
 
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
+
 log = logging.getLogger("wazuh-mcp")
 
 # In-process tool call tracker (populated by the sanitizing tool decorator via roi_tracker)

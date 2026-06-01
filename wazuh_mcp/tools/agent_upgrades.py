@@ -1,6 +1,9 @@
 """Agent upgrade management tools — trigger, track, and roll back agent upgrades."""
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.RESPONDER
 
 
 def register(ctx: ToolContext) -> None:

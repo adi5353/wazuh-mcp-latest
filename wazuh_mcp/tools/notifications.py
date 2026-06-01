@@ -12,6 +12,9 @@ from email.mime.text import MIMEText
 
 import httpx
 
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
+
 log = logging.getLogger("wazuh-mcp")
 
 _SOAR_TIMEOUT = 15

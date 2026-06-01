@@ -9,6 +9,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import json
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 # ── Exact system prompt from the n8n PoC document (WAI00001) ─────────────────
 # Reproduced verbatim from the Confluence export. Used as the AI Agent

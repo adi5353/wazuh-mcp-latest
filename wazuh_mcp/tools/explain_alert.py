@@ -7,6 +7,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import datetime
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 
 def _pair_mitre(ids: list, tactics: list | None) -> list[tuple]:

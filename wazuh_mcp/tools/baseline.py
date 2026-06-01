@@ -14,6 +14,10 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 log = logging.getLogger("wazuh-mcp")
 
 # In-memory cache: agent_id -> baseline dict (write-through to state_store)

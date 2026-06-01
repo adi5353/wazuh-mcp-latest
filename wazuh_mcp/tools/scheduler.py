@@ -17,7 +17,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..rbac import analyst_only, responder_only
+from ..rbac import analyst_only, responder_only, ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 from ..state_store import _state_dir
 
 log = logging.getLogger("wazuh-mcp")

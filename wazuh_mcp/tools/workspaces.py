@@ -23,6 +23,10 @@ import time
 import uuid
 from pathlib import Path
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 _wdir = os.getenv("WAZUH_WORKSPACE_DIR", "/app/workspaces")
 if _wdir.startswith("/tmp") or not os.path.ismount(_wdir):
     logging.getLogger("wazuh-mcp").warning(

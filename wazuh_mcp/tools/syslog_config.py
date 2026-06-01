@@ -7,6 +7,10 @@ from ..tool_context import ToolContext
 
 import asyncio
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.VIEWER
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp

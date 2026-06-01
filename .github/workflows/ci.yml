@@ -25,6 +25,8 @@ jobs:
         # Config in pyproject ([tool.mypy]) enables check_untyped_defs so this
         # actually checks function bodies instead of reporting a hollow "Success".
         run: mypy wazuh_mcp
+      - name: RBAC role declarations
+        run: python scripts/lint_tool_roles.py
 
   # ── 2. Security scan ──────────────────────────────────────────────────────
   security:

@@ -17,6 +17,10 @@ import os
 
 import httpx
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 log = logging.getLogger("wazuh-mcp")
 
 # Known cloud/datacenter ASN prefixes (major providers)

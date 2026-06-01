@@ -13,6 +13,8 @@ import ipaddress
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 log = logging.getLogger("wazuh-mcp")
 

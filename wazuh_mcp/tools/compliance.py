@@ -6,6 +6,10 @@ import datetime
 
 from ..helpers import trim_alert, time_window
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 COMPLIANCE_FIELDS = {
     "pci_dss": "rule.pci_dss",
     "hipaa": "rule.hipaa",

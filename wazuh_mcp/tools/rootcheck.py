@@ -5,6 +5,10 @@ These tools expose Wazuh's rootkit hunter scan results per agent.
 from __future__ import annotations
 from ..tool_context import ToolContext
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.VIEWER
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp

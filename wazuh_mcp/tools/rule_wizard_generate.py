@@ -7,6 +7,10 @@ from ..tool_context import ToolContext
 
 import re
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 # Sigma log source → Wazuh parent rule IDs (best-effort heuristic mapping)
 _SIGMA_LOGSOURCE_TO_PARENT: dict[str, int] = {
     "windows": 60000,

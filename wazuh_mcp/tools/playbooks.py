@@ -16,7 +16,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..rbac import responder_only
+from ..rbac import responder_only, ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
 

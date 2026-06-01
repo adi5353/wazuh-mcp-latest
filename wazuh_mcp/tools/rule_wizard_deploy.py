@@ -5,7 +5,8 @@ Handles: push_custom_rule, push_custom_decoder, sigma_bulk_import
 from __future__ import annotations
 from ..tool_context import ToolContext
 
-from ..rbac import admin_only
+from ..rbac import admin_only, ROLE
+REQUIRED_ROLE = ROLE.ADMIN
 
 
 def register_deploy(ctx: ToolContext) -> None:

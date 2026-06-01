@@ -12,6 +12,9 @@ from ..tool_context import ToolContext
 
 import os
 
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def _client():
     import httpx

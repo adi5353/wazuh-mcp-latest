@@ -11,6 +11,10 @@ import httpx
 from ..circuit_breaker import breaker
 import time
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 log = logging.getLogger("wazuh-mcp")
 
 # IOC result cache (Fix 1) — prevents repeated external API calls for same indicator
