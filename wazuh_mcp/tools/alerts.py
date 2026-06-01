@@ -3,11 +3,12 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 import re
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.VIEWER
+
 from ..helpers import trim_alert
 from ..validators import safe_validate, validate_time_range, validate_min_level, validate_agent_id, validate_ip_address, validate_limit
-
-from ..rbac import ROLE
-REQUIRED_ROLE = ROLE.VIEWER
 
 
 def _double_time_range(time_range: str) -> str:
@@ -96,6 +97,8 @@ def register(ctx: ToolContext) -> None:
             "top_rules_prior": {"terms": {"field": "rule.id", "size": 10}},
         }
 
+        trend_degraded = False
+        trend_error: str | None = None
         try:
             prior_res = await idx.search(prior_body)
             prior_total = prior_res["hits"]["total"]["value"]
@@ -113,11 +116,16 @@ def register(ctx: ToolContext) -> None:
                 b["key"]: b["doc_count"]
                 for b in prior_res.get("aggregations", {}).get("top_rules_prior", {}).get("buckets", [])
             }
-        except Exception:
+        except Exception as exc:
+            # Prior-period query failed: the primary summary is still valid, but
+            # trend data is missing. Surface this explicitly (rather than
+            # returning a silent "?" the LLM can't distinguish from real data).
             prior_total = None
             trend_pct = None
             trend_arrow = "?"
             prior_rule_counts = {}
+            trend_degraded = True
+            trend_error = str(exc)
 
         raw_techniques = [b["key"] for b in aggs["top_mitre"]["buckets"]]
         enriched_techniques = _enrich_mitre_ids(raw_techniques)
@@ -132,6 +140,8 @@ def register(ctx: ToolContext) -> None:
                 "prior_period_total": prior_total,
                 "delta_pct": trend_pct,
                 "direction": trend_arrow,
+                "degraded": trend_degraded,
+                **({"degraded_reason": trend_error} if trend_degraded else {}),
             },
             "by_level": [
                 {"level": b["key"], "count": b["doc_count"]}

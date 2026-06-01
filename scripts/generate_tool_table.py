@@ -19,11 +19,18 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = ROOT / "wazuh_mcp"
 README = ROOT / "README.md"
+INIT = PKG / "__init__.py"
 OUT = ROOT / "docs" / "TOOL_TABLE.md"
 
 _TOOL_DEC = re.compile(r"@mcp\.tool\(")
 _PROMPT_DEC = re.compile(r"@mcp\.prompt\(")
 _DEF = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)\s*\(")
+
+# Headline in README, e.g. "**242 tools** across 55 domain modules"
+_HEADLINE = re.compile(r"\*\*(\d+) tools\*\* across (\d+) domain modules")
+# First version heading in README, e.g. "### v2.4 — ..."
+_README_VERSION = re.compile(r"^###\s*v(\d+)\.(\d+)", re.MULTILINE)
+_INIT_VERSION = re.compile(r'__version__\s*=\s*["\'](\d+)\.(\d+)')
 
 
 def _names_after(decorator: re.Pattern, text: str) -> list[str]:
@@ -90,12 +97,39 @@ def main() -> int:
 
     if args.check:
         readme = README.read_text(encoding="utf-8")
-        if str(data["total_tools"]) not in readme:
-            print(f"STALE: README does not mention current tool count "
-                  f"({data['total_tools']}). Run generate_tool_table.py and update README.",
-                  file=sys.stderr)
+        errors: list[str] = []
+
+        # 1. Exact headline must match the live tool/module counts (substring
+        #    matching is too weak — a stale "239" can coincidentally appear).
+        m = _HEADLINE.search(readme)
+        if not m:
+            errors.append(
+                "README headline '**N tools** across M domain modules' not found."
+            )
+        else:
+            r_tools, r_modules = int(m.group(1)), int(m.group(2))
+            if r_tools != data["total_tools"] or r_modules != data["tool_modules"]:
+                errors.append(
+                    f"README headline is stale: says {r_tools} tools / {r_modules} "
+                    f"modules, actual is {data['total_tools']} tools / "
+                    f"{data['tool_modules']} modules. Run generate_tool_table.py."
+                )
+
+        # 2. README's latest version heading must match __version__ (major.minor).
+        iv = _INIT_VERSION.search(INIT.read_text(encoding="utf-8"))
+        rv = _README_VERSION.search(readme)
+        if iv and rv and (iv.group(1), iv.group(2)) != (rv.group(1), rv.group(2)):
+            errors.append(
+                f"Version mismatch: __version__ is {iv.group(1)}.{iv.group(2)}.x "
+                f"but README's latest section is v{rv.group(1)}.{rv.group(2)}."
+            )
+
+        if errors:
+            for e in errors:
+                print(f"STALE: {e}", file=sys.stderr)
             return 1
-        print(f"OK: README references current tool count ({data['total_tools']}).")
+        print(f"OK: README headline ({data['total_tools']} tools / "
+              f"{data['tool_modules']} modules) and version are consistent.")
         return 0
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

@@ -31,7 +31,8 @@ Flow:
 from __future__ import annotations
 
 import os
-import threading
+
+from .bounded_state import BoundedTTLStore
 
 CORE = "core"  # always-on: never gated
 
@@ -92,35 +93,45 @@ def context_of(tool_name: str) -> str:
 
 # ── Per-identity active contexts (persists across HTTP requests) ──────────────
 # Keyed by the caller identity hash (see identity.get_identity_key). A ContextVar
-# would reset every HTTP request; a process-wide dict lets a caller's chosen
-# context survive across the multiple requests of one MCP session.
-_active: dict[str, set[str]] = {}
-_lock = threading.Lock()
+# would reset every HTTP request; a process-wide store lets a caller's chosen
+# context survive across the multiple requests of one MCP session. Bounded by
+# size + idle-TTL so a long-lived server can't leak memory across many callers.
+_MAX_TRACKED_IDENTITIES = int(os.getenv("WAZUH_MCP_MAX_TRACKED_IDENTITIES", "10000"))
+_IDENTITY_TTL_SECONDS = float(os.getenv("WAZUH_MCP_IDENTITY_TTL_SECONDS", "86400"))
+
+_active: BoundedTTLStore[set] = BoundedTTLStore(
+    max_entries=_MAX_TRACKED_IDENTITIES,
+    ttl_seconds=_IDENTITY_TTL_SECONDS,
+    default_factory=set,
+)
 
 
 def active_contexts(identity: str) -> set[str]:
-    with _lock:
-        return set(_active.get(identity, set()))
+    return set(_active.get(identity) or set())
 
 
 def enter_context(identity: str, context: str) -> set[str]:
     """Activate *context* for *identity*. Returns the new active set."""
-    with _lock:
-        cur = _active.setdefault(identity, set())
-        cur.add(context)
-        return set(cur)
+    cur = _active.get_or_create(identity)
+    cur.add(context)
+    return set(cur)
 
 
 def exit_context(identity: str, context: str) -> set[str]:
-    with _lock:
-        cur = _active.setdefault(identity, set())
-        cur.discard(context)
-        return set(cur)
+    cur = _active.get(identity)
+    if cur is None:
+        return set()
+    cur.discard(context)
+    return set(cur)
 
 
 def reset_contexts(identity: str) -> None:
-    with _lock:
-        _active.pop(identity, None)
+    _active.pop(identity)
+
+
+def tracked_identity_count() -> int:
+    """Number of identities with active operational contexts (for metrics)."""
+    return len(_active)
 
 
 def is_tool_allowed(tool_name: str, identity: str) -> bool:

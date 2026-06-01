@@ -249,16 +249,27 @@ _AUDIT_LOG_PATH = Path(os.getenv("WAZUH_AUDIT_LOG", "logs/audit.jsonl"))
 _AUDIT_MAX_BYTES:    int = int(os.getenv("WAZUH_AUDIT_MAX_BYTES",    str(50 * 1024 * 1024)))
 _AUDIT_BACKUP_COUNT: int = int(os.getenv("WAZUH_AUDIT_BACKUP_COUNT", "7"))
 
-# Optional HMAC signing key — set WAZUH_AUDIT_LOG_SIGNING_KEY to enable tamper detection.
+# HMAC signing key — set WAZUH_AUDIT_LOG_SIGNING_KEY to enable tamper detection.
+# In the production profile (WAZUH_MCP_PROFILE=production) a missing key is fatal:
+# a forensic/compliance audit trail must not be silently unsigned. In dev (default)
+# it degrades to a warning so local runs aren't blocked.
 _SIGNING_KEY: str = os.getenv("WAZUH_AUDIT_LOG_SIGNING_KEY", "")
+_PROFILE: str = os.getenv("WAZUH_MCP_PROFILE", "dev").strip().lower()
 
 if not _SIGNING_KEY:
-    logging.getLogger("wazuh_mcp.audit").warning(
+    _unsigned_msg = (
         "WAZUH_AUDIT_LOG_SIGNING_KEY is not set — audit records will be written "
         "WITHOUT HMAC signatures. Tamper detection is disabled. "
         "Set this env var to a random secret (e.g. `openssl rand -hex 32`) "
         "to enable integrity verification for compliance and forensic audit trails."
     )
+    if _PROFILE in ("production", "prod"):
+        raise RuntimeError(
+            "Refusing to start in production profile without audit log signing. "
+            + _unsigned_msg
+            + " (Set WAZUH_MCP_PROFILE=dev to permit unsigned audit logs outside production.)"
+        )
+    logging.getLogger("wazuh_mcp.audit").warning(_unsigned_msg)
 
 # ── Rotating file handler (lazy-initialised on first write) ───────────────────
 import threading as _threading

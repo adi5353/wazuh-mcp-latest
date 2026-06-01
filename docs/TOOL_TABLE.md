@@ -1,6 +1,6 @@
 # Tool Inventory (auto-generated)
 
-**239 tools** across **54 domain modules** in `wazuh_mcp/tools/`, plus **16 MCP prompts**.
+**242 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
 
@@ -301,6 +301,12 @@
 - `clear_rootcheck_results`
 - `get_agent_rootcheck_results`
 - `get_rootcheck_last_scan`
+
+### `tools/routing` (3)
+
+- `enter_operational_context`
+- `exit_operational_context`
+- `list_operational_contexts`
 
 ### `tools/rule_wizard_deploy` (3)
 

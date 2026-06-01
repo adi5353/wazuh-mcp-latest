@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 1.x (latest) | Yes — receives security patches |
-| < 1.0 | No |
+| 2.x (latest) | Yes — receives security patches |
+| < 2.0 | No |
 
 ## Reporting a Vulnerability
 
@@ -40,7 +40,7 @@ All tool inputs are sanitized for prompt injection patterns, length limits, and 
 All tool outputs are scanned for prompt injection tokens, plaintext secrets, PII (emails, SSNs, credit card numbers), and executable code patterns before being returned to the LLM client.
 
 ### Audit trail
-Every tool invocation is written to `logs/audit.jsonl` (rotating, configurable via `WAZUH_AUDIT_MAX_BYTES`). Optional HMAC-SHA256 signing via `WAZUH_AUDIT_LOG_SIGNING_KEY` for tamper detection.
+Every tool invocation is written to `logs/audit.jsonl` (rotating, configurable via `WAZUH_AUDIT_MAX_BYTES`). HMAC-SHA256 signing via `WAZUH_AUDIT_LOG_SIGNING_KEY` provides tamper detection. In the production profile (`WAZUH_MCP_PROFILE=production`) a missing signing key is **fatal at startup**; in the default dev profile it degrades to a warning.
 
 ### Network security
 - TLS support via `WAZUH_MCP_TLS_CERT` / `WAZUH_MCP_TLS_KEY` (mTLS supported)
