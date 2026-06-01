@@ -12,7 +12,7 @@ REQUIRED_ROLE = ROLE.RESPONDER
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..rbac import responder_only, admin_only
+from ..rbac import require_responder_or_above, require_admin_or_above
 
 
 def register(ctx: ToolContext) -> None:
@@ -41,7 +41,7 @@ def register(ctx: ToolContext) -> None:
         key: the IP/domain/hash to add
         value: label, e.g. 'c2-server', 'attacker', 'phishing'
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
         blocked = _require_writes()
@@ -67,7 +67,7 @@ def register(ctx: ToolContext) -> None:
         """Remove an entry from a CDB list. Requires WAZUH_ALLOW_WRITES=true.
         Requires role: responder or above.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
         blocked = _require_writes()
@@ -147,7 +147,7 @@ def register(ctx: ToolContext) -> None:
 
         Returns the backup file path and a summary of exported entries.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -224,7 +224,7 @@ def register(ctx: ToolContext) -> None:
         backup_file: absolute path to the JSON backup file.
         Requires role: admin. Requires WAZUH_ALLOW_WRITES=true.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 

@@ -14,8 +14,8 @@ from wazuh_mcp.tool_context import ToolContext
 class TestRBAC:
     def test_viewer_blocked_from_responder_tool(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            from wazuh_mcp.rbac import responder_only
-            err = responder_only()
+            from wazuh_mcp.rbac import require_responder_or_above
+            err = require_responder_or_above()
             assert err is not None
             assert "error" in err
             assert "responder" in err["error"]
@@ -23,40 +23,40 @@ class TestRBAC:
 
     def test_analyst_blocked_from_responder_tool(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "analyst"}):
-            from wazuh_mcp.rbac import responder_only
-            err = responder_only()
+            from wazuh_mcp.rbac import require_responder_or_above
+            err = require_responder_or_above()
             assert err is not None
             assert err["required_role"] == "responder"
 
     def test_responder_passes_responder_check(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
-            from wazuh_mcp.rbac import responder_only
-            err = responder_only()
+            from wazuh_mcp.rbac import require_responder_or_above
+            err = require_responder_or_above()
             assert err is None
 
     def test_admin_passes_responder_check(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "admin"}):
-            from wazuh_mcp.rbac import responder_only
-            err = responder_only()
+            from wazuh_mcp.rbac import require_responder_or_above
+            err = require_responder_or_above()
             assert err is None
 
     def test_viewer_blocked_from_admin_tool(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            from wazuh_mcp.rbac import admin_only
-            err = admin_only()
+            from wazuh_mcp.rbac import require_admin_or_above
+            err = require_admin_or_above()
             assert err is not None
             assert err["required_role"] == "admin"
 
     def test_responder_blocked_from_admin_tool(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "responder"}):
-            from wazuh_mcp.rbac import admin_only
-            err = admin_only()
+            from wazuh_mcp.rbac import require_admin_or_above
+            err = require_admin_or_above()
             assert err is not None
 
     def test_admin_passes_admin_check(self):
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "admin"}):
-            from wazuh_mcp.rbac import admin_only
-            err = admin_only()
+            from wazuh_mcp.rbac import require_admin_or_above
+            err = require_admin_or_above()
             assert err is None
 
     def test_default_role_is_viewer_when_env_unset(self):

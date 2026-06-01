@@ -51,11 +51,17 @@ addopts = [
     "--cov=wazuh_mcp",
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
-    "--cov-fail-under=80",   # enterprise gate — covers input sanitization, RBAC, and client/comms layers
+    # Honest baseline. The gate is measured ONLY over behaviour-asserting tests:
+    # `-m "not smoke"` excludes the coverage-padding suites (see `smoke` marker).
+    # This number reflects real verified surface — ratchet it UP over time, never down.
+    "--cov-fail-under=48",
+    "-m", "not smoke and not perf and not integration",
 ]
 markers = [
     "requires_indexer: marks tests that need a live Wazuh Indexer (exclude from default CI run with --ignore=tests/test_roi_autonomous.py)",
     "integration: marks integration tests that need live Wazuh infrastructure",
+    "smoke: breadth tests against mocked clients; catch crashes/imports but assert little. Excluded from the coverage gate. Run explicitly with `pytest -m smoke`.",
+    "perf: wall-clock timing benchmarks; environment-dependent and non-gating. Run explicitly with `pytest -m perf`.",
 ]
 
 [tool.coverage.run]
@@ -96,6 +102,16 @@ skips = [
 severity = "medium"
 confidence = "medium"
 
+# ── mypy type checking ────────────────────────────────────────────────────────
+# `check_untyped_defs` gives the gate teeth: without it mypy skips the bodies of
+# unannotated functions and reports a hollow "Success" while checking almost
+# nothing. This is the honest baseline — ratchet stricter over time (e.g. enable
+# disallow_untyped_defs on the security spine: rbac/identity/input_sanitizer/audit).
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+
 # ── Ruff linting ──────────────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 120
@@ -112,8 +128,9 @@ ignore = [
     "E741",   # ambiguous variable name — pre-existing (l in list comprehensions)
     "F401",   # imported but unused — many are re-exported or conditionally used
     "F541",   # f-string without placeholders — pre-existing in wizard prompts
-    "F601",   # duplicate dict key — pre-existing in tool registry
-    "F811",   # redefinition of unused name — intentional override pattern
-    "F821",   # undefined name — occurs in optional/conditional scopes
-    "F841",   # local variable assigned but never used — pre-existing
+    "F841",   # local variable assigned but never used — pre-existing (84 sites)
+    # NOTE: F821 (undefined name), F601 (duplicate dict key) and F811
+    # (redefinition of unused name) are intentionally NOT ignored — they catch
+    # genuine bugs (NameError, silently-dropped dict entries, shadowed imports),
+    # not style. The codebase is clean of them; keep it that way.
 ]

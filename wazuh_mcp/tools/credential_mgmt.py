@@ -17,7 +17,7 @@ import time
 
 REQUIRED_ROLE = ROLE.ADMIN
 
-from ..rbac import admin_only
+from ..rbac import require_admin_or_above
 from ..validators import safe_validate, validate_free_text
 
 
@@ -84,7 +84,7 @@ def register(ctx: ToolContext) -> None:
         dry_run=True (default): validate inputs without making changes.
         Requires role: admin. Requires WAZUH_ALLOW_WRITES=true.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 

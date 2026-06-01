@@ -61,6 +61,70 @@ _MODULE_TO_CONTEXT: dict[str, str] = {
 }
 
 
+# ── Static, deployment-level module scoping (registration-time) ────────────────
+# Orthogonal to both role-based registration filtering and per-session context
+# gating: lets an operator pin the *advertised* tool surface for the whole
+# process via env vars. This is the non-breaking answer to "242 tools is a lot of
+# context" — no tool is renamed; a deployment simply chooses which domain modules
+# to load. Default (both unset) = every module registers, identical to before.
+#
+#   WAZUH_MCP_ENABLED_MODULES  — allowlist. If set, ONLY these register.
+#   WAZUH_MCP_DISABLED_MODULES — denylist. Always removed, even if also enabled.
+#
+# Both accept comma-separated entries that are either a tool module name
+# (e.g. "alerts", "vulnerabilities") or a context-group name from
+# CONTEXT_MODULES (e.g. "threat_hunting" expands to all its modules).
+
+def _parse_module_set(env_value: str) -> set[str]:
+    """Expand a comma-separated env value into a concrete set of module names.
+
+    Group names (keys of CONTEXT_MODULES) expand to their member modules;
+    everything else is treated as a literal module name. Blank/whitespace
+    entries are ignored.
+    """
+    out: set[str] = set()
+    for raw in env_value.split(","):
+        name = raw.strip()
+        if not name:
+            continue
+        if name in CONTEXT_MODULES:
+            out.update(CONTEXT_MODULES[name])
+        else:
+            out.add(name)
+    return out
+
+
+def module_registration_allowed(modname: str) -> bool:
+    """Return True if *modname* should be registered under the env scoping.
+
+    Precedence: a module must be in the allowlist (when one is set) AND must not
+    be in the denylist. With neither env var set, every module is allowed.
+    """
+    enabled = _parse_module_set(os.getenv("WAZUH_MCP_ENABLED_MODULES", ""))
+    disabled = _parse_module_set(os.getenv("WAZUH_MCP_DISABLED_MODULES", ""))
+    if enabled and modname not in enabled:
+        return False
+    if modname in disabled:
+        return False
+    return True
+
+
+def unknown_scoping_names(valid_modules: set[str]) -> set[str]:
+    """Return env-listed names that match neither a module nor a group.
+
+    Lets the server warn on typos (e.g. WAZUH_MCP_DISABLED_MODULES=alert) instead
+    of silently scoping nothing — *valid_modules* is the set of discovered tool
+    module names. Group names are always considered valid.
+    """
+    listed: set[str] = set()
+    for var in ("WAZUH_MCP_ENABLED_MODULES", "WAZUH_MCP_DISABLED_MODULES"):
+        for raw in os.getenv(var, "").split(","):
+            name = raw.strip()
+            if name:
+                listed.add(name)
+    return {n for n in listed if n not in valid_modules and n not in CONTEXT_MODULES}
+
+
 def gating_enabled() -> bool:
     return os.getenv("WAZUH_MCP_CONTEXT_GATING", "").strip().lower() in ("1", "true", "yes")
 

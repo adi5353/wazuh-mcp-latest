@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 import json as _json
 
-from ..rbac import analyst_only, admin_only, ROLE
+from ..rbac import require_analyst_or_above, require_admin_or_above, ROLE
 
 REQUIRED_ROLE = ROLE.RESPONDER
 
@@ -77,7 +77,7 @@ def register(ctx: ToolContext) -> None:
         log_format: syslog | json | audit | eventchannel | apache | nginx
         Requires role: analyst.
         """
-        err = analyst_only()
+        err = require_analyst_or_above()
         if err:
             return err
 
@@ -121,7 +121,7 @@ def register(ctx: ToolContext) -> None:
         """Test up to 20 log samples and report what percentage your ruleset covers.
         Requires role: analyst.
         """
-        err = analyst_only()
+        err = require_analyst_or_above()
         if err:
             return err
         results = []
@@ -163,7 +163,7 @@ def register(ctx: ToolContext) -> None:
         filename: rule filename under etc/rules/ that was previously pushed.
         Requires role: admin.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -217,7 +217,7 @@ def register(ctx: ToolContext) -> None:
         decoder_name:  Optional — if provided, checks whether this decoder matched.
         Requires role: analyst.
         """
-        err = analyst_only()
+        err = require_analyst_or_above()
         if err:
             return err
 

@@ -71,13 +71,29 @@ try:
     log = structlog.get_logger("wazuh-mcp")
     _structlog_available = True
 except ImportError:
+    # structlog is a required dependency (see pyproject) and is imported
+    # unconditionally by logging_config, so this branch should never run in a
+    # correctly-installed environment. It remains as a safety net — and it must
+    # NOT be a security downgrade: attach a RedactingFilter so secrets are
+    # scrubbed even without the structlog redaction processor.
+    from .logging_config import RedactingFilter
+
     logging.basicConfig(
         level=logging.INFO,
         stream=sys.stderr,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logging.getLogger().addFilter(RedactingFilter())
     log = logging.getLogger("wazuh-mcp")  # type: ignore[assignment]
     _structlog_available = False
+
+# Clamp chatty third-party loggers regardless of which path configured logging:
+# httpx/httpcore log Authorization headers (VirusTotal/AbuseIPDB keys) at DEBUG.
+try:
+    from .logging_config import quiet_noisy_loggers
+    quiet_noisy_loggers()
+except Exception:  # pragma: no cover — never block startup on log hardening
+    pass
 
 # ── H1: /health auth check — pure function, module-level for testability ──────
 
@@ -109,8 +125,10 @@ idx = WazuhIndexer(cfg)
 # its own tenant client without affecting other concurrent sessions.
 _ctx_wz: contextvars.ContextVar[WazuhClient] = contextvars.ContextVar("_ctx_wz")
 _ctx_idx: contextvars.ContextVar[WazuhIndexer] = contextvars.ContextVar("_ctx_idx")
+# No mutable default: a shared default dict would be visible across every
+# session that never calls .set(). Readers pass their own fallback: .get({}).
 _ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
-    "_ctx_active_tenant", default={}
+    "_ctx_active_tenant"
 )
 
 
@@ -218,8 +236,27 @@ _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
 from . import tool_contexts as _tool_contexts  # noqa: E402
 
+# Deployment-level tool scoping (P2#6): operators can pin the advertised tool
+# surface via WAZUH_MCP_ENABLED_MODULES / WAZUH_MCP_DISABLED_MODULES without
+# renaming anything. Warn (don't fail) on typo'd names so a misspelled entry
+# can't silently scope the wrong set.
+_all_tool_modules = {
+    _m for _i, _m, _p in pkgutil.iter_modules(_tools_pkg.__path__) if _m != "__init__"
+}
+_unknown_scoping = _tool_contexts.unknown_scoping_names(_all_tool_modules)
+if _unknown_scoping:
+    log.warning(
+        "WAZUH_MCP_ENABLED/DISABLED_MODULES contains unknown names (ignored): %s. "
+        "Use a tools/*.py module name or a context-group name (%s).",
+        sorted(_unknown_scoping), sorted(_tool_contexts.CONTEXT_MODULES),
+    )
+
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
+        continue
+    # Static deployment scoping — skip modules excluded by env allowlist/denylist.
+    if not _tool_contexts.module_registration_allowed(_modname):
+        log.info("Skipping tool module '%s' — excluded by WAZUH_MCP_ENABLED/DISABLED_MODULES", _modname)
         continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if not hasattr(_mod, "register"):
@@ -245,6 +282,9 @@ for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
 
 # Register deferred modules (those that depend on ctx.shared populated above)
 for _modname in _DEFERRED:
+    if not _tool_contexts.module_registration_allowed(_modname):
+        log.info("Skipping tool module '%s' — excluded by WAZUH_MCP_ENABLED/DISABLED_MODULES", _modname)
+        continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
         try:
@@ -799,8 +839,10 @@ def main() -> None:
             # API or the locally-maintained _TOOL_REGISTRY as a last resort.
             tools_list = []
             try:
-                # Preferred: public API (MCP SDK >= 1.2)
-                tool_iter = mcp.get_tools() if callable(getattr(mcp, "get_tools", None)) else None
+                # Preferred: public API (MCP SDK >= 1.2). Access via getattr so the
+                # call type-checks across SDK versions that lack the method.
+                _get_tools = getattr(mcp, "get_tools", None)
+                tool_iter = _get_tools() if callable(_get_tools) else None
                 if tool_iter is None:
                     # Fall back to private attr (MCP SDK < 1.2) under try/except
                     _raw = mcp._tools  # type: ignore[attr-defined]
@@ -848,6 +890,9 @@ def main() -> None:
 
         # ── Gap 10: Graceful SIGTERM shutdown ──────────────────────────────
         _uvicorn_server: list = []  # populated after server starts
+        # Hold strong references to shutdown tasks: create_task() only keeps a
+        # weak ref, so without this the GC can cancel cleanup mid-flight.
+        _shutdown_tasks: set = set()
 
         def _sigterm_handler(signum, frame):  # type: ignore[no-untyped-def]
             log.info(
@@ -863,11 +908,16 @@ def main() -> None:
             from .tools.servicenow import close_snow_client
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(_wz_proxy._client.aclose())
-                loop.create_task(_idx_proxy._client.aclose())
-                loop.create_task(close_shared_ti_clients())
-                loop.create_task(close_soar_client())
-                loop.create_task(close_snow_client())
+                for _coro in (
+                    _wz_proxy._client.aclose(),
+                    _idx_proxy._client.aclose(),
+                    close_shared_ti_clients(),
+                    close_soar_client(),
+                    close_snow_client(),
+                ):
+                    _task = loop.create_task(_coro)
+                    _shutdown_tasks.add(_task)
+                    _task.add_done_callback(_shutdown_tasks.discard)
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
 

@@ -4,6 +4,13 @@ These tests use mocked contexts to exercise code paths without needing live infr
 """
 from __future__ import annotations
 
+import pytest
+
+# Quarantined from the coverage gate: these exercise code paths against mocked
+# clients to catch crashes/imports, but assert little real behaviour. Run via
+# `pytest -m smoke`; excluded from the gated run by `-m "not smoke"` (pyproject).
+pytestmark = pytest.mark.smoke
+
 import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -495,10 +502,10 @@ class TestRBACModule:
     def test_convenience_aliases(self):
         from wazuh_mcp import rbac
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            assert rbac.analyst_only() is not None  # viewer < analyst
-            assert rbac.responder_only() is not None
-            assert rbac.admin_only() is not None
-            assert rbac.viewer_only() is None  # viewer >= viewer
+            assert rbac.require_analyst_or_above() is not None  # viewer < analyst
+            assert rbac.require_responder_or_above() is not None
+            assert rbac.require_admin_or_above() is not None
+            assert rbac.require_viewer_or_above() is None  # viewer >= viewer
 
 
 # ── circuit_breaker.py ────────────────────────────────────────────────────────

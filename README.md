@@ -9,7 +9,7 @@
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
-[![Tools](https://img.shields.io/badge/tools-239-brightgreen)](#tool-reference)
+[![Tools](https://img.shields.io/badge/tools-242-brightgreen)](#tool-reference)
 
 ---
 
@@ -476,7 +476,9 @@ See `claude_desktop_config.example.json` for annotated examples of all three opt
 | `WAZUH_ALLOW_WRITES` | `false` | Enable write tools (restart, active response, CDB edits) |
 | `WAZUH_MCP_API_KEY` | — | Bearer token required on all HTTP requests (recommended). Also maps to a session role via `WAZUH_MCP_KEY_MAP` |
 | `WAZUH_MCP_ALLOWED_HOSTS` | — | Comma-separated extra Host header values permitted by DNS-rebinding protection (add your server hostname for mcp-remote) |
-| `WAZUH_MCP_USER_ROLE` | `viewer` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin`. Unknown values fail closed to `viewer` |
+| `WAZUH_MCP_USER_ROLE` | `viewer` | RBAC tier: `viewer` \| `analyst` \| `responder` \| `admin`. Unknown values fail closed to `viewer`. Also shrinks the advertised tool list — lower tiers register fewer tools |
+| `WAZUH_MCP_ENABLED_MODULES` | — | Comma-separated allowlist of tool **modules** to load (e.g. `alerts,vulnerabilities,fim`). When set, ONLY these register. Accepts context-group names too (`threat_hunting`, `active_response`, `compliance`, `system_health`) which expand to their members. Unset = all modules (default). Use this to keep the tool list lean for a focused deployment |
+| `WAZUH_MCP_DISABLED_MODULES` | — | Comma-separated denylist of tool modules (or groups) to skip, e.g. `servicenow,azure_devops`. Always wins over the allowlist. Unknown names are ignored with a startup warning |
 | `WAZUH_MCP_SCRUB_PII` | `false` | Redact emails/SSNs/credit-card numbers from tool output. Off by default so IPs/emails that are the analyst's answer aren't mangled (secret + prompt-injection filtering are always on). When off **and** a remote cloud LLM is suspected, the server logs a loud compliance warning on boot |
 | `WAZUH_MCP_LOCAL_LLM` | `false` | Declare that an on-prem/local model (e.g. Ollama) consumes output — suppresses the PII boot warning |
 | `WAZUH_MCP_PII_SCRUB_ACK` | `false` | Explicitly acknowledge running with PII scrubbing off to a cloud LLM — downgrades the boot error to a warning |

@@ -15,6 +15,12 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+import pytest
+
+# Wall-clock timing thresholds are environment-dependent and flake on shared CI
+# runners, so they do NOT gate the build. Run intentionally with `pytest -m perf`.
+pytestmark = pytest.mark.perf
+
 
 # ── Timing helper ─────────────────────────────────────────────────────────────
 

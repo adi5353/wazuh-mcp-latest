@@ -2,7 +2,7 @@
 from __future__ import annotations
 from ..tool_context import ToolContext
 
-from ..rbac import responder_only, admin_only, ROLE
+from ..rbac import require_responder_or_above, require_admin_or_above, ROLE
 REQUIRED_ROLE = ROLE.VIEWER
 from ..validators import validate_active_response_target, validate_ar_command
 
@@ -42,7 +42,7 @@ def register(ctx: ToolContext) -> None:
         Set dry_run=False to actually restart. Requires WAZUH_ALLOW_WRITES=true.
         Requires role: responder or above.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
         if dry_run:
@@ -69,7 +69,7 @@ def register(ctx: ToolContext) -> None:
         Set dry_run=False to actually trigger. Requires WAZUH_ALLOW_WRITES=true.
         Requires role: responder or above.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 
@@ -117,7 +117,7 @@ def register(ctx: ToolContext) -> None:
         """Assign an agent to a group. Destructive — requires WAZUH_ALLOW_WRITES=true.
         Requires role: admin.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
         blocked = _require_writes()

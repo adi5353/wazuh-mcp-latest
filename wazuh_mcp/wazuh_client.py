@@ -6,8 +6,10 @@ Retry policy (Gap 12):
   Does NOT retry 4xx client errors (except 429 Too Many Requests).
 
 Connection pooling:
-  A single httpx.AsyncClient is shared across all requests (20 max connections,
-  10 keepalive). Call aclose() / use as async context manager on server shutdown.
+  A single httpx.AsyncClient is shared across all requests (100 max connections,
+  40 keepalive by default — override via WAZUH_HTTP_POOL_SIZE and
+  WAZUH_HTTP_MAX_KEEPALIVE). Call aclose() / use as async context manager on
+  server shutdown.
 """
 from __future__ import annotations
 import asyncio

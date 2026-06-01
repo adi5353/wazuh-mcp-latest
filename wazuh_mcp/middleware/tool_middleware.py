@@ -107,7 +107,7 @@ class ToolMiddleware:
                 from ..tool_failure_breaker import tool_failure_breaker as _tfb, is_failure_result
                 from ..tool_contexts import is_tool_allowed, gate_message
 
-                # ── Structured-logging context ────────────────────────────
+                # ── Structured-logging context (Improvement 3) ───────────
                 # Bind a per-call trace_id + tool + identity so EVERY log line
                 # emitted during this single tool execution can be correlated.
                 bind_request_context(fn.__name__, _ctx_identity_key.get(None) or "local")
