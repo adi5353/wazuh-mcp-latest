@@ -104,10 +104,10 @@ class ToolMiddleware:
                 from ..identity import record_injection_attempt, _ctx_identity_key, get_identity_key
                 from ..audit import sanitize_response, cap_response_size, sanitize_string
                 from ..logging_config import bind_request_context, clear_request_context
-                from ..tool_failure_breaker import tool_failure_breaker as _tfb, is_failure_result
+                from ..tool_failure_breaker import tool_failure_breaker as _tfb
                 from ..tool_contexts import is_tool_allowed, gate_message
 
-                # ── Structured-logging context ────────────────────────────
+                # ── Structured-logging context (Improvement 3) ───────────
                 # Bind a per-call trace_id + tool + identity so EVERY log line
                 # emitted during this single tool execution can be correlated.
                 bind_request_context(fn.__name__, _ctx_identity_key.get(None) or "local")
@@ -158,13 +158,9 @@ class ToolMiddleware:
                         raise
                     duration = time.monotonic() - t0
 
-                    # Single failure contract (see tool_failure_breaker): any
-                    # standardized failure shape ({"error"} or {"execute_error"})
-                    # trips the breaker and counts as an error in metrics; any
-                    # other shape resets the streak. Keeps detection reliable
-                    # across tools that use different keys.
-                    _failed = is_failure_result(result)
-                    if _failed:
+                    # A tool that returns {"error": ...} counts as a failure
+                    # for the breaker; any other shape resets the streak.
+                    if isinstance(result, dict) and "error" in result:
                         _tfb.record_failure(_identity, _tool_name, clean_kwargs)
                     else:
                         _tfb.record_success(_identity, _tool_name, clean_kwargs)
@@ -176,7 +172,7 @@ class ToolMiddleware:
                         pass
                     try:
                         from ..tools.metrics import record_tool_call
-                        record_tool_call(fn.__name__, duration, had_error=_failed)
+                        record_tool_call(fn.__name__, duration)
                     except Exception:
                         pass
 
