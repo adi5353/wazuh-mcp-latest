@@ -71,13 +71,29 @@ try:
     log = structlog.get_logger("wazuh-mcp")
     _structlog_available = True
 except ImportError:
+    # structlog is a required dependency (see pyproject) and is imported
+    # unconditionally by logging_config, so this branch should never run in a
+    # correctly-installed environment. It remains as a safety net — and it must
+    # NOT be a security downgrade: attach a RedactingFilter so secrets are
+    # scrubbed even without the structlog redaction processor.
+    from .logging_config import RedactingFilter
+
     logging.basicConfig(
         level=logging.INFO,
         stream=sys.stderr,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logging.getLogger().addFilter(RedactingFilter())
     log = logging.getLogger("wazuh-mcp")  # type: ignore[assignment]
     _structlog_available = False
+
+# Clamp chatty third-party loggers regardless of which path configured logging:
+# httpx/httpcore log Authorization headers (VirusTotal/AbuseIPDB keys) at DEBUG.
+try:
+    from .logging_config import quiet_noisy_loggers
+    quiet_noisy_loggers()
+except Exception:  # pragma: no cover — never block startup on log hardening
+    pass
 
 # ── H1: /health auth check — pure function, module-level for testability ──────
 
