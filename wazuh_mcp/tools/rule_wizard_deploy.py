@@ -5,7 +5,7 @@ Handles: push_custom_rule, push_custom_decoder, sigma_bulk_import
 from __future__ import annotations
 from ..tool_context import ToolContext
 
-from ..rbac import admin_only, ROLE
+from ..rbac import require_admin_or_above, ROLE
 REQUIRED_ROLE = ROLE.ADMIN
 
 
@@ -32,7 +32,7 @@ def register_deploy(ctx: ToolContext) -> None:
         dry_run=True (default): validate only, do not push.
         Requires role: admin. Requires WAZUH_ALLOW_WRITES=true.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -123,7 +123,7 @@ def register_deploy(ctx: ToolContext) -> None:
               <order>user, action</order>
             </decoder>
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -297,7 +297,7 @@ def register_deploy(ctx: ToolContext) -> None:
                 pushed = False
                 push_error = None
                 if push_all and not dry_run:
-                    err = admin_only()
+                    err = require_admin_or_above()
                     if err:
                         push_error = "Insufficient role for push"
                     else:

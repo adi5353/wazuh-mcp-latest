@@ -86,8 +86,8 @@ def register(ctx: ToolContext) -> None:
 
         Requires ADMIN role and WAZUH_ALLOW_WRITES=true. dry_run=True by default.
         """
-        from ..rbac import admin_only
-        err = admin_only()
+        from ..rbac import require_admin_or_above
+        err = require_admin_or_above()
         if err:
             return err
 

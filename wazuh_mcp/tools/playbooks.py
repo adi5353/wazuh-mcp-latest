@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..rbac import responder_only, ROLE
+from ..rbac import require_responder_or_above, ROLE
 REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
@@ -301,7 +301,7 @@ def register(ctx: ToolContext) -> None:
         playbook_id: 'isolate-compromised-host', 'brute-force-response',
                      'cve-triage', or 'incident-response'
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 
@@ -462,7 +462,7 @@ def register(ctx: ToolContext) -> None:
         approved=True: continue execution past the gate.
         approved=False: abort the playbook.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 

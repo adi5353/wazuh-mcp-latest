@@ -113,10 +113,23 @@ def require(minimum: ROLE) -> Callable:
     return decorator
 
 
-# ── Convenience aliases ───────────────────────────────────────────────────────
+# ── Convenience helpers ───────────────────────────────────────────────────────
+# Each enforces a MINIMUM tier: "<role>_or_above" passes for that role and every
+# higher one. The old "<role>_only" names were misleading — they read as "only
+# this exact role" but always meant "this role or above" — so they are kept only
+# as deprecated aliases below.
 
-def viewer_only()      -> dict | None: return require_role(ROLE.VIEWER)
-def analyst_only()     -> dict | None: return require_role(ROLE.ANALYST)
-def analyst_or_above() -> dict | None: return require_role(ROLE.ANALYST)
-def responder_only()   -> dict | None: return require_role(ROLE.RESPONDER)
-def admin_only()       -> dict | None: return require_role(ROLE.ADMIN)
+def require_viewer_or_above()    -> dict | None: return require_role(ROLE.VIEWER)
+def require_analyst_or_above()   -> dict | None: return require_role(ROLE.ANALYST)
+def require_responder_or_above() -> dict | None: return require_role(ROLE.RESPONDER)
+def require_admin_or_above()     -> dict | None: return require_role(ROLE.ADMIN)
+
+
+# ── Deprecated aliases (misleading "_only" naming) ────────────────────────────
+# Retained for backward compatibility with any external importers. Prefer the
+# "_or_above" names above; these may be removed in a future major release.
+viewer_only      = require_viewer_or_above
+analyst_only     = require_analyst_or_above
+analyst_or_above = require_analyst_or_above
+responder_only   = require_responder_or_above
+admin_only       = require_admin_or_above

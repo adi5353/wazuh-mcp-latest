@@ -90,12 +90,20 @@ def main() -> int:
 
     if args.check:
         readme = README.read_text(encoding="utf-8")
-        if str(data["total_tools"]) not in readme:
-            print(f"STALE: README does not mention current tool count "
-                  f"({data['total_tools']}). Run generate_tool_table.py and update README.",
+        # Match the exact headline phrases, not a bare substring: a loose
+        # `"242" in readme` check passed even while the headline said 239,
+        # because an unrelated number (e.g. 52428800) contained "242".
+        tools_phrase = f"{data['total_tools']} tools"
+        modules_phrase = f"{data['tool_modules']} domain modules"
+        missing = [p for p in (tools_phrase, modules_phrase) if p not in readme]
+        if missing:
+            print("STALE: README headline does not match current inventory. "
+                  f"Expected '{tools_phrase}' and '{modules_phrase}'. "
+                  f"Missing: {missing}. Run generate_tool_table.py and update README.",
                   file=sys.stderr)
             return 1
-        print(f"OK: README references current tool count ({data['total_tools']}).")
+        print(f"OK: README headline matches inventory "
+              f"({tools_phrase}, {modules_phrase}).")
         return 0
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

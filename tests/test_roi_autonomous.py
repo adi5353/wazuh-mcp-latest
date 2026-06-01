@@ -5,7 +5,7 @@ Covers:
   2. Autonomous SOC full pipeline (auto-ticket, suppression queue, scheduled reports)
   3. SOC Dashboard (static HTML artifact checks)
   4. Demo environment (docker-compose.yml + seed script syntax)
-  5. MSSP + rbac.analyst_or_above (already wired)
+  5. MSSP + rbac.require_analyst_or_above (already wired)
 """
 from __future__ import annotations
 
@@ -245,7 +245,7 @@ class TestAutonomousSOCPipeline:
 
     @pytest.fixture(autouse=True)
     def _admin_role(self):
-        """These tools enforce RBAC at call time (analyst_or_above / admin_only).
+        """These tools enforce RBAC at call time (require_analyst_or_above / require_admin_or_above).
         Grant an ADMIN session for the duration of the test so the suppression and
         ticketing tools run their bodies instead of returning a role error. (Was
         previously satisfied implicitly by a leaked WAZUH_MCP_USER_ROLE env var.)"""
@@ -266,9 +266,9 @@ class TestAutonomousSOCPipeline:
             return dec
 
         mcp.tool = capture_tool
-        # Patch RBAC so admin_only always passes
-        with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None), \
-             patch("wazuh_mcp.tools.autonomous_soc.analyst_or_above", return_value=None), \
+        # Patch RBAC so require_admin_or_above always passes
+        with patch("wazuh_mcp.tools.autonomous_soc.require_admin_or_above", return_value=None), \
+             patch("wazuh_mcp.tools.autonomous_soc.require_analyst_or_above", return_value=None), \
              patch("wazuh_mcp.tools.autonomous_soc.save_monitor_state", return_value=None), \
              patch("wazuh_mcp.tools.autonomous_soc.clear_monitor_state", return_value=None):
             from wazuh_mcp.tools import autonomous_soc as amod
@@ -641,7 +641,7 @@ class TestDemoEnvironment:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 6. rbac.analyst_or_above
+# 6. rbac.require_analyst_or_above
 # ────────────────────────────────────────────────────────────────────────────
 
 class TestRBACAnalystOrAbove:
@@ -650,7 +650,7 @@ class TestRBACAnalystOrAbove:
         from importlib import reload
         import wazuh_mcp.rbac as rbac
         reload(rbac)
-        result = rbac.analyst_or_above()
+        result = rbac.require_analyst_or_above()
         assert result is None
 
     def test_analyst_or_above_passes_for_admin(self, monkeypatch):
@@ -658,7 +658,7 @@ class TestRBACAnalystOrAbove:
         from importlib import reload
         import wazuh_mcp.rbac as rbac
         reload(rbac)
-        result = rbac.analyst_or_above()
+        result = rbac.require_analyst_or_above()
         assert result is None
 
     def test_analyst_or_above_fails_for_viewer(self, monkeypatch):
@@ -666,7 +666,7 @@ class TestRBACAnalystOrAbove:
         from importlib import reload
         import wazuh_mcp.rbac as rbac
         reload(rbac)
-        result = rbac.analyst_or_above()
+        result = rbac.require_analyst_or_above()
         assert result is not None
         assert "error" in result
 

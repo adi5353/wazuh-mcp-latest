@@ -27,6 +27,8 @@ jobs:
         run: mypy wazuh_mcp
       - name: RBAC role declarations
         run: python scripts/lint_tool_roles.py
+      - name: Tool-count consistency (README vs inventory)
+        run: python scripts/generate_tool_table.py --check
 
   # ── 2. Security scan ──────────────────────────────────────────────────────
   security:

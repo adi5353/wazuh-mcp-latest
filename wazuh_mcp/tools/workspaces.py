@@ -71,7 +71,7 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     cfg = ctx.cfg
 
-    from ..rbac import responder_only
+    from ..rbac import require_responder_or_above
     from ..validators import safe_validate, validate_free_text
 
     @mcp.tool()
@@ -84,7 +84,7 @@ def register(ctx: ToolContext) -> None:
         Returns a workspace_id to use in subsequent add_to_workspace calls.
         The workspace persists on disk at WAZUH_WORKSPACE_DIR (default /app/workspaces).
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 
@@ -129,7 +129,7 @@ def register(ctx: ToolContext) -> None:
         content:      The evidence content (note text, alert ID, agent ID, etc.).
         label:        Optional short label for the item (e.g. "Initial access vector").
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 

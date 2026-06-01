@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..rbac import analyst_only, responder_only, ROLE
+from ..rbac import require_analyst_or_above, require_responder_or_above, ROLE
 REQUIRED_ROLE = ROLE.ANALYST
 from ..state_store import _state_dir
 
@@ -192,7 +192,7 @@ def register(ctx: ToolContext) -> None:
         Reports run in the background and results are stored in schedule status.
         Requires role: responder or above.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 
@@ -261,7 +261,7 @@ def register(ctx: ToolContext) -> None:
         schedule_id: returned by create_report_schedule or list_report_schedules.
         Requires role: responder or above.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
 
