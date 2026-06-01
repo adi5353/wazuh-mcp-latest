@@ -32,7 +32,7 @@ import uuid
 
 import httpx
 
-from ..rbac import admin_only, analyst_or_above, ROLE
+from ..rbac import require_admin_or_above, require_analyst_or_above, ROLE
 REQUIRED_ROLE = ROLE.RESPONDER
 from ..state_store import save_monitor_state, load_monitor_state, clear_monitor_state
 
@@ -576,7 +576,7 @@ def register(ctx: ToolContext) -> None:
         Configure auto-ticketing with configure_auto_ticketing().
         Configure scheduled reports with configure_scheduled_reports().
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -627,7 +627,7 @@ def register(ctx: ToolContext) -> None:
     @mcp.tool()
     async def stop_autonomous_monitor() -> dict:
         """Stop the autonomous SOC monitoring loop. Requires role: admin."""
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -726,7 +726,7 @@ def register(ctx: ToolContext) -> None:
         rules are queued here rather than auto-suppressed. An analyst reviews and
         calls approve_suppression() or reject_suppression() for each.
         """
-        err = analyst_or_above()
+        err = require_analyst_or_above()
         if err:
             return err
 
@@ -756,7 +756,7 @@ def register(ctx: ToolContext) -> None:
             suppression_id: The 'id' field from list_pending_suppressions().
             note:           Optional analyst note explaining the decision.
         """
-        err = analyst_or_above()
+        err = require_analyst_or_above()
         if err:
             return err
 
@@ -797,7 +797,7 @@ def register(ctx: ToolContext) -> None:
             suppression_id: The 'id' field from list_pending_suppressions().
             note:           Optional analyst note explaining the decision.
         """
-        err = analyst_or_above()
+        err = require_analyst_or_above()
         if err:
             return err
 

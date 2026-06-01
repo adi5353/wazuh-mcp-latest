@@ -8,7 +8,7 @@ this two ways:
      ``REQUIRED_ROLE >= RESPONDER`` so a VIEWER session never loads it
      (``server.py`` skips the module).
   2. **Call-time guard** — the tool calls ``require_role(...)`` /
-     ``responder_only()`` and returns a role-error dict for low-tier callers
+     ``require_responder_or_above()`` and returns a role-error dict for low-tier callers
      (used when a write tool lives in an otherwise VIEWER-level module, e.g.
      ``restart_agent`` in ``agents.py``).
 
@@ -145,7 +145,7 @@ def test_destructive_tool_is_guarded(tool_name):
         pytest.fail(
             f"'{tool_name}' (module '{module_name}', REQUIRED_ROLE={module_required!r}) "
             f"ran past any role guard and raised {exc!r}. A destructive tool in a "
-            f"VIEWER-level module must call require_role()/responder_only() first."
+            f"VIEWER-level module must call require_role()/require_responder_or_above() first."
         )
 
     assert isinstance(result, dict) and result.get("required_role"), (

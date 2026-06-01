@@ -453,7 +453,7 @@ class TestAutonomousSOC:
         async def run():
             fns, mod = self._register()
             mod._monitor_state["running"] = False
-            with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None):
+            with patch("wazuh_mcp.tools.autonomous_soc.require_admin_or_above", return_value=None):
                 result = await fns["stop_autonomous_monitor"]()
             assert result["status"] == "not_running"
         asyncio.run(run())
@@ -462,7 +462,7 @@ class TestAutonomousSOC:
         async def run():
             fns, mod = self._register()
             mod._monitor_state["running"] = False
-            with patch("wazuh_mcp.tools.autonomous_soc.admin_only",
+            with patch("wazuh_mcp.tools.autonomous_soc.require_admin_or_above",
                        return_value={"error": "admin only"}):
                 result = await fns["start_autonomous_monitor"]()
             assert "error" in result
@@ -472,7 +472,7 @@ class TestAutonomousSOC:
         async def run():
             fns, mod = self._register()
             mod._monitor_state["running"] = False
-            with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None), \
+            with patch("wazuh_mcp.tools.autonomous_soc.require_admin_or_above", return_value=None), \
                  patch("wazuh_mcp.tools.autonomous_soc._monitor_loop",
                        new=AsyncMock(return_value=None)):
                 mock_task = MagicMock()
@@ -489,7 +489,7 @@ class TestAutonomousSOC:
             fns, mod = self._register()
             mod._monitor_state["running"] = True
             mod._monitor_state["started_at"] = "2024-01-01T00:00:00Z"
-            with patch("wazuh_mcp.tools.autonomous_soc.admin_only", return_value=None):
+            with patch("wazuh_mcp.tools.autonomous_soc.require_admin_or_above", return_value=None):
                 result = await fns["start_autonomous_monitor"]()
             assert result["status"] == "already_running"
             mod._monitor_state["running"] = False

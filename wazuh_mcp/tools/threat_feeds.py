@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from ..rbac import responder_only, ROLE
+from ..rbac import require_responder_or_above, ROLE
 REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
@@ -144,7 +144,7 @@ def register(ctx: ToolContext) -> None:
                 "message": "Preview only. Set dry_run=false + WAZUH_ALLOW_WRITES=true to write.",
             }
 
-        err_rbac = responder_only()
+        err_rbac = require_responder_or_above()
         if err_rbac:
             return err_rbac
         blocked = _require_writes()
