@@ -236,8 +236,27 @@ _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
 from . import tool_contexts as _tool_contexts  # noqa: E402
 
+# Deployment-level tool scoping (P2#6): operators can pin the advertised tool
+# surface via WAZUH_MCP_ENABLED_MODULES / WAZUH_MCP_DISABLED_MODULES without
+# renaming anything. Warn (don't fail) on typo'd names so a misspelled entry
+# can't silently scope the wrong set.
+_all_tool_modules = {
+    _m for _i, _m, _p in pkgutil.iter_modules(_tools_pkg.__path__) if _m != "__init__"
+}
+_unknown_scoping = _tool_contexts.unknown_scoping_names(_all_tool_modules)
+if _unknown_scoping:
+    log.warning(
+        "WAZUH_MCP_ENABLED/DISABLED_MODULES contains unknown names (ignored): %s. "
+        "Use a tools/*.py module name or a context-group name (%s).",
+        sorted(_unknown_scoping), sorted(_tool_contexts.CONTEXT_MODULES),
+    )
+
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
+        continue
+    # Static deployment scoping — skip modules excluded by env allowlist/denylist.
+    if not _tool_contexts.module_registration_allowed(_modname):
+        log.info("Skipping tool module '%s' — excluded by WAZUH_MCP_ENABLED/DISABLED_MODULES", _modname)
         continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if not hasattr(_mod, "register"):
@@ -263,6 +282,9 @@ for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
 
 # Register deferred modules (those that depend on ctx.shared populated above)
 for _modname in _DEFERRED:
+    if not _tool_contexts.module_registration_allowed(_modname):
+        log.info("Skipping tool module '%s' — excluded by WAZUH_MCP_ENABLED/DISABLED_MODULES", _modname)
+        continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
         try:
