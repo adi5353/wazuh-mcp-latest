@@ -21,6 +21,11 @@ _INDEX_PAT_RE  = re.compile(r"^[a-zA-Z0-9_\-\*\.]+$")   # safe index pattern
 
 _DANGEROUS_CHARS = re.compile(r"[;\|&`$<>()\{\}]")       # shell / query injection chars
 
+# Wazuh fan-out keywords: as ``agents_list`` these target EVERY agent at once.
+# A single-agent validator must never let these through, or a confused caller
+# could turn one parameter into a fleet-wide restart / active-response.
+_RESERVED_AGENT_IDS = {"all", "*"}
+
 
 # ── Public validators — raise ValueError on bad input ─────────────────────────
 
@@ -36,8 +41,19 @@ def validate_time_range(value: str, field: str = "time_range") -> str:
 
 
 def validate_agent_id(value: str, field: str = "agent_id") -> str:
-    """Validate Wazuh agent ID (alphanumeric, dashes, underscores, max 64 chars)."""
+    """Validate a *single* Wazuh agent ID (alphanumeric, dashes, underscores, max 64 chars).
+
+    Rejects the Wazuh fan-out keywords ('all', '*') and any multi-agent list so a
+    single-agent parameter can never be silently turned into a fleet-wide
+    operation (e.g. ``agents_list=all`` firing active-response on every agent).
+    The character allowlist already excludes commas and spaces.
+    """
     value = value.strip()
+    if value.lower() in _RESERVED_AGENT_IDS:
+        raise ValueError(
+            f"Invalid {field} '{value}'. Fleet-wide targets ('all', '*') are not "
+            f"permitted here — specify a single agent ID."
+        )
     if not _AGENT_ID_RE.match(value):
         raise ValueError(
             f"Invalid {field} '{value}'. Must be alphanumeric with optional - or _ (max 64 chars)."

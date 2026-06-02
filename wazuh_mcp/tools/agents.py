@@ -4,7 +4,12 @@ from ..tool_context import ToolContext
 
 from ..rbac import require_responder_or_above, require_admin_or_above, ROLE
 REQUIRED_ROLE = ROLE.VIEWER
-from ..validators import validate_active_response_target, validate_ar_command
+from ..validators import (
+    validate_active_response_target,
+    validate_ar_command,
+    validate_agent_id,
+    safe_validate,
+)
 
 
 def register(ctx: ToolContext) -> None:
@@ -32,6 +37,9 @@ def register(ctx: ToolContext) -> None:
     @mcp.tool()
     async def get_agent(agent_id: str) -> dict:
         """Get detailed info for a single agent by its ID (e.g. '001')."""
+        agent_id, err = safe_validate(validate_agent_id, agent_id)
+        if err:
+            return err
         return await wz.request("GET", f"/agents?agents_list={agent_id}")
 
     @mcp.tool()
@@ -45,6 +53,11 @@ def register(ctx: ToolContext) -> None:
         err = require_responder_or_above()
         if err:
             return err
+        # Reject fan-out targets ('all'/'*') and malformed IDs before they reach
+        # the Manager — a single-agent restart must never become fleet-wide.
+        agent_id, verr = safe_validate(validate_agent_id, agent_id)
+        if verr:
+            return verr
         if dry_run:
             return {
                 "dry_run": True,
@@ -72,6 +85,12 @@ def register(ctx: ToolContext) -> None:
         err = require_responder_or_above()
         if err:
             return err
+
+        # Reject fan-out targets ('all'/'*') and malformed IDs — an active-response
+        # on a single agent must never be turned into a fleet-wide firewall-drop.
+        agent_id, verr = safe_validate(validate_agent_id, agent_id)
+        if verr:
+            return verr
 
         # Restrict to the active-response command allowlist (Issue 10)
         cmd_err = validate_ar_command(command)

@@ -420,7 +420,14 @@ async def list_tenants() -> dict:
 
     Returns tenant names and manager hosts from WAZUH_INSTANCES config.
     Only available when WAZUH_INSTANCES is configured.
+
+    Requires ADMIN role — the tenant list discloses every customer's manager
+    host and is an MSSP-operator capability.
     """
+    from .rbac import require_role, ROLE
+    err = require_role(ROLE.ADMIN)
+    if err:
+        return err
     if not cfg.tenants:
         return {
             "mssp_mode": False,
@@ -447,7 +454,15 @@ async def switch_tenant(tenant_name: str) -> dict:
 
     Args:
         tenant_name: The name of the tenant as defined in WAZUH_INSTANCES.
+
+    Requires ADMIN role — switching tenants crosses a data-isolation boundary
+    (subsequent queries hit a different customer's Manager/Indexer), so it must
+    not be reachable by a default VIEWER session.
     """
+    from .rbac import require_role, ROLE
+    err = require_role(ROLE.ADMIN)
+    if err:
+        return err
     if not cfg.tenants:
         return {
             "error": "MSSP multi-tenant mode is not configured. "
@@ -723,6 +738,40 @@ def _origin_request_allowed(
     if not is_loopback:
         return False
     return True
+
+
+def _ws_request_authorized(
+    *,
+    token: str,
+    origin: str,
+    api_key: str,
+    is_loopback: bool,
+    allowed_origins: set,
+) -> bool:
+    """Auth decision for the /ws/alerts WebSocket (Critical: unauthenticated
+    alert exfiltration). WebSocket scopes bypass the HTTP middleware stack
+    (APIKey/Origin/RateLimit/Audit all early-return on non-http scope), so this
+    re-applies the same checks the socket would otherwise skip:
+
+      * When an API key is configured it MUST be presented (constant-time
+        compare); browsers can't set WS headers, so the caller may pass it as a
+        ``token``/``api_key`` query param instead of an Authorization header.
+      * Origin is validated with the exact same rules as HTTP requests.
+
+    Pure function — unit-testable without a live socket.
+    """
+    if api_key:
+        if not token or not _hmac_module.compare_digest(token, api_key):
+            return False
+        has_auth = True
+    else:
+        has_auth = False
+    return _origin_request_allowed(
+        origin,
+        is_loopback=is_loopback,
+        has_auth=has_auth,
+        allowed_origins=allowed_origins,
+    )
 
 
 def main() -> None:
@@ -1278,6 +1327,29 @@ def main() -> None:
         from starlette.websockets import WebSocket as _WS
 
         async def _ws_alerts_endpoint(ws: _WS) -> None:
+            # WebSocket scopes bypass every HTTP middleware (API-key, origin,
+            # rate-limit, audit), so authenticate here BEFORE accepting — else
+            # anyone reaching the port could stream live alerts unauthenticated.
+            _auth_header = ws.headers.get("authorization", "")
+            _token = _auth_header.removeprefix("Bearer ").strip()
+            if not _token:
+                # Browsers can't set headers on a WebSocket; accept the key as a
+                # query param as a fallback (token=... or api_key=...).
+                _token = (ws.query_params.get("token")
+                          or ws.query_params.get("api_key") or "").strip()
+            _origin = ws.headers.get("origin", "").rstrip("/")
+            if not _ws_request_authorized(
+                token=_token,
+                origin=_origin,
+                api_key=api_key,
+                is_loopback=_is_loopback_host(host),
+                allowed_origins=_allowed_origins,
+            ):
+                # 1008 = policy violation. Closing before accept() yields an
+                # HTTP 403 on the handshake.
+                await ws.close(code=1008)
+                log.warning("WS /ws/alerts: rejected unauthorized connection (origin=%s)", _origin or "(none)")
+                return
             await ws_alerts_handler(ws, idx=idx, cfg=cfg)
 
         app = Starlette(

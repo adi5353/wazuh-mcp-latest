@@ -9,7 +9,13 @@ import os
 
 from ..tool_context import ToolContext
 from ..rbac import ROLE
-from ..validators import safe_validate, validate_time_range
+from ..validators import (
+    safe_validate,
+    validate_time_range,
+    validate_agent_id,
+    validate_ar_command,
+    validate_active_response_target,
+)
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -241,6 +247,19 @@ def register(ctx: ToolContext) -> None:
         if err:
             return err
 
+        # Validate the full proposal up front so an unsafe action can never be
+        # stored, shown to a human approver in Slack, or executed on approval.
+        # In particular this rejects agent_id='all'/'*' (fleet-wide fan-out).
+        agent_id, verr = safe_validate(validate_agent_id, agent_id)
+        if verr:
+            return verr
+        cmd_err = validate_ar_command(command)
+        if cmd_err:
+            return {"error": cmd_err, "blocked": True}
+        ip_err = validate_active_response_target(src_ip)
+        if ip_err:
+            return {"error": ip_err, "blocked": True}
+
         from ..approval import approval_store
 
         params = {"command": command, "agent_id": agent_id, "src_ip": src_ip}
@@ -340,7 +359,12 @@ def register(ctx: ToolContext) -> None:
         agent_id = params.get("agent_id", "")
         src_ip   = params.get("src_ip")
 
-        from ..validators import validate_active_response_target, validate_ar_command
+        # Re-validate the stored target at execution time (defense in depth): the
+        # token may originate from a Redis entry written by an older build, so
+        # never trust that agent_id was screened at propose time.
+        agent_id, verr = safe_validate(validate_agent_id, agent_id)
+        if verr:
+            return {**verr, "token": token}
         cmd_err = validate_ar_command(command)
         if cmd_err:
             return {"error": cmd_err, "blocked": True, "token": token}

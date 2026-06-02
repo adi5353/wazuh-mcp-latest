@@ -278,6 +278,17 @@ from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 _audit_handler: _RotatingFileHandler | None = None
 _audit_handler_lock = _threading.Lock()
 
+# ── Tamper-evident hash chain (H2) ────────────────────────────────────────────
+# Each signed record carries a monotonic ``seq`` and the previous record's
+# ``hmac`` as ``prev_hmac``, and its own HMAC is computed over both. This makes
+# deletion, reordering, and in-place edits of any non-tail record detectable —
+# a plain per-record HMAC cannot catch a deleted line. State is mutated only
+# while holding the audit handler lock, so concurrent writer threads stay
+# ordered and the chain never forks.
+_chain_seq: int = 0
+_chain_last_hmac: str = ""
+_chain_recovered: bool = False
+
 
 def _get_audit_handler() -> _RotatingFileHandler:
     """Return (or initialise) the module-level rotating file handler.
@@ -339,16 +350,65 @@ def _params_fingerprint(params: dict) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
+def _recover_chain_state_locked() -> None:
+    """Seed the hash-chain (_chain_seq/_chain_last_hmac) from the existing log.
+
+    Reads the tail of the current audit file so the chain continues across
+    restarts instead of forking on every boot. Must be called while holding the
+    audit handler lock. Best-effort: a missing/unreadable log simply starts a
+    fresh chain at seq 0.
+    """
+    global _chain_seq, _chain_last_hmac
+    _chain_seq = 0
+    _chain_last_hmac = ""
+    try:
+        if not _AUDIT_LOG_PATH.exists():
+            return
+        # Read only the tail (≤1 MiB) — enough to find the last record without
+        # loading a multi-MB log into memory.
+        with _AUDIT_LOG_PATH.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 1_048_576))
+            tail = fh.read().decode("utf-8", errors="replace")
+        for line in reversed(tail.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(rec, dict) and "seq" in rec and "hmac" in rec:
+                _chain_seq = int(rec["seq"])
+                _chain_last_hmac = str(rec["hmac"])
+                break
+    except Exception as exc:  # noqa: BLE001
+        _log.error("audit_chain_recovery_failed error=%s", exc)
+
+
 def _write_record(record: dict) -> None:
-    """Append a JSONL record to the rotating audit log."""
+    """Sign, hash-chain, and append a JSONL record to the rotating audit log.
+
+    Signing + chaining happen under the handler lock so concurrent writer
+    threads (the audit write is offloaded off the event loop) produce a single
+    consistent chain. Safe to call from a thread-pool worker.
+    """
+    global _chain_seq, _chain_last_hmac, _chain_recovered
     try:
         handler = _get_audit_handler()
-        line = json.dumps(record, default=str) + "\n"
-        encoded_len = len(line.encode("utf-8"))
-        # Write directly to the handler's stream so we control exact byte layout.
-        # Check for rollover manually — shouldRollover() requires a LogRecord object.
         handler.acquire()
         try:
+            # Chain only when signing is enabled — an unsigned log has no
+            # integrity guarantee to anchor and the record shape stays unchanged.
+            if _SIGNING_KEY:
+                if not _chain_recovered:
+                    _recover_chain_state_locked()
+                    _chain_recovered = True
+                record = {**record, "seq": _chain_seq + 1, "prev_hmac": _chain_last_hmac}
+            signed = _sign_record(record)
+            line = json.dumps(signed, default=str) + "\n"
+            encoded_len = len(line.encode("utf-8"))
             stream = handler.stream
             assert stream is not None, "audit handler stream is unexpectedly None"
             if handler.maxBytes > 0:
@@ -359,6 +419,11 @@ def _write_record(record: dict) -> None:
                     assert stream is not None, "audit handler stream None after rollover"
             stream.write(line)
             stream.flush()
+            # Advance the chain only after a successful write so a failed write
+            # never leaves a gap that verification would flag as tampering.
+            if _SIGNING_KEY:
+                _chain_seq += 1
+                _chain_last_hmac = signed["hmac"]
         finally:
             handler.release()
     except Exception as exc:  # noqa: BLE001
@@ -411,7 +476,19 @@ class _AuditContext:
             "result_code": result_code,
             "duration_ms": round((time.time() - self._start) * 1000),
         }
-        _write_record(_sign_record(record))
+        # Signing + the blocking, lock-serialized, fsync-flushed file write are
+        # offloaded off the event loop (the audit middleware runs on it). When no
+        # loop is running (stdio / sync callers / tests) write inline so behaviour
+        # is unchanged. The file lock + chain state keep concurrent writes ordered.
+        try:
+            import asyncio as _asyncio
+            _loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            _loop = None
+        if _loop is not None:
+            _loop.run_in_executor(None, _write_record, record)
+        else:
+            _write_record(record)
         return False  # never suppress exceptions
 
 
@@ -439,9 +516,16 @@ def verify_audit_log_integrity(log_path: str | None = None) -> dict:
 
     verified = 0
     tampered: list[dict] = []
+    chain_breaks: list[dict] = []
     unsigned = 0
     unreadable = 0
     total = 0
+
+    # Hash-chain continuity state. ``expected_prev``/``expected_seq`` are seeded
+    # by the first chained record (anchor) and enforced on every subsequent one,
+    # so a deleted/reordered record is caught even though its own HMAC is intact.
+    expected_prev: str | None = None
+    expected_seq: int | None = None
 
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -478,20 +562,49 @@ def verify_audit_log_integrity(log_path: str | None = None) -> dict:
                         "stored":  stored_hmac[:16] + "…",
                         "expected": expected[:16] + "…",
                     })
+
+                # ── Chain continuity (only for chained records) ──────────────
+                rec_prev = record.get("prev_hmac")
+                rec_seq  = record.get("seq")
+                if rec_prev is not None and rec_seq is not None:
+                    if expected_prev is None:
+                        # Anchor: first chained record establishes the baseline.
+                        expected_prev = stored_hmac
+                        expected_seq = int(rec_seq)
+                    else:
+                        if rec_prev != expected_prev or int(rec_seq) != (expected_seq or 0) + 1:
+                            chain_breaks.append({
+                                "line": lineno,
+                                "ts":   record.get("ts"),
+                                "tool": record.get("tool"),
+                                "reason": "prev_hmac/seq discontinuity — a record was "
+                                          "deleted, reordered, or inserted",
+                                "expected_seq": (expected_seq or 0) + 1,
+                                "got_seq": rec_seq,
+                            })
+                        expected_prev = stored_hmac
+                        expected_seq = int(rec_seq)
     except Exception as exc:
         return {"error": f"Failed to read audit log: {exc}"}
 
+    compromised = bool(tampered) or bool(chain_breaks)
     return {
         "log_path":       str(path),
         "total_records":  total,
         "verified":       verified,
         "tampered":       len(tampered),
+        "chain_breaks":   len(chain_breaks),
         "unsigned":       unsigned,
         "unreadable":     unreadable,
-        "integrity":      "OK" if len(tampered) == 0 else "COMPROMISED",
+        "integrity":      "COMPROMISED" if compromised else "OK",
         "tampered_records": tampered[:20],
+        "chain_break_records": chain_breaks[:20],
         "note": (
             "Set WAZUH_AUDIT_LOG_SIGNING_KEY to enable HMAC signing. "
             "Without a signing key all records appear as 'unsigned' — this is expected."
-        ) if not _SIGNING_KEY else None,
+        ) if not _SIGNING_KEY else (
+            "Hash-chain verified: per-record HMAC + prev_hmac/seq continuity. "
+            "NB: truncation of the most recent records cannot be detected without "
+            "an external high-water mark."
+        ),
     }

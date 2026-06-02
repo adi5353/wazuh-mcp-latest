@@ -57,8 +57,13 @@ def _load_vault() -> dict[str, str]:
         path = os.environ.get("VAULT_SECRET_PATH", "secret/wazuh-mcp")
         mount = os.environ.get("VAULT_MOUNT_POINT", "secret")
         client = hvac.Client(url=addr, token=token)
+        # ``path`` is relative to ``mount_point``. If the caller included the
+        # mount as a prefix (e.g. "secret/wazuh-mcp" with mount "secret"), strip
+        # exactly that prefix. NB: ``str.lstrip`` strips a *character set*, not a
+        # prefix — "secret/staging" would become "taging" — so use ``removeprefix``.
+        relative_path = path.removeprefix(f"{mount}/")
         resp = client.secrets.kv.v2.read_secret_version(
-            path=path.lstrip(f"{mount}/"),
+            path=relative_path,
             mount_point=mount,
         )
         raw: dict = resp["data"]["data"]
