@@ -66,19 +66,83 @@ _windows: dict[str, Deque[float]] = collections.defaultdict(collections.deque)
 
 _WINDOW_SECONDS = 60.0
 
+# Cap the number of tracked identities so a caller rotating tokens (or a flood of
+# distinct source IPs) can't grow these dicts without bound. When exceeded, stale
+# identities (no request within the window) are dropped.
+_MAX_IDENTITIES = int(os.getenv("WAZUH_MCP_RATE_LIMIT_MAX_IDENTITIES", "10000"))
+
+
+def _prune_if_needed() -> None:
+    """Drop identities with no activity inside the window once a dict grows past
+    the cap. Bounds memory against token-rotation / IP-spray keyspace blowup."""
+    now = time.monotonic()
+    cutoff = now - _WINDOW_SECONDS
+    for d in (_windows, _write_windows, _admin_windows):
+        if len(d) > _MAX_IDENTITIES:
+            stale = [k for k, dq in d.items() if not dq or dq[-1] < cutoff]
+            for k in stale:
+                del d[k]
+
 
 def _identity_from_scope(scope: dict) -> str:
-    """Derive a stable, opaque identity from the Authorization header in ASGI scope."""
+    """Derive a stable, opaque identity for rate-limiting.
+
+    Authenticated callers are bucketed by their Authorization header. Anonymous
+    callers are bucketed by client IP so a single unauthenticated source cannot
+    exhaust a shared 'anonymous' bucket and starve every other anonymous client.
+    """
     headers = dict(scope.get("headers", []))
-    auth = headers.get(b"authorization", b"anonymous").decode("utf-8", errors="replace")
-    return hashlib.sha256(auth.encode()).hexdigest()[:16]
+    auth = headers.get(b"authorization", b"").decode("utf-8", errors="replace").strip()
+    if auth:
+        return hashlib.sha256(auth.encode()).hexdigest()[:16]
+    client = scope.get("client")
+    ip = client[0] if client else "unknown"
+    return "ip:" + hashlib.sha256(ip.encode()).hexdigest()[:16]
 
 
 def _tool_name_from_scope(scope: dict) -> str | None:
-    """Best-effort extraction of MCP tool name from ASGI scope query string."""
-    # The tool name is embedded in the JSON-RPC body, not the scope.
-    # We expose it via a scope extension set by AuditMiddleware in server.py.
+    """Return the MCP tool name previously stashed on the scope by the middleware
+    (set from the JSON-RPC body). Kept for downstream consumers/tests."""
     return scope.get("wazuh_mcp_tool_name")
+
+
+def _tool_name_from_body(body_bytes: bytes) -> str | None:
+    """Extract the MCP tool name from a JSON-RPC ``tools/call`` request body."""
+    try:
+        payload = json.loads(body_bytes) if body_bytes else {}
+    except Exception:
+        return None
+    if isinstance(payload, dict) and payload.get("method") == "tools/call":
+        params = payload.get("params") or {}
+        name = params.get("name")
+        return name if isinstance(name, str) else None
+    return None
+
+
+async def _buffer_body(receive):
+    """Read the full request body once and return (body_bytes, replay_receive).
+
+    Mirrors AuditMiddleware: the body stream can only be consumed once, so we
+    buffer it and hand the downstream app a receive() that replays it. Without
+    this the MCP SDK would see an empty body."""
+    chunks: list[bytes] = []
+    more = True
+    while more:
+        msg = await receive()
+        chunks.append(msg.get("body", b""))
+        more = msg.get("more_body", False)
+    body = b"".join(chunks)
+
+    replayed = False
+
+    async def replay_receive():
+        nonlocal replayed
+        if not replayed:
+            replayed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+
+    return body, replay_receive
 
 
 def _is_throttled(identity: str) -> tuple[bool, int]:
@@ -86,6 +150,7 @@ def _is_throttled(identity: str) -> tuple[bool, int]:
     Returns (throttled, retry_after_seconds).
     Advances the sliding window, evicts stale entries, then checks the limit.
     """
+    _prune_if_needed()
     now = time.monotonic()
     dq = _windows[identity]
 
@@ -162,9 +227,17 @@ class RateLimitMiddleware:
             await self._send_429(send, retry_after, "global")
             return
 
-        # Per-tool limits for write/admin tools (parse tool name from path/body lazily)
-        # Tool name inspection is best-effort: only works for JSON-RPC /messages POST
-        tool_name = _tool_name_from_scope(scope)
+        # Per-tool limits for write/admin tools. The tool name lives in the
+        # JSON-RPC body, so buffer + replay it (POST only) and expose it on the
+        # scope. Previously this read a scope key that nothing ever set, so the
+        # stricter write/admin limits never fired. An already-set scope key (from
+        # an upstream middleware) is honoured as-is.
+        tool_name = scope.get("wazuh_mcp_tool_name")
+        if tool_name is None and scope.get("method") == "POST":
+            body_bytes, receive = await _buffer_body(receive)
+            tool_name = _tool_name_from_body(body_bytes)
+            if tool_name:
+                scope["wazuh_mcp_tool_name"] = tool_name
         if tool_name:
             throttled, retry_after = _is_tool_throttled(identity, tool_name)
             if throttled:

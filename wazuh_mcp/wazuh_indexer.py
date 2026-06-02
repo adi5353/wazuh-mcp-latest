@@ -175,10 +175,13 @@ class WazuhIndexer:
         # Callers should use search_after / page_token for large result sets.
         _MAX_PAGE_SIZE = 500
         if "size" in body:
-            assert body["size"] <= _MAX_PAGE_SIZE, (
-                f"Indexer size={body['size']} exceeds hard cap of {_MAX_PAGE_SIZE}. "
-                "Use pagination (search_after) for large result sets."
-            )
+            # Explicit check, not assert: `python -O` strips asserts, which would
+            # silently disable this OOM guard in optimized production runs.
+            if body["size"] > _MAX_PAGE_SIZE:
+                raise ValueError(
+                    f"Indexer size={body['size']} exceeds hard cap of {_MAX_PAGE_SIZE}. "
+                    "Use pagination (search_after / page_token) for large result sets."
+                )
             body = {**body, "size": min(body["size"], _MAX_PAGE_SIZE)}
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_search"
