@@ -26,6 +26,17 @@ AR_RULE_IDS = ["601", "602", "603", "651", "652"]
 AR_GROUPS = ["active_response", "ar"]
 
 
+def _slack_safe(value: str) -> str:
+    """Neutralize characters before embedding a value in the Slack approval
+    message (H1). The AR fields are already validated, but defense-in-depth: a
+    value must never break out of its code span (backtick) or inject extra lines
+    (newlines) that could forge instructions to the human approver."""
+    if not value:
+        return value
+    cleaned = "".join(ch for ch in str(value) if ch.isprintable() and ch != "`")
+    return cleaned[:120]
+
+
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
@@ -278,9 +289,9 @@ def register(ctx: ToolContext) -> None:
         slack_sent    = False
         if slack_webhook:
             import httpx as _httpx
-            action_desc = f"`{command}` on agent `{agent_id}`"
+            action_desc = f"`{_slack_safe(command)}` on agent `{_slack_safe(agent_id)}`"
             if src_ip:
-                action_desc += f", blocking IP `{src_ip}`"
+                action_desc += f", blocking IP `{_slack_safe(src_ip)}`"
             msg = (
                 f":bell: *Wazuh AI proposes active response*\n"
                 f"Action: {action_desc}\n"
