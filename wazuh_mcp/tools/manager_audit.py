@@ -15,8 +15,6 @@ REQUIRED_ROLE = ROLE.ANALYST
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 

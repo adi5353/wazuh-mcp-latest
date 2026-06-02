@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Regenerate the MCP tool inventory so README counts can't drift (Issue 12).
 
-Scans ``wazuh_mcp/`` for ``@mcp.tool()`` / ``@mcp.prompt()`` decorators, derives
-the tool/prompt name from the following ``def``/``async def`` line, and emits a
-per-module Markdown table plus headline counts.
+Parses ``wazuh_mcp/`` with the ``ast`` module, finds functions decorated with
+``@mcp.tool()`` / ``@mcp.prompt()``, and emits a per-module Markdown table plus
+headline counts.
+
+NB: this uses an AST walk, not a regex. A line-regex over the source text wrongly
+counts ``@mcp.tool()`` occurrences that appear inside *docstrings* (e.g. usage
+examples in rbac.py), which previously inflated the headline by 2.
 
 Usage:
     python scripts/generate_tool_table.py            # write docs/TOOL_TABLE.md + print counts
@@ -12,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import pathlib
 import re
 import sys
@@ -22,27 +27,29 @@ README = ROOT / "README.md"
 INIT = PKG / "__init__.py"
 OUT = ROOT / "docs" / "TOOL_TABLE.md"
 
-_TOOL_DEC = re.compile(r"@mcp\.tool\(")
-_PROMPT_DEC = re.compile(r"@mcp\.prompt\(")
-_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)\s*\(")
-
-# Headline in README, e.g. "**242 tools** across 55 domain modules"
+# Headline in README, e.g. "**240 tools** across 55 domain modules"
 _HEADLINE = re.compile(r"\*\*(\d+) tools\*\* across (\d+) domain modules")
 # First version heading in README, e.g. "### v2.4 — ..."
 _README_VERSION = re.compile(r"^###\s*v(\d+)\.(\d+)", re.MULTILINE)
 _INIT_VERSION = re.compile(r'__version__\s*=\s*["\'](\d+)\.(\d+)')
 
 
-def _names_after(decorator: re.Pattern, text: str) -> list[str]:
+def _decorated_names(tree: ast.Module, attr: str) -> list[str]:
+    """Return names of functions carrying an ``@mcp.<attr>(...)`` decorator."""
     names: list[str] = []
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if decorator.search(line):
-            for j in range(i + 1, min(i + 6, len(lines))):
-                m = _DEF.match(lines[j])
-                if m:
-                    names.append(m.group(1))
-                    break
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            target = dec.func if isinstance(dec, ast.Call) else dec
+            if (
+                isinstance(target, ast.Attribute)
+                and target.attr == attr
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "mcp"
+            ):
+                names.append(node.name)
+                break
     return names
 
 
@@ -50,12 +57,15 @@ def collect() -> dict:
     by_module: dict[str, list[str]] = {}
     prompts: list[str] = []
     for path in sorted(PKG.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        tools = _names_after(_TOOL_DEC, text)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        tools = _decorated_names(tree, "tool")
         if tools:
             label = f"tools/{path.stem}" if path.parent.name == "tools" else path.stem
             by_module.setdefault(label, []).extend(tools)
-        prompts.extend(_names_after(_PROMPT_DEC, text))
+        prompts.extend(_decorated_names(tree, "prompt"))
     total_tools = sum(len(v) for v in by_module.values())
     tool_modules = sum(1 for k in by_module if k.startswith("tools/"))
     return {

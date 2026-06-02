@@ -240,8 +240,6 @@ async def _run_rollback(
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
     cfg = ctx.cfg
     tool_registry = ctx.tool_registry
 

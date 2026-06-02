@@ -41,7 +41,6 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _require_writes = ctx.require_writes
 

@@ -1,13 +1,8 @@
 # Tool Inventory (auto-generated)
 
-**242 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
+**240 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
-
-### `rbac` (2)
-
-- `run_active_response`
-- `run_active_response`
 
 ### `server` (5)
 

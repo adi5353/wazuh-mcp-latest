@@ -169,7 +169,6 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
 
     _load_all_baselines_from_disk()  # populate cache once at startup
