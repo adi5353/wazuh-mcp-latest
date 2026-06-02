@@ -1145,6 +1145,21 @@ def main() -> None:
                     if auth_raw else "anonymous"
                 )
 
+                # ── Bind an injection-lockout identity for EVERY caller (M1) ──
+                # The persistent injection counter keys off this. Anonymous
+                # callers previously had no key, so the per-task counter reset
+                # each request and the lockout never tripped — spread attempts
+                # across requests and you bypassed it. Key authenticated callers
+                # by their bearer and anonymous callers by client IP so attempts
+                # accumulate. (Pure-ASGI middleware → same task → ContextVar
+                # propagates to the tool handler.)
+                from .identity import set_identity_key as _set_inj_identity
+                if auth_raw:
+                    _set_inj_identity(auth_raw)
+                else:
+                    _client = scope.get("client")
+                    _set_inj_identity("ip:" + (_client[0] if _client else "unknown"))
+
                 # ── Bind session role from the AUTHENTICATED bearer token (Issue 3) ──
                 # Role is derived from the verified key here, before tool dispatch,
                 # so it can never be set by a tool argument. Runs in the same task
