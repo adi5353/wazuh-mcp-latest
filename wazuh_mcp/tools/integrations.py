@@ -17,9 +17,6 @@ _SOAR_TIMEOUT = 15
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
 
     def _jira_url()     -> str: return os.getenv("JIRA_URL", "")
     def _jira_user()    -> str: return os.getenv("JIRA_USER", "")

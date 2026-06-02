@@ -326,7 +326,7 @@ async def _maybe_send_scheduled_reports(cfg, tool_registry: dict) -> None:
         fn_summary = tool_registry.get("generate_weekly_summary")
         if fn_summary and recipients:
             try:
-                report = await asyncio.wait_for(fn_summary(), timeout=30)
+                await asyncio.wait_for(fn_summary(), timeout=30)
                 # Also push to Slack if configured
                 fn_slack = tool_registry.get("send_weekly_summary_to_slack")
                 if fn_slack:

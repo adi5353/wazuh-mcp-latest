@@ -53,9 +53,6 @@ async def close_soar_client() -> None:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz  = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     generate_shift_handover: Any = ctx.shared.get("generate_shift_handover")
     generate_weekly_summary: Any = ctx.shared.get("generate_weekly_summary")
     generate_compliance_report: Any = ctx.shared.get("generate_compliance_report")
@@ -336,11 +333,11 @@ def register(ctx: ToolContext) -> None:
         target = channel or _SLACK_SOC_CHANNEL
 
         if severity_level >= 12:
-            tier = "CRITICAL"; color = "#ff0000"
+            tier = "CRITICAL"
         elif severity_level >= 9:
-            tier = "HIGH";     color = "#ff6600"
+            tier = "HIGH"
         else:
-            tier = "MEDIUM";   color = "#ffaa00"
+            tier = "MEDIUM"
 
         blocks: list[dict] = [
             {

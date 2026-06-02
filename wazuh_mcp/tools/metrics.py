@@ -36,9 +36,6 @@ def record_tool_call(tool_name: str, elapsed: float, had_error: bool = False) ->
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
@@ -99,17 +96,6 @@ def register(ctx: ToolContext) -> None:
             tool_failure_circuits = tool_failure_breaker.open_circuits()
         except Exception:
             tool_failure_circuits = []
-
-        # Bounded per-identity state sizes (watch for leaks / abnormal growth)
-        try:
-            from ..tool_contexts import tracked_identity_count
-            from .. import identity as _identity
-            tracked_identities = {
-                "active_contexts": tracked_identity_count(),
-                "injection_counters": len(_identity._persistent_injection_counts),
-            }
-        except Exception:
-            tracked_identities = {}
 
         # Prometheus text format (for /metrics scraping)
         prom_lines = [

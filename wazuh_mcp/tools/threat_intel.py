@@ -162,7 +162,6 @@ async def _abuse_get(ip: str) -> dict | None:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
     cfg = ctx.cfg
     _geoip_lookup = ctx.geoip_lookup
@@ -567,7 +566,6 @@ def register(ctx: ToolContext) -> None:
         # ── Hunter.io domain/email verification (optional) ─────────────────────
         hunter_key = os.getenv("HUNTER_API_KEY")
         if hunter_key and "@" in email:
-            domain = email.split("@", 1)[1]
             try:
                 async with httpx.AsyncClient(timeout=15,
                                              base_url="https://api.hunter.io") as c:

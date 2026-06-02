@@ -13,7 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Version identity unified** — `__version__` set to `2.4.0` to match the README
   feature line; `SECURITY.md` supported version updated to 2.x.
 - **Headline counts enforced in CI** — `scripts/generate_tool_table.py --check` now
-  validates the exact README headline (242 tools / 55 modules) and that the README
+  validates the exact README headline (240 tools / 55 modules) and that the README
   version matches `__version__`; wired into the lint job so counts can't drift.
 
 ### Code-Review Response (2026-05-30)

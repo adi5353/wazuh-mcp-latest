@@ -15,8 +15,6 @@ _rule_backups: dict[str, str] = {}
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
 
     @mcp.tool()

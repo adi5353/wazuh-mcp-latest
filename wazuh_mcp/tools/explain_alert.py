@@ -28,9 +28,7 @@ def _pair_mitre(ids: list, tactics: list | None) -> list[tuple]:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _geoip_lookup = ctx.geoip_lookup
 
