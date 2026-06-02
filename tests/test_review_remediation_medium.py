@@ -59,12 +59,17 @@ class TestRateLimitToolName:
         assert not ident.startswith("ip:")
 
     def test_identity_dicts_pruned_past_cap(self):
+        import time
         import wazuh_mcp.rate_limit as rl
         rl._windows.clear()
+        # Stale = last activity older than the window. Use a clock-relative value
+        # (NOT a hard-coded 0.0): time.monotonic()'s epoch is arbitrary, so on a
+        # runner where now < _WINDOW_SECONDS the cutoff is negative and 0.0 would
+        # wrongly count as recent.
+        stale_ts = time.monotonic() - (rl._WINDOW_SECONDS + 100)
         with patch.object(rl, "_MAX_IDENTITIES", 5):
-            # Seed many stale identities (timestamps far in the past).
             for i in range(20):
-                rl._windows[f"stale-{i}"].append(0.0)
+                rl._windows[f"stale-{i}"].append(stale_ts)
             rl._is_throttled("fresh")  # triggers _prune_if_needed
         assert len(rl._windows) <= 6  # stale entries dropped, 'fresh' kept
 
