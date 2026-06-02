@@ -24,6 +24,7 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import asyncio
+import ipaddress
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -373,11 +374,24 @@ async def _enrich_and_notify(alert: dict, wz, idx, cfg,
 
     # 2. GeoIP enrichment
     ip_risk = None
+    # Only enrich routable, public IPs. Private/loopback/invalid addresses are
+    # never sent to the third-party geo service — leaking internal IPs to an
+    # external endpoint would contradict the server's own PII-egress policy.
+    _is_public_ip = False
     if srcip:
         try:
+            _parsed_ip = ipaddress.ip_address(srcip)
+            _is_public_ip = not (_parsed_ip.is_private or _parsed_ip.is_loopback
+                                 or _parsed_ip.is_link_local or _parsed_ip.is_multicast
+                                 or _parsed_ip.is_reserved or _parsed_ip.is_unspecified)
+        except ValueError:
+            _is_public_ip = False
+    if _is_public_ip:
+        try:
             async with httpx.AsyncClient(timeout=10) as c:
+                # HTTPS only — never leak the source IP in cleartext (matches geo.py).
                 r = await c.get(
-                    f"http://ip-api.com/json/{srcip}",
+                    f"https://ip-api.com/json/{srcip}",
                     params={"fields": "country,isp,hosting,proxy,tor"},
                 )
                 if r.status_code == 200:

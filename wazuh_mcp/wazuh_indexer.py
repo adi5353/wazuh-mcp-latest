@@ -59,6 +59,27 @@ def _validate_query_fields(body: dict) -> None:
         except ValueError as exc:
             raise ValueError(f"Query field validation failed: {exc}") from exc
 
+
+def _apply_abac_scope(body: dict) -> dict:
+    """Wrap *body*'s query so ABAC group/agent filters are mandatory (C2).
+
+    Returns the body unchanged when ABAC is not configured, so single-tenant
+    deployments and existing tests see zero behaviour change. When ABAC is
+    active, the caller's query is moved under ``bool.must`` and the ABAC clauses
+    are added as non-scoring ``bool.filter`` entries — documents outside the
+    session's allowed groups/agents can never be returned, regardless of the
+    original query shape.
+    """
+    from .abac import abac_enabled, abac_filter_clause
+    if not abac_enabled():
+        return body
+    clauses = abac_filter_clause()
+    if not clauses:
+        return body
+    inner_query = body.get("query", {"match_all": {}})
+    return {**body, "query": {"bool": {"must": [inner_query], "filter": clauses}}}
+
+
 log = logging.getLogger(__name__)
 
 # ── Retry configuration (shared policy — see wazuh_mcp/http_policy.py) ─────────
@@ -117,6 +138,11 @@ class WazuhIndexer:
         # M4: reject user-controlled fields not in the allow-list
         if validate_fields:
             _validate_query_fields(body)
+        # C2: enforce ABAC tenant/group scoping centrally on EVERY query. This is
+        # the single chokepoint that makes WAZUH_MCP_ALLOWED_GROUPS/AGENTS actually
+        # restrict results — individual tools must not be relied on to remember it.
+        # No-op (and zero behaviour change) unless ABAC is configured.
+        body = _apply_abac_scope(body)
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(
