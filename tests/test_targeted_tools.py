@@ -142,6 +142,47 @@ class TestCorrelation:
         out = _run(self.tools["get_attack_chains"]())
         assert out["chains"] == []
 
+    def test_get_attack_chains_never_exceeds_page_cap(self):
+        # Regression: get_attack_chains used to request size=1000 in one call,
+        # which the indexer's hard cap rejects (it errored on every real run).
+        # It must now page with size<=500 via search_after.
+        seen_sizes: list[int] = []
+
+        async def fake_search(body, *a, **k):
+            seen_sizes.append(body.get("size"))
+            return {"hits": {"hits": []}}
+
+        self.idx.search = fake_search
+        _run(self.tools["get_attack_chains"](min_stages=2))
+        assert seen_sizes and all(s <= 500 for s in seen_sizes)
+
+    def test_get_attack_chains_paginates_with_search_after(self):
+        # Two full pages then exhaustion → three indexer calls, each carrying the
+        # previous page's sort cursor.
+        full_page = [
+            _hit(f"2024-01-01T00:00:{i % 60:02d}Z", 8, "Execution", "T1059")
+            for i in range(500)
+        ]
+        for h in full_page:
+            h["sort"] = [h["_source"]["@timestamp"], h["_id"]]
+        pages = [
+            {"hits": {"hits": full_page}},
+            {"hits": {"hits": full_page}},
+            {"hits": {"hits": []}},
+        ]
+        calls: list = []
+
+        async def fake_search(body, *a, **k):
+            calls.append(body)
+            return pages[len(calls) - 1]
+
+        self.idx.search = fake_search
+        _run(self.tools["get_attack_chains"](min_stages=1))
+        # Capped at _MAX_CORRELATION_ALERTS (default 1000) → exactly two pages.
+        assert len(calls) == 2
+        assert "search_after" in calls[1]
+        assert all(c.get("size", 0) <= 500 for c in calls)
+
     def test_build_clusters_helper_directly(self):
         from wazuh_mcp.tools.correlation import _build_clusters, _build_chains
         hits = [_hit("2024-01-01T00:00:01Z", 13, "Impact", "T1485") for _ in range(11)]
