@@ -34,6 +34,28 @@ _SENSITIVE_KEYS = re.compile(
     re.IGNORECASE,
 )
 
+# ── Response value redaction (M5) ─────────────────────────────────────────────
+# EXACT key names whose VALUES are credentials that must never reach the LLM.
+# Deliberately uses exact matching (not the substring _SENSITIVE_KEYS regex) and
+# excludes overloaded names so we don't mangle legitimate output:
+#   * 'token'            — approval-workflow + pagination cursors (next_page_token)
+#   * 'token_budget' / 'estimated_tokens' / 'cached_secrets' — counts, not secrets
+_REDACT_VALUE_KEYS = frozenset({
+    "password", "passwd", "pwd", "secret", "client_secret",
+    "api_key", "apikey", "api-key", "secret_key", "private_key",
+    "access_key", "authorization", "auth_token", "session_token",
+})
+
+
+def _secret_returning_tools() -> frozenset[str]:
+    """Tools allowed to return credential-keyed values un-redacted (e.g. a tool
+    that hands back a freshly-minted key the operator explicitly requested).
+    Extend via WAZUH_MCP_SECRET_RETURNING_TOOLS (comma-separated)."""
+    raw = os.getenv("WAZUH_MCP_SECRET_RETURNING_TOOLS", "")
+    names = {t.strip() for t in raw.split(",") if t.strip()}
+    names.add("rotate_wazuh_api_password")
+    return frozenset(names)
+
 # ── Prompt injection / adversarial AI patterns ────────────────────────────────
 # Neutralize LLM boundary-crossing tokens that an attacker could embed in
 # log data (e.g. User-Agent strings stored in Wazuh alerts).
@@ -117,34 +139,58 @@ def sanitize_string(value: str) -> str:
     return value
 
 
-def _sanitize_value(value: Any, _depth: int = 0) -> Any:
-    """Recursively sanitize a response value (dict, list, str)."""
+def _sanitize_value(value: Any, _depth: int = 0, redact_keys: bool = True) -> Any:
+    """Recursively sanitize a response value (dict, list, str).
+
+    When *redact_keys* is True, any dict value whose key is an exact credential
+    name (_REDACT_VALUE_KEYS) is replaced with [REDACTED] — this catches secrets
+    that live as structured values (``{"password": "..."}``) which the string-
+    level pattern never sees after deserialization.
+    """
     if _depth > 10:  # prevent infinite recursion on deeply nested data
         return value
     if isinstance(value, str):
         return sanitize_string(value)
     if isinstance(value, dict):
-        return {k: _sanitize_value(v, _depth + 1) for k, v in value.items()}
+        out: dict = {}
+        for k, v in value.items():
+            if (
+                redact_keys
+                and isinstance(k, str)
+                and k.strip().lower() in _REDACT_VALUE_KEYS
+                and isinstance(v, (str, int, float, bool))
+            ):
+                out[k] = "[REDACTED]"
+            else:
+                out[k] = _sanitize_value(v, _depth + 1, redact_keys)
+        return out
     if isinstance(value, list):
-        return [_sanitize_value(item, _depth + 1) for item in value]
+        return [_sanitize_value(item, _depth + 1, redact_keys) for item in value]
     return value
 
 
-def sanitize_response(result: dict) -> dict:
+def sanitize_response(result: dict, tool_name: str | None = None) -> dict:
     """Sanitize a tool response dict before sending to the LLM client.
 
     Removes:
     - Prompt injection tokens (<system>, [INST], ###System:, etc.)
     - Executable code patterns (eval, exec, subprocess)
     - Plaintext secrets in values (password=xxx, token=xxx)
+    - Structured secrets keyed by an exact credential name (M5)
     - PII (emails, SSNs, credit card numbers)
+
+    *tool_name* lets a tool on the WAZUH_MCP_SECRET_RETURNING_TOOLS allowlist
+    return credential-keyed values un-redacted (e.g. a key-rotation tool).
 
     Safe on tool error responses — returns them unchanged structurally,
     only scanning string content within them.
     """
     if not isinstance(result, dict):
         return result
-    return _sanitize_value(result)
+    redact = True
+    if tool_name and tool_name in _secret_returning_tools():
+        redact = False
+    return _sanitize_value(result, redact_keys=redact)
 
 
 def _count_tokens(obj: Any) -> int:

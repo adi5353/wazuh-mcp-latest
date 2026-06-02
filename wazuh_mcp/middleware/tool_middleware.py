@@ -181,13 +181,15 @@ class ToolMiddleware:
                         pass
 
                     # ── OUTPUT sanitization ───────────────────────────────
+                    # Pass the tool name so secret-redaction can be skipped for
+                    # tools that intentionally return a credential (M5 allowlist).
                     if isinstance(result, dict):
-                        result = sanitize_response(result)
+                        result = sanitize_response(result, tool_name=_tool_name)
                     elif isinstance(result, str):
                         result = sanitize_string(result)
                     elif isinstance(result, list):
                         result = [
-                            sanitize_response(item) if isinstance(item, dict)
+                            sanitize_response(item, tool_name=_tool_name) if isinstance(item, dict)
                             else (sanitize_string(item) if isinstance(item, str) else item)
                             for item in result
                         ]
