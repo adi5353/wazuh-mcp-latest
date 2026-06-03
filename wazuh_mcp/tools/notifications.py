@@ -53,6 +53,13 @@ async def close_soar_client() -> None:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
+
+    from .. import tool_contexts as _tc
+    # Slack/Teams sender pairs register as backward-compatible aliases of the
+    # consolidated send_alert()/send_weekly_summary() tools (platform=...).
+    # Suppressed when WAZUH_MCP_LEGACY_ALIASES=false to shrink the surface.
+    _alias_tool = _tc.alias_tool(mcp)
+
     generate_shift_handover: Any = ctx.shared.get("generate_shift_handover")
     generate_weekly_summary: Any = ctx.shared.get("generate_weekly_summary")
     generate_compliance_report: Any = ctx.shared.get("generate_compliance_report")
@@ -102,7 +109,7 @@ def register(ctx: ToolContext) -> None:
 
         return {"error": "Slack not configured. Add SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN to .env."}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_alert_to_slack(
         message: str,
         title: str | None = None,
@@ -244,7 +251,7 @@ def register(ctx: ToolContext) -> None:
         result = await _post_slack_blocks(target, blocks, f"Wazuh Shift Handover — {ts_str}")
         return {**result, "channel": target, "analyst": analyst_name, "shift_duration": shift_duration}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_weekly_summary_to_slack(
         week_offset: int = 0,
         channel: str | None = None,
@@ -519,7 +526,7 @@ def register(ctx: ToolContext) -> None:
         except Exception as e:
             return {"error": f"Teams webhook failed: {e}"}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_alert_to_teams(
         message: str,
         title: str | None = None,
@@ -658,7 +665,7 @@ def register(ctx: ToolContext) -> None:
         result = await _post_teams_card(card)
         return {**result, "severity_tier": tier, "alert_id": alert_id}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_weekly_summary_to_teams(
         week_offset: int = 0,
     ) -> dict:
@@ -726,3 +733,56 @@ def register(ctx: ToolContext) -> None:
 
         result = await _post_teams_card(card)
         return {**result, "week_offset": week_offset, "label": label}
+
+    # ── Unified chat senders (consolidation) ──────────────────────────────────
+    # One tool per message kind with a platform= selector, dispatching to the
+    # Slack/Teams implementations above. The per-platform tools remain as
+    # backward-compatible aliases unless WAZUH_MCP_LEGACY_ALIASES=false.
+    @mcp.tool()
+    async def send_alert(
+        platform: str,
+        message: str,
+        title: str | None = None,
+        severity: str = "info",
+        fields: dict | None = None,
+        ticket_url: str | None = None,
+        channel: str | None = None,
+    ) -> dict:
+        """Push a formatted alert to Slack or Microsoft Teams.
+
+        platform: slack | teams
+        severity: info | warning | critical
+        channel:  Slack-only channel override (ignored for Teams).
+        Requires the matching webhook/token env var for the chosen platform.
+        """
+        p = (platform or "").strip().lower()
+        if p == "slack":
+            return await send_alert_to_slack(
+                message=message, title=title, severity=severity,
+                channel=channel, fields=fields, ticket_url=ticket_url,
+            )
+        if p == "teams":
+            return await send_alert_to_teams(
+                message=message, title=title, severity=severity,
+                fields=fields, ticket_url=ticket_url,
+            )
+        return {"error": f"Unknown platform '{platform}'", "supported": ["slack", "teams"]}
+
+    @mcp.tool()
+    async def send_weekly_summary(
+        platform: str,
+        week_offset: int = 0,
+        channel: str | None = None,
+    ) -> dict:
+        """Generate the weekly security summary and push it to Slack or Teams.
+
+        platform:    slack | teams
+        week_offset: 0 = current week, 1 = last week.
+        channel:     Slack-only channel override (ignored for Teams).
+        """
+        p = (platform or "").strip().lower()
+        if p == "slack":
+            return await send_weekly_summary_to_slack(week_offset=week_offset, channel=channel)
+        if p == "teams":
+            return await send_weekly_summary_to_teams(week_offset=week_offset)
+        return {"error": f"Unknown platform '{platform}'", "supported": ["slack", "teams"]}

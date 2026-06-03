@@ -38,7 +38,7 @@ _INIT_VERSION = re.compile(r'__version__\s*=\s*["\'](\d+)\.(\d+)')
 # ``@mcp.tool()`` but conditionally (e.g. backward-compatible aliases gated by
 # WAZUH_MCP_LEGACY_ALIASES). They register by default, so they count toward the
 # advertised surface and the AST walk must recognise them.
-_ALIAS_TOOL_DECORATORS = {"_summary_tool"}
+_ALIAS_TOOL_DECORATORS = {"_summary_tool", "_alias_tool"}
 
 
 def _decorated_names(tree: ast.Module, attr: str) -> list[str]:
