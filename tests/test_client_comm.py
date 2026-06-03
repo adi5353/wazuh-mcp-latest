@@ -246,8 +246,8 @@ async def test_indexer_search_size_cap_enforced(monkeypatch):
         return _Resp(200, {"hits": {}})
 
     monkeypatch.setattr(idx._client, "post", fake_post)
-    # Explicit ValueError (not AssertionError) so the cap survives `python -O`,
-    # which strips assertions. See WazuhIndexer._search_impl.
+    # The cap is enforced with an explicit ValueError, not assert — `python -O`
+    # strips asserts and would otherwise silently disable this OOM guard.
     with pytest.raises(ValueError):
         await idx.search({"query": {"match_all": {}}, "size": 10_000})
     await idx.aclose()

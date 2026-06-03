@@ -333,6 +333,10 @@ class TestMSSPConfig:
 
         mock_mcp.tool = capture_tool
 
+        # list_tenants requires ADMIN (discloses every tenant's manager host).
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        identity.set_session_role(ROLE.ADMIN)
         from wazuh_mcp.server import list_tenants
         result = await list_tenants()
         assert result["mssp_mode"] is False
@@ -341,6 +345,10 @@ class TestMSSPConfig:
     async def test_switch_tenant_no_tenants_configured(self):
         """switch_tenant returns error when MSSP not configured."""
         from wazuh_mcp.server import switch_tenant
+        # switch_tenant requires ADMIN (crosses a tenant data-isolation boundary).
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        identity.set_session_role(ROLE.ADMIN)
         # Patch cfg.tenants to be empty
         import wazuh_mcp.server as srv
         original_tenants = srv.cfg.tenants
@@ -364,6 +372,11 @@ class TestMSSPConfig:
         import dataclasses
         import wazuh_mcp.server as srv
         from wazuh_mcp.config import Config, TenantConfig
+        # switch_tenant now requires ADMIN; set it before spawning the child
+        # tasks so the role propagates via the copied context.
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        identity.set_session_role(ROLE.ADMIN)
 
         # Build two fake tenants
         tenant_a = TenantConfig(

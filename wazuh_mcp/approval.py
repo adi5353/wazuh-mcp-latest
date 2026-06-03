@@ -22,6 +22,30 @@ log = logging.getLogger(__name__)
 _REDIS_URL = os.getenv("REDIS_URL")
 _KEY_PREFIX = "wazuh-mcp:approval:"
 
+# Cap on in-memory pending approvals so a flood of proposals can't exhaust memory.
+_MAX_PENDING = int(os.getenv("WAZUH_MCP_MAX_PENDING_APPROVALS", "1000"))
+
+
+def _run_blocking(coro_factory):
+    """Run an async store operation from a *synchronous* caller.
+
+    The old code called ``asyncio.get_event_loop().run_until_complete()`` here,
+    which raises an opaque ``RuntimeError`` when invoked inside the server's
+    already-running event loop — silently breaking the sync API. We instead run
+    a fresh loop only when none is running, and otherwise fail loudly pointing
+    callers at the async variant. The coroutine is created lazily so we never
+    leave an un-awaited coroutine behind when raising.
+    """
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro_factory())
+    raise RuntimeError(
+        "ApprovalStore sync method called from within a running event loop. "
+        "Use the async variant (acreate / aapprove / adeny / alist_pending)."
+    )
+
 if not _REDIS_URL:
     _allow_writes = os.getenv("WAZUH_ALLOW_WRITES", "false").lower() == "true"
     if _allow_writes:
@@ -51,8 +75,22 @@ class ApprovalStore:
                     "Install with: pip install redis[asyncio]"
                 )
 
+    def _enforce_pending_cap(self) -> None:
+        """Bound the in-memory pending dict: purge expired entries, then evict the
+        oldest-inserted (FIFO) until under _MAX_PENDING. Redis enforces its own
+        memory limits, so this is in-memory only."""
+        if len(self._pending) < _MAX_PENDING:
+            return
+        now = time.time()
+        for t in [t for t, e in self._pending.items() if now > e["expire_at"]]:
+            del self._pending[t]
+        while len(self._pending) >= _MAX_PENDING:
+            del self._pending[next(iter(self._pending))]
+
     def create(self, action: str, params: dict, ttl: int = _DEFAULT_TTL) -> str:
         """Create a pending approval and return the opaque token."""
+        if self._redis is not None:
+            return _run_blocking(lambda: self.acreate(action, params, ttl))
         token = secrets.token_urlsafe(16)
         entry = {
             "action": action,
@@ -61,13 +99,8 @@ class ApprovalStore:
             "created_at": time.time(),
             "expire_at": time.time() + ttl,
         }
-        if self._redis is not None:
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                self._redis.setex(_KEY_PREFIX + token, ttl, json.dumps(entry))
-            )
-        else:
-            self._pending[token] = entry
+        self._enforce_pending_cap()
+        self._pending[token] = entry
         log.info("Approval token created action=%s token=%s ttl=%ds", action, token, ttl)
         return token
 
@@ -84,6 +117,7 @@ class ApprovalStore:
         if self._redis is not None:
             await self._redis.setex(_KEY_PREFIX + token, ttl, json.dumps(entry))
         else:
+            self._enforce_pending_cap()
             self._pending[token] = entry
         log.info("Approval token created action=%s token=%s ttl=%ds", action, token, ttl)
         return token
@@ -91,8 +125,7 @@ class ApprovalStore:
     def approve(self, token: str) -> dict | None:
         """Pop and return the entry if the token is valid and not expired."""
         if self._redis is not None:
-            import asyncio
-            return asyncio.get_event_loop().run_until_complete(self.aapprove(token))
+            return _run_blocking(lambda: self.aapprove(token))
         entry = self._pending.pop(token, None)
         if entry is None:
             return None
@@ -128,8 +161,7 @@ class ApprovalStore:
     def deny(self, token: str) -> bool:
         """Remove a pending entry and return True if it existed."""
         if self._redis is not None:
-            import asyncio
-            return asyncio.get_event_loop().run_until_complete(self.adeny(token))
+            return _run_blocking(lambda: self.adeny(token))
         entry = self._pending.pop(token, None)
         if entry is not None:
             log.info("Approval token denied token=%s", token)
@@ -163,8 +195,7 @@ class ApprovalStore:
     def list_pending(self) -> list[dict]:
         """Return all pending (non-expired) approvals for admin inspection."""
         if self._redis is not None:
-            import asyncio
-            return asyncio.get_event_loop().run_until_complete(self.alist_pending())
+            return _run_blocking(lambda: self.alist_pending())
         now = time.time()
         return [
             {

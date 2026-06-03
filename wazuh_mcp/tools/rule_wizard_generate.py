@@ -75,7 +75,6 @@ def register_generate(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
 
     @mcp.tool()
     async def generate_rule_xml(

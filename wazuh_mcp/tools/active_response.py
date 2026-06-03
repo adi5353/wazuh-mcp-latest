@@ -9,7 +9,13 @@ import os
 
 from ..tool_context import ToolContext
 from ..rbac import ROLE
-from ..validators import safe_validate, validate_time_range
+from ..validators import (
+    safe_validate,
+    validate_time_range,
+    validate_agent_id,
+    validate_ar_command,
+    validate_active_response_target,
+)
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -20,11 +26,21 @@ AR_RULE_IDS = ["601", "602", "603", "651", "652"]
 AR_GROUPS = ["active_response", "ar"]
 
 
+def _slack_safe(value: str) -> str:
+    """Neutralize characters before embedding a value in the Slack approval
+    message (H1). The AR fields are already validated, but defense-in-depth: a
+    value must never break out of its code span (backtick) or inject extra lines
+    (newlines) that could forge instructions to the human approver."""
+    if not value:
+        return value
+    cleaned = "".join(ch for ch in str(value) if ch.isprintable() and ch != "`")
+    return cleaned[:120]
+
+
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _require_writes = ctx.require_writes
 
@@ -241,6 +257,19 @@ def register(ctx: ToolContext) -> None:
         if err:
             return err
 
+        # Validate the full proposal up front so an unsafe action can never be
+        # stored, shown to a human approver in Slack, or executed on approval.
+        # In particular this rejects agent_id='all'/'*' (fleet-wide fan-out).
+        agent_id, verr = safe_validate(validate_agent_id, agent_id)
+        if verr:
+            return verr
+        cmd_err = validate_ar_command(command)
+        if cmd_err:
+            return {"error": cmd_err, "blocked": True}
+        ip_err = validate_active_response_target(src_ip)
+        if ip_err:
+            return {"error": ip_err, "blocked": True}
+
         from ..approval import approval_store
 
         params = {"command": command, "agent_id": agent_id, "src_ip": src_ip}
@@ -259,9 +288,9 @@ def register(ctx: ToolContext) -> None:
         slack_sent    = False
         if slack_webhook:
             import httpx as _httpx
-            action_desc = f"`{command}` on agent `{agent_id}`"
+            action_desc = f"`{_slack_safe(command)}` on agent `{_slack_safe(agent_id)}`"
             if src_ip:
-                action_desc += f", blocking IP `{src_ip}`"
+                action_desc += f", blocking IP `{_slack_safe(src_ip)}`"
             msg = (
                 f":bell: *Wazuh AI proposes active response*\n"
                 f"Action: {action_desc}\n"
@@ -340,7 +369,12 @@ def register(ctx: ToolContext) -> None:
         agent_id = params.get("agent_id", "")
         src_ip   = params.get("src_ip")
 
-        from ..validators import validate_active_response_target, validate_ar_command
+        # Re-validate the stored target at execution time (defense in depth): the
+        # token may originate from a Redis entry written by an older build, so
+        # never trust that agent_id was screened at propose time.
+        agent_id, verr = safe_validate(validate_agent_id, agent_id)
+        if verr:
+            return {**verr, "token": token}
         cmd_err = validate_ar_command(command)
         if cmd_err:
             return {"error": cmd_err, "blocked": True, "token": token}

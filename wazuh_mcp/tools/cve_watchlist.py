@@ -72,7 +72,6 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
 
     from ..validators import safe_validate, validate_cve_id, validate_free_text
 

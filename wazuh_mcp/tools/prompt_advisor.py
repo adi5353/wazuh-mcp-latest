@@ -112,9 +112,6 @@ _GROQ_TPM_LIMIT = 12_000        # Groq llama-3.3-70b free-tier limit
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 

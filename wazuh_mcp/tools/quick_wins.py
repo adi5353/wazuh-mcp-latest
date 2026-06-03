@@ -120,7 +120,6 @@ def _extract_min_level(text: str) -> int:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
     cfg = ctx.cfg
     _cap = ctx.cap
@@ -284,7 +283,6 @@ def register(ctx: ToolContext) -> None:
         rule_id  = rule.get("id", "")
 
         score = 0          # positive = TP confidence, negative = FP confidence
-        evidence: list[str] = []
         fp_signals: list[str] = []
         tp_signals: list[str] = []
 

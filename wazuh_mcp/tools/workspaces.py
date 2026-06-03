@@ -69,7 +69,6 @@ _VALID_TYPES = {"note", "alert_id", "agent_id", "artifact", "timeline", "cve", "
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    cfg = ctx.cfg
 
     from ..rbac import require_responder_or_above
     from ..validators import safe_validate, validate_free_text

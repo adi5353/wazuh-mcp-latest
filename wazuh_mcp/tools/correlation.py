@@ -26,9 +26,7 @@ _MAX_CORRELATION_ALERTS = int(os.getenv("WAZUH_CORRELATION_MAX_ALERTS", "1000"))
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz  = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
 
     @mcp.tool()

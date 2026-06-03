@@ -64,9 +64,6 @@ _PRIORITY_MAP = {"critical": "1", "high": "2", "medium": "3", "low": "4"}
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
