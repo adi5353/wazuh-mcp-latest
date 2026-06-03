@@ -959,6 +959,7 @@ def main() -> None:
             from .tools.threat_intel import close_shared_ti_clients
             from .tools.notifications import close_soar_client
             from .tools.servicenow import close_snow_client
+            from .geo import close_geo_client
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 for _coro in (
@@ -967,6 +968,7 @@ def main() -> None:
                     close_shared_ti_clients(),
                     close_soar_client(),
                     close_snow_client(),
+                    close_geo_client(),
                 ):
                     _task = loop.create_task(_coro)
                     _shutdown_tasks.add(_task)
