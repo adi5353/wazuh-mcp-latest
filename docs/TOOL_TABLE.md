@@ -1,6 +1,6 @@
 # Tool Inventory (auto-generated)
 
-**241 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
+**244 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
 
@@ -233,14 +233,16 @@
 - `get_network_topology`
 - `map_subnet_exposure`
 
-### `tools/notifications` (8)
+### `tools/notifications` (10)
 
 - `email_compliance_report`
+- `send_alert`
 - `send_alert_to_slack`
 - `send_alert_to_teams`
 - `send_critical_alert_notify`
 - `send_critical_alert_to_teams`
 - `send_shift_handover_to_slack`
+- `send_weekly_summary`
 - `send_weekly_summary_to_slack`
 - `send_weekly_summary_to_teams`
 
@@ -377,12 +379,13 @@
 - `hunt_lateral_movement`
 - `hunt_persistence_mechanisms`
 
-### `tools/threat_intel` (9)
+### `tools/threat_intel` (10)
 
 - `bulk_enrich_iocs`
 - `enrich_domain`
 - `enrich_email`
 - `enrich_file_hash`
+- `enrich_indicator`
 - `enrich_ip`
 - `enrich_ip_geo`
 - `enrich_url`

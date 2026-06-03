@@ -171,6 +171,25 @@ def legacy_aliases_enabled() -> bool:
     )
 
 
+def alias_tool(mcp):
+    """Return an ``@mcp.tool``-style decorator for backward-compatible aliases.
+
+    The returned decorator registers a function as an MCP tool only when legacy
+    aliases are enabled (the default). When ``WAZUH_MCP_LEGACY_ALIASES=false`` it
+    leaves the function defined-but-unregistered, so it disappears from the
+    advertised surface while remaining callable from the consolidated tool that
+    replaced it. Used by modules that collapse duplicate tool families (see
+    ``compliance``/``threat_intel``/``notifications``). The local name a module
+    binds this to (``_alias_tool``) is recognised by
+    ``scripts/generate_tool_table.py`` so the inventory count stays accurate.
+    """
+    def deco(*a, **k):
+        if legacy_aliases_enabled():
+            return mcp.tool(*a, **k)
+        return lambda fn: fn
+    return deco
+
+
 # ── Tool → context map, built during registration ────────────────────────────
 _registering_module: str | None = None
 _tool_to_context: dict[str, str] = {}

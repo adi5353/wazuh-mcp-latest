@@ -166,9 +166,15 @@ def register(ctx: ToolContext) -> None:
     cfg = ctx.cfg
     _geoip_lookup = ctx.geoip_lookup
 
+    from .. import tool_contexts as _tc
+    # Register the single-indicator reputation enrichers as backward-compatible
+    # aliases of the consolidated enrich_indicator() tool (see below). Suppressed
+    # when WAZUH_MCP_LEGACY_ALIASES=false to shrink the advertised surface.
+    _alias_tool = _tc.alias_tool(mcp)
+
     from ..validators import safe_validate, validate_ip_address, validate_ip_list
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_ip(ip: str) -> dict:
         """Enrich a source IP with VirusTotal + AbuseIPDB reputation data.
 
@@ -225,7 +231,7 @@ def register(ctx: ToolContext) -> None:
         )
         return result
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_file_hash(hash_value: str) -> dict:
         """Check a file hash (MD5, SHA1, or SHA256) against VirusTotal.
 
@@ -271,7 +277,7 @@ def register(ctx: ToolContext) -> None:
             },
         }
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_domain(domain: str) -> dict:
         """Check a domain name against VirusTotal for reputation and threat data.
 
@@ -321,7 +327,7 @@ def register(ctx: ToolContext) -> None:
             ),
         }
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_url(url: str) -> dict:
         """Check a URL against VirusTotal for reputation and phishing/malware signals.
 
@@ -510,7 +516,7 @@ def register(ctx: ToolContext) -> None:
         results = await asyncio.gather(*tasks, return_exceptions=False)
         return {"results": list(results)}
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_email(email: str) -> dict:
         """Enrich an email address with breach and deliverability intelligence.
 
@@ -598,6 +604,36 @@ def register(ctx: ToolContext) -> None:
             result["risk_level"] = "LOW"
 
         return result
+
+    # ── Unified single-indicator enrichment (consolidation) ───────────────────
+    # One parameterized entry point for the per-type reputation enrichers above.
+    # The dedicated enrich_<type> tools remain as backward-compatible aliases
+    # unless WAZUH_MCP_LEGACY_ALIASES=false. (Batch/geo enrichers — enrich_ip_geo,
+    # enrich_ip_extended, enrich_cve_epss — have different signatures and stay
+    # separate.)
+    _INDICATOR_ENRICHERS = {
+        "ip": enrich_ip,
+        "file_hash": enrich_file_hash,
+        "domain": enrich_domain,
+        "url": enrich_url,
+        "email": enrich_email,
+    }
+
+    @mcp.tool()
+    async def enrich_indicator(indicator_type: str, value: str) -> dict:
+        """Enrich a single threat indicator with reputation/breach intelligence.
+
+        indicator_type: ip | file_hash | domain | url | email
+        value:          the indicator to look up (an IP, hash, domain, URL, or email)
+        Returns the same report the dedicated enrich_<type> tool would.
+        """
+        fn = _INDICATOR_ENRICHERS.get((indicator_type or "").strip().lower())
+        if fn is None:
+            return {
+                "error": f"Unknown indicator_type '{indicator_type}'",
+                "supported": sorted(_INDICATOR_ENRICHERS),
+            }
+        return await fn(value)
 
     @mcp.tool()
     async def ioc_to_alert_match(
