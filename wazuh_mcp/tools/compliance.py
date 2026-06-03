@@ -198,6 +198,20 @@ def register(ctx: ToolContext) -> None:
     idx = ctx.idx
     _cap = ctx.cap
 
+    from .. import tool_contexts as _tc
+
+    def _summary_tool(*a, **k):
+        """Decorator for the per-framework summaries.
+
+        Registers them as MCP tools only when legacy aliases are enabled
+        (the default). When WAZUH_MCP_LEGACY_ALIASES=false they are still
+        defined and callable via ``compliance_framework_summary`` — they just
+        aren't advertised individually, shrinking the tool surface.
+        """
+        if _tc.legacy_aliases_enabled():
+            return mcp.tool(*a, **k)
+        return lambda fn: fn
+
     @mcp.tool()
     async def compliance_summary(
         framework: str = "pci_dss", time_range: str = "30d", min_level: int = 5
@@ -348,7 +362,7 @@ def register(ctx: ToolContext) -> None:
             "controls": controls,
         }
 
-    @mcp.tool()
+    @_summary_tool()
     async def iso27001_compliance_summary(time_range: str = "30d", min_level: int = 5) -> dict:
         """Generate an ISO 27001:2022 Annex A compliance posture report.
 
@@ -410,7 +424,7 @@ def register(ctx: ToolContext) -> None:
             ),
         }
 
-    @mcp.tool()
+    @_summary_tool()
     async def nist_csf2_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -527,7 +541,7 @@ def register(ctx: ToolContext) -> None:
             ),
         }
 
-    @mcp.tool()
+    @_summary_tool()
     async def soc2_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -639,7 +653,7 @@ def register(ctx: ToolContext) -> None:
 
     # ── PCI-DSS dedicated summary ─────────────────────────────────────────────
 
-    @mcp.tool()
+    @_summary_tool()
     async def pci_dss_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -744,7 +758,7 @@ def register(ctx: ToolContext) -> None:
 
     # ── HIPAA dedicated summary ───────────────────────────────────────────────
 
-    @mcp.tool()
+    @_summary_tool()
     async def hipaa_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -850,6 +864,38 @@ def register(ctx: ToolContext) -> None:
                 "HIPAA Breach Notification Rule events require manual review."
             ),
         }
+
+    # ── Unified framework summary (consolidation) ─────────────────────────────
+    # Single parameterized entry point for the five rule-group framework
+    # summaries above. The per-framework tools remain registered as backward-
+    # compatible aliases (unless WAZUH_MCP_LEGACY_ALIASES=false), so this adds a
+    # cleaner surface without removing anything.
+    _FRAMEWORK_SUMMARIES = {
+        "iso27001": iso27001_compliance_summary,
+        "nist_csf2": nist_csf2_compliance_summary,
+        "soc2": soc2_compliance_summary,
+        "pci_dss": pci_dss_compliance_summary,
+        "hipaa": hipaa_compliance_summary,
+    }
+
+    @mcp.tool()
+    async def compliance_framework_summary(
+        framework: str = "pci_dss", time_range: str = "30d", min_level: int = 5
+    ) -> dict:
+        """Generate a compliance posture report for a named framework.
+
+        framework: iso27001 | nist_csf2 | soc2 | pci_dss | hipaa
+        One entry point for the per-framework summaries. Returns the same
+        report the dedicated tool would (per-control/function/criterion status,
+        alert counts, top agents, posture).
+        """
+        fn = _FRAMEWORK_SUMMARIES.get(framework)
+        if fn is None:
+            return {
+                "error": f"Unknown framework '{framework}'",
+                "supported": sorted(_FRAMEWORK_SUMMARIES),
+            }
+        return await fn(time_range=time_range, min_level=min_level)
 
     # ── Compliance drift detection ────────────────────────────────────────────
 

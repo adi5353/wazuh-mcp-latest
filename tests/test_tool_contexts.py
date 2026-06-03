@@ -90,6 +90,43 @@ class TestTagging:
         assert tc.context_of("search_alerts") == tc.CORE
 
 
+class TestContextCoverage:
+    """Pin the expanded module→context map so it can't drift or typo silently."""
+
+    def _discovered_modules(self) -> set[str]:
+        import pkgutil
+        import wazuh_mcp.tools as _tools
+        return {
+            m for _, m, _ in pkgutil.iter_modules(_tools.__path__)
+            if m != "__init__"
+        }
+
+    def test_every_mapped_name_is_a_real_module(self):
+        discovered = self._discovered_modules()
+        mapped = {m for mods in tc.CONTEXT_MODULES.values() for m in mods}
+        unknown = mapped - discovered
+        assert not unknown, f"CONTEXT_MODULES references non-existent modules: {sorted(unknown)}"
+
+    def test_no_module_in_two_contexts(self):
+        seen: dict[str, str] = {}
+        for ctx, mods in tc.CONTEXT_MODULES.items():
+            for m in mods:
+                assert m not in seen, f"module '{m}' mapped to both '{seen[m]}' and '{ctx}'"
+                seen[m] = ctx
+
+    def test_core_essentials_stay_core(self):
+        # These everyday-triage modules must remain CORE (always available) so a
+        # gating-enabled session can do baseline SOC work without entering a context.
+        core_essentials = {
+            "alerts", "agents", "agent_health", "health_check", "cluster",
+            "metrics", "routing", "prompt_advisor", "explain_alert",
+            "quick_wins", "onboarding", "workspaces",
+        }
+        mapped = {m for mods in tc.CONTEXT_MODULES.values() for m in mods}
+        leaked = core_essentials & mapped
+        assert not leaked, f"core-essential modules were gated: {sorted(leaked)}"
+
+
 @pytest.mark.asyncio
 async def test_middleware_gates_specialised_tool():
     """End-to-end: when gating is on, a specialised tool is inert until the
