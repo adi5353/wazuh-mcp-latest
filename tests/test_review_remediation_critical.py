@@ -169,6 +169,25 @@ class TestAbacScopeInjection:
         assert out["query"]["bool"]["must"] == [{"match_all": {}}]
         assert {"terms": {"agent.id": ["001"]}} in out["query"]["bool"]["filter"]
 
+    def test_count_inner_query_noop_when_disabled(self):
+        from wazuh_mcp import wazuh_indexer as wi
+        inner = {"term": {"rule.id": "5710"}}
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("WAZUH_MCP_ALLOWED_GROUPS", None)
+            os.environ.pop("WAZUH_MCP_ALLOWED_AGENTS", None)
+            os.environ.pop("WAZUH_MCP_DENIED_GROUPS", None)
+            assert wi._abac_wrap_query(inner) is inner
+
+    def test_count_inner_query_scoped_when_enabled(self):
+        # Regression: count() previously skipped ABAC, allowing count-based
+        # inference of document volumes outside the caller's allowed groups.
+        from wazuh_mcp import wazuh_indexer as wi
+        inner = {"term": {"rule.id": "5710"}}
+        with patch.dict(os.environ, {"WAZUH_MCP_ALLOWED_GROUPS": "linux-prod"}):
+            out = wi._abac_wrap_query(inner)
+        assert out["bool"]["must"] == [inner]
+        assert {"terms": {"agent.groups": ["linux-prod"]}} in out["bool"]["filter"]
+
 
 # ── C2: tenant operations require ADMIN ───────────────────────────────────────
 

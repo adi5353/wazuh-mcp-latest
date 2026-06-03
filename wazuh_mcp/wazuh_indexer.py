@@ -60,24 +60,37 @@ def _validate_query_fields(body: dict) -> None:
             raise ValueError(f"Query field validation failed: {exc}") from exc
 
 
-def _apply_abac_scope(body: dict) -> dict:
-    """Wrap *body*'s query so ABAC group/agent filters are mandatory (C2).
+def _abac_wrap_query(inner_query: dict) -> dict:
+    """Return *inner_query* wrapped so ABAC group/agent filters are mandatory.
 
-    Returns the body unchanged when ABAC is not configured, so single-tenant
-    deployments and existing tests see zero behaviour change. When ABAC is
-    active, the caller's query is moved under ``bool.must`` and the ABAC clauses
-    are added as non-scoring ``bool.filter`` entries — documents outside the
-    session's allowed groups/agents can never be returned, regardless of the
-    original query shape.
+    Returns the query unchanged when ABAC is not configured (zero behaviour
+    change for single-tenant deployments). When ABAC is active, the caller's
+    query is moved under ``bool.must`` and the ABAC clauses are added as
+    non-scoring ``bool.filter`` entries — documents outside the session's
+    allowed groups/agents can never match, regardless of the original shape.
     """
     from .abac import abac_enabled, abac_filter_clause
     if not abac_enabled():
-        return body
+        return inner_query
     clauses = abac_filter_clause()
     if not clauses:
+        return inner_query
+    return {"bool": {"must": [inner_query], "filter": clauses}}
+
+
+def _apply_abac_scope(body: dict) -> dict:
+    """Wrap *body*'s query so ABAC group/agent filters are mandatory (C2).
+
+    Single chokepoint for ``search()``; see :func:`_abac_wrap_query`.
+    """
+    from .abac import abac_enabled
+    if not abac_enabled():
         return body
     inner_query = body.get("query", {"match_all": {}})
-    return {**body, "query": {"bool": {"must": [inner_query], "filter": clauses}}}
+    wrapped = _abac_wrap_query(inner_query)
+    if wrapped is inner_query:
+        return body
+    return {**body, "query": wrapped}
 
 
 log = logging.getLogger(__name__)
@@ -217,6 +230,11 @@ class WazuhIndexer:
         # M4: reject user-controlled fields not in the allow-list
         if validate_fields:
             _validate_query_fields({"query": query})
+        # C2: enforce ABAC scoping on counts too. search() already wraps its
+        # body; count() previously skipped this, letting count-based tools
+        # (frequency enrichment, compliance counts) reflect document volumes
+        # from groups outside the caller's scope. No-op unless ABAC configured.
+        query = _abac_wrap_query(query)
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(

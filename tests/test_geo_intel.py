@@ -533,3 +533,68 @@ class TestPhase3ModuleImports:
     def test_autonomous_soc_importable(self):
         from wazuh_mcp.tools import autonomous_soc
         assert hasattr(autonomous_soc, "register")
+
+
+# ── M2: geo.py shared client + per-IP caching ────────────────────────────────
+
+class TestGeoLookupCachingAndSharedClient:
+    def _mock_client(self):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json = MagicMock(return_value={"country": "US", "city": "NYC", "org": "AS123 X"})
+        client = MagicMock()
+        client.get = AsyncMock(return_value=resp)
+        client.is_closed = False
+        return client
+
+    def test_repeat_lookup_uses_cache_not_network(self):
+        async def run():
+            import wazuh_mcp.geo as geo
+            geo._geo_cache.clear()
+            client = self._mock_client()
+            with patch.dict(os.environ, {"WAZUH_GEOIP_CACHE_TTL_SECONDS": "3600",
+                                         "WAZUH_GEOIP_PROVIDER": "ipinfo"}):
+                # Reload module-level TTL constant under the patched env.
+                geo._CACHE_TTL = 3600
+                with patch.object(geo, "_get_geo_client", return_value=client):
+                    r1 = await geo.geoip_lookup("8.8.8.8")
+                    r2 = await geo.geoip_lookup("8.8.8.8")
+            assert r1 == r2
+            assert r1["country"] == "US"
+            # Second lookup served from cache → only one network call total.
+            assert client.get.await_count == 1
+        asyncio.run(run())
+
+    def test_shared_client_is_reused(self):
+        import wazuh_mcp.geo as geo
+        asyncio.run(geo.close_geo_client())
+        c1 = geo._get_geo_client()
+        c2 = geo._get_geo_client()
+        assert c1 is c2
+        asyncio.run(geo.close_geo_client())
+
+    def test_private_ip_never_hits_network_or_cache(self):
+        async def run():
+            import wazuh_mcp.geo as geo
+            geo._geo_cache.clear()
+            client = self._mock_client()
+            with patch.object(geo, "_get_geo_client", return_value=client):
+                r = await geo.geoip_lookup("10.0.0.5")
+            assert r["geo"] == "private/local"
+            assert client.get.await_count == 0
+            assert "10.0.0.5" not in geo._geo_cache
+        asyncio.run(run())
+
+    def test_failed_lookup_not_cached(self):
+        async def run():
+            import wazuh_mcp.geo as geo
+            geo._geo_cache.clear()
+            geo._CACHE_TTL = 3600
+            client = MagicMock()
+            client.get = AsyncMock(side_effect=Exception("network down"))
+            client.is_closed = False
+            with patch.object(geo, "_get_geo_client", return_value=client):
+                r = await geo.geoip_lookup("9.9.9.9")
+            assert r["geo"] == "lookup_failed"
+            assert "9.9.9.9" not in geo._geo_cache
+        asyncio.run(run())
