@@ -673,6 +673,38 @@ def _check_pii_scrub_config() -> None:
     )
 
 
+def _check_rbac_key_config(transport: str, api_key: str) -> None:
+    """Warn when per-role RBAC keys can never authenticate (HTTP mode).
+
+    In HTTP transport, ``APIKeyMiddleware`` rejects any request whose bearer
+    token is not exactly ``WAZUH_MCP_API_KEY`` (constant-time compare). Per-role
+    keys from ``WAZUH_MCP_KEY_MAP`` are only consulted *after* that gate, by the
+    audit middleware. So if a single ``WAZUH_MCP_API_KEY`` is set AND it is not
+    itself one of the key-map entries, every per-role key is rejected at the door
+    and multi-role RBAC silently collapses to whatever the single key maps to
+    (or to the default role). This is a foot-gun: operators reasonably expect
+    setting both to be "defence in depth", when in fact it disables the map.
+
+    The two supported HTTP auth modes are mutually exclusive:
+      • Single shared key  → set WAZUH_MCP_API_KEY, leave WAZUH_MCP_KEY_MAP unset.
+      • Per-role keys (RBAC) → set WAZUH_MCP_KEY_MAP, leave WAZUH_MCP_API_KEY unset
+        (each role key is then both the auth credential and the role selector).
+    """
+    if transport != "http" or not api_key:
+        return
+    from .identity import _KEY_MAP
+    if not _KEY_MAP:
+        return
+    if api_key not in _KEY_MAP:
+        log.warning(
+            "WAZUH_MCP_API_KEY and WAZUH_MCP_KEY_MAP are both set, but the single "
+            "key is not one of the key-map entries. In HTTP mode the API-key gate "
+            "rejects every per-role key, so multi-role RBAC is effectively "
+            "DISABLED. Use ONE mode: either a single WAZUH_MCP_API_KEY, or "
+            "WAZUH_MCP_KEY_MAP alone (each role key is its own credential)."
+        )
+
+
 def _origin_request_allowed(
     origin: str,
     *,
@@ -740,6 +772,7 @@ def main() -> None:
     api_key = os.getenv("WAZUH_MCP_API_KEY", "")
 
     _check_bind_security(transport, host, api_key)
+    _check_rbac_key_config(transport, api_key)
     _check_pii_scrub_config()
 
     log.info(

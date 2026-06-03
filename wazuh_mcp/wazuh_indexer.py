@@ -155,7 +155,7 @@ class WazuhIndexer:
         _key = _idx + ":" + _json.dumps(body, sort_keys=True, separators=(",", ":"))
         if _key in self._inflight:
             return await asyncio.shield(self._inflight[_key])
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._inflight[_key] = fut
         try:
@@ -173,10 +173,14 @@ class WazuhIndexer:
         """Internal search with retry logic (no circuit breaker — called by search())."""
         # Enforce server-side pagination cap: never request more than 500 docs in one call.
         # Callers should use search_after / page_token for large result sets.
+        #
+        # This is an explicit raise, NOT an `assert`: assertions are stripped under
+        # `python -O` / PYTHONOPTIMIZE, which would silently change the contract.
+        # We fail loudly rather than silently truncating, because silent truncation
+        # in a SIEM (e.g. dropping alerts from a correlation window) hides data and
+        # can mask an attack chain. Callers must page with search_after instead.
         _MAX_PAGE_SIZE = 500
         if "size" in body:
-            # Explicit check, not assert: `python -O` strips asserts, which would
-            # silently disable this OOM guard in optimized production runs.
             if body["size"] > _MAX_PAGE_SIZE:
                 raise ValueError(
                     f"Indexer size={body['size']} exceeds hard cap of {_MAX_PAGE_SIZE}. "

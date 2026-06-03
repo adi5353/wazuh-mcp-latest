@@ -13,8 +13,15 @@ from typing import Any
 
 from ..validators import validate_time_range
 
+import os
+
 # Minimum role required to access these tools (registered conditionally by server.py)
 REQUIRED_ROLE = ROLE.ANALYST
+
+# Upper bound on ATT&CK-tagged alerts gathered for chain building. The indexer
+# caps a single page at 500, so anything above that must be collected via
+# search_after pagination (see below). Env-overridable for large environments.
+_MAX_CORRELATION_ALERTS = int(os.getenv("WAZUH_CORRELATION_MAX_ALERTS", "1000"))
 
 
 def register(ctx: ToolContext) -> None:
@@ -113,26 +120,48 @@ def register(ctx: ToolContext) -> None:
             return {"error": str(exc)}
         gte, lte = f"now-{tr}", "now"
 
-        body: dict = {
-            "size": 1000,
-            "query": {"bool": {"filter": [
-                {"range": {"@timestamp": {"gte": gte, "lte": lte}}},
-                {"exists": {"field": "rule.mitre.tactic"}},
-            ]}},
-            "_source": [
-                "@timestamp", "rule.id", "rule.description", "rule.level",
-                "rule.mitre.id", "rule.mitre.tactic",
-                "agent.id", "agent.name", "data.srcip",
-            ],
-            "sort": [{"@timestamp": {"order": "asc"}}],
-        }
-
+        # Gather ATT&CK-tagged alerts in the window. The indexer rejects a single
+        # page larger than 500, so page through with search_after up to
+        # _MAX_CORRELATION_ALERTS rather than requesting 1000 in one call.
+        _PAGE_SIZE = 500
+        query = {"bool": {"filter": [
+            {"range": {"@timestamp": {"gte": gte, "lte": lte}}},
+            {"exists": {"field": "rule.mitre.tactic"}},
+        ]}}
+        source = [
+            "@timestamp", "rule.id", "rule.description", "rule.level",
+            "rule.mitre.id", "rule.mitre.tactic",
+            "agent.id", "agent.name", "data.srcip",
+        ]
+        hits: list = []
+        search_after: list | None = None
         try:
-            resp = await idx.search(body)
+            while len(hits) < _MAX_CORRELATION_ALERTS:
+                body: dict = {
+                    "size": _PAGE_SIZE,
+                    "query": query,
+                    "_source": source,
+                    # _id tiebreaker keeps search_after deterministic across pages.
+                    "sort": [{"@timestamp": {"order": "asc"}}, {"_id": "asc"}],
+                }
+                if search_after:
+                    body["search_after"] = search_after
+                resp = await idx.search(body)
+                page_hits = resp.get("hits", {}).get("hits", [])
+                if not page_hits:
+                    break
+                hits.extend(page_hits)
+                if len(page_hits) < _PAGE_SIZE:
+                    break  # last page
+                last_sort = page_hits[-1].get("sort")
+                if not last_sort:
+                    break
+                search_after = last_sort
         except Exception as exc:
             return {"error": f"Indexer query failed: {exc}"}
 
-        hits = resp.get("hits", {}).get("hits", [])
+        # Honour the overall bound even if the final page overshot it.
+        hits = hits[:_MAX_CORRELATION_ALERTS]
         if not hits:
             return {"chains": [], "total_alerts_scanned": 0}
 
