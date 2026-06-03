@@ -34,8 +34,19 @@ _README_VERSION = re.compile(r"^###\s*v(\d+)\.(\d+)", re.MULTILINE)
 _INIT_VERSION = re.compile(r'__version__\s*=\s*["\'](\d+)\.(\d+)')
 
 
+# Local decorators that register a function as an MCP *tool* exactly like
+# ``@mcp.tool()`` but conditionally (e.g. backward-compatible aliases gated by
+# WAZUH_MCP_LEGACY_ALIASES). They register by default, so they count toward the
+# advertised surface and the AST walk must recognise them.
+_ALIAS_TOOL_DECORATORS = {"_summary_tool"}
+
+
 def _decorated_names(tree: ast.Module, attr: str) -> list[str]:
-    """Return names of functions carrying an ``@mcp.<attr>(...)`` decorator."""
+    """Return names of functions carrying an ``@mcp.<attr>(...)`` decorator.
+
+    For ``attr == "tool"`` this also counts the local alias decorators in
+    ``_ALIAS_TOOL_DECORATORS`` (they wrap ``mcp.tool`` and register by default).
+    """
     names: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -47,6 +58,13 @@ def _decorated_names(tree: ast.Module, attr: str) -> list[str]:
                 and target.attr == attr
                 and isinstance(target.value, ast.Name)
                 and target.value.id == "mcp"
+            ):
+                names.append(node.name)
+                break
+            if (
+                attr == "tool"
+                and isinstance(target, ast.Name)
+                and target.id in _ALIAS_TOOL_DECORATORS
             ):
                 names.append(node.name)
                 break

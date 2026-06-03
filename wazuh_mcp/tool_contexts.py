@@ -40,18 +40,45 @@ CORE = "core"  # always-on: never gated
 # Modules not listed here are treated as CORE (always available). Keeping this
 # central (rather than a per-module attribute) makes the grouping reviewable in
 # one place and easy to extend.
+#
+# CORE (intentionally NOT listed below) is the lean everyday-triage surface that
+# stays available without entering any context: alerts, agents, agent_health,
+# health_check, cluster, metrics, routing, prompt_advisor, explain_alert,
+# quick_wins, onboarding, workspaces. Every other module is routed into one of
+# the contexts below so that, when gating is enabled, a session only advertises
+# the specialised groups it has explicitly entered. Gating is OFF by default
+# (see ``gating_enabled``), so expanding this map does not change default
+# behaviour — it only makes opt-in gating shrink the surface more effectively.
 CONTEXT_MODULES: dict[str, set[str]] = {
+    # Investigation / hunting / enrichment
     "threat_hunting": {
         "threat_hunting", "threat_intel", "threat_feeds", "correlation", "ueba",
+        "mitre", "geo_intel", "network_topology", "baseline", "archive",
     },
+    # Containment, remediation, and detection-rule authoring
     "active_response": {
-        "active_response", "cdb", "suppression", "rule_wizard_deploy",
+        "active_response", "cdb", "suppression",
+        "rule_wizard", "rule_wizard_deploy", "rule_wizard_generate",
+        "rule_wizard_validate", "rules",
     },
+    # Compliance posture, reporting, audit trails, evidence export
     "compliance": {
-        "compliance", "reporting", "scheduler",
+        "compliance", "reporting", "scheduler", "audit_mgmt", "manager_audit",
+        "export",
     },
+    # Fleet posture: upgrades, FIM, rootcheck, SCA, vulnerabilities
     "system_health": {
         "agent_upgrades", "fim", "rootcheck", "sca", "fleet",
+        "vulnerabilities", "cve_watchlist",
+    },
+    # Case management, automation playbooks, and ticketing/notification sinks
+    "incident_response": {
+        "incidents", "playbooks", "autonomous_soc", "pagerduty", "servicenow",
+        "azure_devops", "integrations", "notifications",
+    },
+    # Manager/index/credential/syslog configuration + ROI bookkeeping
+    "administration": {
+        "index_mgmt", "manager_config", "credential_mgmt", "syslog_config", "roi",
     },
 }
 
@@ -127,6 +154,21 @@ def unknown_scoping_names(valid_modules: set[str]) -> set[str]:
 
 def gating_enabled() -> bool:
     return os.getenv("WAZUH_MCP_CONTEXT_GATING", "").strip().lower() in ("1", "true", "yes")
+
+
+def legacy_aliases_enabled() -> bool:
+    """Whether legacy duplicate-tool aliases are advertised (default True).
+
+    Some tool families were consolidated behind a single parameterized tool
+    (e.g. the per-framework ``*_compliance_summary`` tools behind
+    ``compliance_framework_summary(framework=...)``). The original tool names
+    are kept as thin wrappers so existing clients keep working. Set
+    ``WAZUH_MCP_LEGACY_ALIASES=false`` to advertise only the consolidated tools
+    and shrink the advertised surface. Default keeps every legacy name.
+    """
+    return os.getenv("WAZUH_MCP_LEGACY_ALIASES", "true").strip().lower() not in (
+        "0", "false", "no",
+    )
 
 
 # ── Tool → context map, built during registration ────────────────────────────

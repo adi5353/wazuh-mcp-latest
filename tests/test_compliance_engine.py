@@ -6,7 +6,8 @@ helper semantics and verify a realistic scoring path end-to-end so the
 refactor stays behaviour-preserving.
 """
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -109,28 +110,79 @@ class TestRunGroupAggregation:
         asyncio.run(run())
 
 
+def _register_compliance(search_return):
+    """Register the compliance module against a mock indexer; return {name: fn}."""
+    captured = {}
+    mcp = MagicMock()
+
+    def tool_deco(*a, **k):
+        def wrap(fn):
+            captured[fn.__name__] = fn
+            return fn
+        return wrap
+
+    mcp.tool = tool_deco
+    idx = MagicMock()
+    idx.search = AsyncMock(return_value=search_return)
+    ctx = ToolContext(
+        mcp=mcp, wz=None, idx=idx, cfg=None, cap=lambda x: x,
+        require_writes=lambda: None, truncate=lambda s, n=300: s,
+        enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value={}),
+        incident_recommendations=lambda a: [],
+    )
+    c.register(ctx)
+    return captured
+
+
+_LEGACY_TOOLS = [
+    "iso27001_compliance_summary", "nist_csf2_compliance_summary",
+    "soc2_compliance_summary", "pci_dss_compliance_summary",
+    "hipaa_compliance_summary",
+]
+
+
+class TestLegacyAliasSuppression:
+    def test_aliases_registered_by_default(self):
+        tools = _register_compliance(_agg([]))
+        for name in _LEGACY_TOOLS:
+            assert name in tools, f"{name} should register by default"
+        assert "compliance_framework_summary" in tools
+
+    def test_aliases_suppressed_when_disabled(self):
+        with patch.dict(os.environ, {"WAZUH_MCP_LEGACY_ALIASES": "false"}):
+            tools = _register_compliance(_agg([
+                _bucket("authentication_failed", 10, 2, ["h1"]),
+            ]))
+        # Legacy per-framework tools are no longer advertised...
+        for name in _LEGACY_TOOLS:
+            assert name not in tools, f"{name} should be suppressed"
+        # ...but the unified tool is, and still produces a report.
+        assert "compliance_framework_summary" in tools
+        out = asyncio.run(tools["compliance_framework_summary"](framework="iso27001"))
+        assert out["report_type"] == "iso27001_2022_annex_a"
+
+
 class TestIso27001ScoringEndToEnd:
     def _tools(self, search_return):
-        captured = {}
-        mcp = MagicMock()
+        return _register_compliance(search_return)
 
-        def tool_deco(*a, **k):
-            def wrap(fn):
-                captured[fn.__name__] = fn
-                return fn
-            return wrap
+    def test_unified_dispatch_matches_dedicated_tool(self):
+        res = _agg([
+            _bucket("authentication_failed", 10, 2, ["h1"]),
+            _bucket("brute_force", 5, 0, ["h2"]),
+        ])
+        tools = self._tools(res)
+        unified = asyncio.run(tools["compliance_framework_summary"](framework="iso27001"))
+        dedicated = asyncio.run(tools["iso27001_compliance_summary"]())
+        # Same report content (generated_at timestamp aside).
+        assert unified["report_type"] == dedicated["report_type"] == "iso27001_2022_annex_a"
+        assert unified["controls"] == dedicated["controls"]
 
-        mcp.tool = tool_deco
-        idx = MagicMock()
-        idx.search = AsyncMock(return_value=search_return)
-        ctx = ToolContext(
-            mcp=mcp, wz=None, idx=idx, cfg=None, cap=lambda x: x,
-            require_writes=lambda: None, truncate=lambda s, n=300: s,
-            enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value={}),
-            incident_recommendations=lambda a: [],
-        )
-        c.register(ctx)
-        return captured
+    def test_unified_unknown_framework(self):
+        tools = self._tools(_agg([]))
+        out = asyncio.run(tools["compliance_framework_summary"](framework="bogus"))
+        assert "error" in out and "supported" in out
+        assert "iso27001" in out["supported"]
 
     def test_control_a85_aggregates_auth_groups(self):
         # A.8.5 "Secure authentication" maps to authentication_failed/brute_force/pam.

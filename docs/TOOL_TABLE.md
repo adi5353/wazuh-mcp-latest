@@ -1,6 +1,6 @@
 # Tool Inventory (auto-generated)
 
-**240 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
+**241 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
 
@@ -105,10 +105,11 @@
 - `check_event_queue_health`
 - `get_cluster_health`
 
-### `tools/compliance` (9)
+### `tools/compliance` (10)
 
 - `compliance_control_details`
 - `compliance_drift`
+- `compliance_framework_summary`
 - `compliance_summary`
 - `generate_compliance_report`
 - `hipaa_compliance_summary`
