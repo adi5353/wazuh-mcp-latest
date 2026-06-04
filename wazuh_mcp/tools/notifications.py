@@ -196,7 +196,7 @@ def register(ctx: ToolContext) -> None:
             analyst_name=analyst_name,
         )
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         target = channel or _SLACK_SOC_CHANNEL
 
         overview = report.get("alert_overview") or {}
@@ -266,7 +266,7 @@ def register(ctx: ToolContext) -> None:
 
         report = await generate_weekly_summary(week_offset=week_offset)
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         label  = "This week" if week_offset == 0 else "Last week"
         target = channel or _SLACK_MGMT_CHANNEL
 
@@ -336,7 +336,7 @@ def register(ctx: ToolContext) -> None:
         if not _SLACK_WEBHOOK and not _SLACK_BOT_TOKEN:
             return {"error": "Slack not configured. Add SLACK_WEBHOOK_URL to .env."}
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         target = channel or _SLACK_SOC_CHANNEL
 
         if severity_level >= 12:
@@ -416,7 +416,7 @@ def register(ctx: ToolContext) -> None:
         if "error" in report:
             return report
 
-        ts_str  = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        ts_str  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         subject = f"[Wazuh SOC] {framework.upper()} Compliance Report — {ts_str}"
 
         controls     = report.get("controls", [])
@@ -613,7 +613,7 @@ def register(ctx: ToolContext) -> None:
         if not _TEAMS_WEBHOOK:
             return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         if severity_level >= 12:
             tier = "CRITICAL"; color = "attention"
         elif severity_level >= 9:
@@ -678,7 +678,7 @@ def register(ctx: ToolContext) -> None:
             return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
 
         report = await generate_weekly_summary(week_offset=week_offset)
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         label = "This week" if week_offset == 0 else "Last week"
 
         counts = report.get("alert_counts") or {}

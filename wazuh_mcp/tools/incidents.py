@@ -214,7 +214,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "incident": {
                 "title": title,
-                "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
                 "analyst": analyst,
                 "severity": sev,
                 "alert_count": len(alerts),
@@ -270,7 +270,7 @@ def register(ctx: ToolContext) -> None:
             "doc": {
                 "analyst_tag": tag,
                 "analyst_note": note,
-                "analyst_updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "analyst_updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             }
         }
         try:
@@ -580,7 +580,7 @@ def register(ctx: ToolContext) -> None:
                 ),
                 "params": {
                     "reason": reason,
-                    "ts": datetime.datetime.utcnow().isoformat() + "Z",
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
                 },
             },
         }

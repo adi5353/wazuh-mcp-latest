@@ -4,6 +4,7 @@ from ..tool_context import ToolContext
 
 from ..rbac import require_responder_or_above, require_admin_or_above, ROLE
 REQUIRED_ROLE = ROLE.VIEWER
+from ..abac import filter_manager_agents, check_group_access
 from ..validators import (
     validate_active_response_target,
     validate_ar_command,
@@ -30,7 +31,9 @@ def register(ctx: ToolContext) -> None:
             # Strip characters that could break the query string
             safe_group = "".join(c for c in group_filter if c.isalnum() or c in ("-", "_"))
             url += f"&group={safe_group}"
-        return await wz.request("GET", url)
+        # ABAC: the Manager API isn't group-scoped, so filter enumeration to the
+        # session's allowed groups (no-op unless WAZUH_MCP_ALLOWED_GROUPS is set).
+        return filter_manager_agents(await wz.request("GET", url))
 
     @mcp.tool()
     async def get_agent(agent_id: str) -> dict:
@@ -38,7 +41,10 @@ def register(ctx: ToolContext) -> None:
         agent_id, err = safe_validate(validate_agent_id, agent_id)
         if err:
             return err
-        return await wz.request("GET", f"/agents?agents_list={agent_id}")
+        # ABAC: filtered to empty if the agent is outside the session's groups.
+        return filter_manager_agents(
+            await wz.request("GET", f"/agents?agents_list={agent_id}")
+        )
 
     @mcp.tool()
     async def restart_agent(agent_id: str, dry_run: bool = True) -> dict:
@@ -125,8 +131,12 @@ def register(ctx: ToolContext) -> None:
     @mcp.tool()
     async def get_group_agents(group_id: str, limit: int = 200) -> dict:
         """List agents that belong to a given group."""
-        return await wz.request(
-            "GET", f"/groups/{group_id}/agents?limit={_cap(limit)}"
+        # ABAC: deny enumeration of a group outside the session's allowed set.
+        denied = check_group_access(group_id)
+        if denied:
+            return denied
+        return filter_manager_agents(
+            await wz.request("GET", f"/groups/{group_id}/agents?limit={_cap(limit)}")
         )
 
     @mcp.tool()
@@ -137,6 +147,10 @@ def register(ctx: ToolContext) -> None:
         err = require_admin_or_above()
         if err:
             return err
+        # ABAC: can't move an agent into a group outside the session's scope.
+        denied = check_group_access(group_id)
+        if denied:
+            return denied
         blocked = _require_writes()
         if blocked:
             return blocked

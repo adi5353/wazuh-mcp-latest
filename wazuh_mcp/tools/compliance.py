@@ -366,7 +366,7 @@ def register(ctx: ToolContext) -> None:
             "report_type": "compliance_report",
             "framework": framework,
             "time_window": time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "total_alerts": total,
             "controls_with_alerts": len(controls),
             "failing_controls_count": len(failing),
@@ -413,7 +413,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type": "iso27001_2022_annex_a",
             "time_range": time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_controls_assessed": len(control_results),
                 "failing": len(failing),
@@ -530,7 +530,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type": "nist_csf_2.0",
             "time_range":  time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_functions":    len(function_results),
                 "failing":  len(failing),
@@ -641,7 +641,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type":  "soc2_type_ii",
             "time_range":   time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_criteria": len(criterion_results),
                 "failing": len(failing),
@@ -746,7 +746,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type":  "pci_dss_v4.0",
             "time_range":   time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_requirements": len(req_results),
                 "failing": len(failing),
@@ -855,7 +855,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type":  "hipaa_security_rule",
             "time_range":   time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_safeguards": len(safeguard_results),
                 "failing": len(failing),
@@ -968,7 +968,7 @@ def register(ctx: ToolContext) -> None:
         existing_baseline = _load_kv(baseline_key)
 
         if save_baseline or existing_baseline is None:
-            saved_at = datetime.datetime.utcnow().isoformat() + "Z"
+            saved_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             _save_kv(baseline_key, {
                 "snapshot": current_snapshot,
                 "saved_at": saved_at,
@@ -1041,7 +1041,7 @@ def register(ctx: ToolContext) -> None:
             "framework": framework,
             "drift_status": overall_drift,
             "baseline_saved_at": baseline_data["saved_at"],
-            "compared_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "compared_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "worsened_controls":  len(worsened),
                 "improved_controls":  len(improved),

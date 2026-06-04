@@ -420,7 +420,7 @@ def register(ctx: ToolContext) -> None:
         </style>
         """
 
-        ts_str = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         if report_type == "compliance":
             from ..validators import validate_framework, validate_time_range
