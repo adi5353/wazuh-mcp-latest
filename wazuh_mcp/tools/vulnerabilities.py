@@ -15,8 +15,13 @@ _kev_cache: dict = {}   # {cve_id: kev_entry}  — refreshed each call if stale
 _kev_etag:  str  = ""
 
 
-async def _fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
-    """Return {cve_id: {epss, percentile}} for the given CVE list (max 100)."""
+async def _fetch_epss(cve_ids: list[str]) -> dict[str, dict] | None:
+    """Return {cve_id: {epss, percentile}} for the given CVE list (max 100).
+
+    Returns ``None`` (not ``{}``) when the EPSS feed is unreachable, so callers
+    can distinguish a feed outage from "these CVEs are genuinely absent from
+    EPSS" — the two must not both look like "no exploit risk".
+    """
     if not cve_ids:
         return {}
     try:
@@ -32,11 +37,15 @@ async def _fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
                 for item in data
             }
     except Exception:
-        return {}
+        return None
 
 
-async def _fetch_kev() -> dict[str, dict]:
-    """Return {cve_id: kev_entry} for the full CISA KEV catalog (cached in-process)."""
+async def _fetch_kev() -> dict[str, dict] | None:
+    """Return {cve_id: kev_entry} for the full CISA KEV catalog (cached in-process).
+
+    Returns ``None`` (not ``{}``) when the catalog can't be fetched and nothing
+    is cached, so callers never mistake a feed outage for "no CVE is on KEV".
+    """
     global _kev_cache, _kev_etag
     if _kev_cache:
         return _kev_cache
@@ -52,7 +61,7 @@ async def _fetch_kev() -> dict[str, dict]:
             _kev_cache = {v["cveID"]: v for v in vulns}
             return _kev_cache
     except Exception:
-        return {}
+        return None
 
 
 def register(ctx: ToolContext) -> None:
@@ -248,6 +257,14 @@ def register(ctx: ToolContext) -> None:
             return {"error": "cve_ids must be a non-empty list of CVE ID strings."}
         cleaned = [c.upper().strip() for c in cve_ids[:100] if isinstance(c, str)]
         epss_map = await _fetch_epss(cleaned)
+        if epss_map is None:
+            # Feed outage — do NOT present this as "no exploit risk". Fail loud.
+            return {
+                "error": "EPSS feed (FIRST.org) is unavailable — exploit-probability "
+                         "scores could not be retrieved. Retry shortly; do not treat "
+                         "these CVEs as low-risk based on this response.",
+                "feed_status": "unavailable",
+            }
         results = []
         for cve in cleaned:
             e = epss_map.get(cve, {})
@@ -304,7 +321,10 @@ def register(ctx: ToolContext) -> None:
             "query": {"terms": {"vulnerability.severity": included}},
             "aggs": {
                 "by_cve": {
-                    "terms": {"field": "vulnerability.id", "size": 500},
+                    # Cap raised from 500 → 5000 so a large fleet's CVE set is
+                    # actually cross-checked against KEV; sum_other_doc_count below
+                    # flags if even this is exceeded rather than silently truncating.
+                    "terms": {"field": "vulnerability.id", "size": 5000},
                     "aggs": {
                         "agents": {"cardinality": {"field": "agent.id"}},
                         "sample": {
@@ -318,7 +338,9 @@ def register(ctx: ToolContext) -> None:
             },
         }
         res = await idx.search(body, index=cfg.vuln_index)
-        fleet_cves = {b["key"]: b for b in res["aggregations"]["by_cve"]["buckets"]}
+        by_cve_agg = res["aggregations"]["by_cve"]
+        fleet_cves = {b["key"]: b for b in by_cve_agg["buckets"]}
+        cves_truncated = by_cve_agg.get("sum_other_doc_count", 0) > 0
 
         hits = []
         for cve_id, b in fleet_cves.items():
@@ -345,6 +367,13 @@ def register(ctx: ToolContext) -> None:
             "kev_catalog_size": len(kev),
             "fleet_cves_scanned": len(fleet_cves),
             "kev_hits_on_fleet": len(hits),
+            # True when the fleet has more distinct CVEs than the aggregation cap:
+            # some CVEs were NOT cross-checked against KEV, so this is a floor.
+            "results_truncated": cves_truncated,
+            **({"truncation_warning": (
+                "Fleet CVE cardinality exceeds the scan cap — some CVEs were not "
+                "checked against KEV. Narrow by min_severity/agent and re-run."
+            )} if cves_truncated else {}),
             "critical_patches": hits,
             "message": (
                 f"URGENT: {len(hits)} CVE(s) on your fleet are in the CISA KEV catalog — "
@@ -385,6 +414,10 @@ def register(ctx: ToolContext) -> None:
         cve_ids = [b["key"] for b in buckets]
 
         epss_map, kev = await _fetch_epss(cve_ids), await _fetch_kev()
+        # Track feed availability: a feed outage must not silently downgrade an
+        # actively-exploited CVE from P0 to P2 with no signal to the caller.
+        epss_ok, kev_ok = epss_map is not None, kev is not None
+        epss_map, kev = epss_map or {}, kev or {}
 
         items = []
         for b in buckets:
@@ -413,8 +446,19 @@ def register(ctx: ToolContext) -> None:
             })
 
         items.sort(key=lambda x: x["combined_priority_score"], reverse=True)
-        return {
+        result = {
             "scoring_method": "CVSS × agents + EPSS bonus + KEV bonus",
             "kev_cves_in_list": sum(1 for i in items if i["in_cisa_kev"]),
             "top_patches": items[:top_n],
+            "feed_status": {
+                "epss": "ok" if epss_ok else "unavailable",
+                "kev": "ok" if kev_ok else "unavailable",
+            },
         }
+        if not (epss_ok and kev_ok):
+            result["warning"] = (
+                "One or more threat feeds were unavailable, so this ranking is "
+                "INCOMPLETE — actively-exploited CVEs may be under-prioritised. "
+                "Re-run once feeds recover before relying on the P-ratings."
+            )
+        return result

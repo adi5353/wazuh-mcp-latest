@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: no job pushes images (build-push uses push:false), uploads
+# SARIF, or writes to the repo — they only read code and upload artifacts. Pin
+# the default GITHUB_TOKEN to read-only so a compromised step can't mutate the
+# repo or packages. Elevate per-job if a future job needs more.
+permissions:
+  contents: read
+
 jobs:
   # ── 1. Lint ────────────────────────────────────────────────────────────────
   lint:
