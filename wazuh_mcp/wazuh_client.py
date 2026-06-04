@@ -53,7 +53,7 @@ class _SecretStr:
 TOKEN_TTL_SECONDS = 800
 
 # ── Retry configuration (shared policy — see wazuh_mcp/http_policy.py) ─────────
-from .http_policy import MAX_RETRIES as _MAX_RETRIES, is_retryable as _is_retryable, retry_sleep as _retry_sleep_shared
+from .http_policy import MAX_RETRIES as _MAX_RETRIES, is_retryable as _is_retryable, is_retryable_for_method as _is_retryable_for_method, retry_sleep as _retry_sleep_shared
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
 # Defaults raised to 100/40 to prevent pool saturation under real SOC load
@@ -238,7 +238,10 @@ class WazuhClient:
             try:
                 return await self._request_once(method, path, **kwargs)
             except Exception as exc:
-                if not _is_retryable(exc) or attempt == _MAX_RETRIES:
+                # Idempotency-aware: a non-idempotent write (PUT active-response,
+                # agent restart) is only retried when the connection never
+                # reached the Manager, so a timed-out request can't fire twice.
+                if not _is_retryable_for_method(exc, method) or attempt == _MAX_RETRIES:
                     raise
                 last_exc = exc
                 await _retry_sleep(attempt)

@@ -31,6 +31,29 @@ def is_retryable(exc: Exception) -> bool:
     return False
 
 
+# Methods with no side effects — safe to retry on any transient error.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Failures where the request provably never reached the server (the connection
+# was never established), so even a non-idempotent write is safe to retry.
+_CONNECTION_PHASE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
+def is_retryable_for_method(exc: Exception, method: str) -> bool:
+    """Retry decision that respects HTTP idempotency.
+
+    Idempotent reads (GET/HEAD/OPTIONS) retry on any transient error. For
+    non-idempotent writes (POST/PUT/DELETE/PATCH) we retry ONLY when the request
+    is known to have never reached the server — a connection-establishment
+    failure — and never on a read timeout or 5xx, where the Manager may already
+    have applied the change. This prevents a timed-out active-response or agent
+    restart from being silently re-sent and firing twice.
+    """
+    if method.upper() in _IDEMPOTENT_METHODS:
+        return is_retryable(exc)
+    return isinstance(exc, _CONNECTION_PHASE_ERRORS)
+
+
 def backoff_delay(attempt: int) -> float:
     """Exponential backoff with ±1s uniform jitter."""
     return min(RETRY_BASE * (2 ** attempt), RETRY_CAP) + random.uniform(0, 1)
