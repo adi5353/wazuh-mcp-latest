@@ -82,9 +82,12 @@ def register(ctx: ToolContext) -> None:
             tag: Optional daemon tag filter (e.g. 'wazuh-analysisd').
             limit: Maximum entries to return (max 500).
         """
-        path = f"/manager/logs?limit={_cap(limit)}&level={level}"
+        # URL-encode user-supplied query values so a crafted level/tag can't
+        # inject extra query parameters into the Manager API request.
+        from urllib.parse import quote
+        path = f"/manager/logs?limit={_cap(limit)}&level={quote(str(level), safe='')}"
         if tag:
-            path += f"&tag={tag}"
+            path += f"&tag={quote(str(tag), safe='')}"
         try:
             result = await wz.request("GET", path)
             return result

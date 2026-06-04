@@ -64,7 +64,7 @@ def register(ctx: ToolContext) -> None:
             body_lines.append("*Wazuh alert IDs:* " + ", ".join(str(i) for i in alert_ids[:10]))
         body_lines.append(
             f"\n_Created by Wazuh MCP at "
-            f"{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_"
+            f"{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
         )
 
         all_labels = ["wazuh-mcp", f"severity-{severity.lower()}"] + (labels or [])
@@ -149,7 +149,7 @@ def register(ctx: ToolContext) -> None:
             full_desc += "\n\n---\n" + "\n\n".join(extra)
         full_desc += (
             f"\n\n_Source: Wazuh MCP — "
-            f"{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_"
+            f"{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
         )
 
         all_tags = ["wazuh", "wazuh-mcp", f"severity:{severity.lower()}"]

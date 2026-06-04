@@ -11,6 +11,21 @@ from ..rbac import ROLE
 
 REQUIRED_ROLE = ROLE.ANALYST
 
+
+def _xml_text(s: str) -> str:
+    """Escape a string for safe use as XML element text (&, <, >)."""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _xml_attr(s: str) -> str:
+    """Escape a string for safe use inside an XML double-quoted attribute.
+
+    Without this, a field name like ``x" extra="y`` would break out of the
+    attribute and inject arbitrary attributes/elements into the rule XML that
+    gets deployed to the Wazuh Manager.
+    """
+    return _xml_text(s).replace('"', "&quot;")
+
 # Sigma log source → Wazuh parent rule IDs (best-effort heuristic mapping)
 _SIGMA_LOGSOURCE_TO_PARENT: dict[str, int] = {
     "windows": 60000,
@@ -109,21 +124,24 @@ def register_generate(ctx: ToolContext) -> None:
         if level < 1 or level > 15:
             return {"error": "level must be between 1 and 15."}
 
-        safe_desc = description.replace("<", "&lt;").replace(">", "&gt;")
+        safe_desc = _xml_text(description)
 
         conditions = ""
         if parent_rule_id:
-            conditions += f"    <if_sid>{parent_rule_id}</if_sid>\n"
+            conditions += f"    <if_sid>{int(parent_rule_id)}</if_sid>\n"
         if match_pattern:
-            safe_pat = match_pattern.replace("<", "&lt;").replace(">", "&gt;")
-            conditions += f"    <match>{safe_pat}</match>\n"
+            conditions += f"    <match>{_xml_text(match_pattern)}</match>\n"
         if field_name and field_pattern:
-            safe_fp = field_pattern.replace("<", "&lt;").replace(">", "&gt;")
-            conditions += f"    <field name=\"{field_name}\">{safe_fp}</field>\n"
+            conditions += (
+                f"    <field name=\"{_xml_attr(field_name)}\">"
+                f"{_xml_text(field_pattern)}</field>\n"
+            )
 
         mitre_block = ""
         if mitre_id:
-            mitre_block = f"    <mitre>\n      <id>{mitre_id.upper()}</id>\n    </mitre>\n"
+            mitre_block = (
+                f"    <mitre>\n      <id>{_xml_text(mitre_id.upper())}</id>\n    </mitre>\n"
+            )
 
         xml_out = _RULE_TEMPLATE.format(
             rule_id=rule_id,
@@ -218,8 +236,8 @@ def register_generate(ctx: ToolContext) -> None:
 
         conditions = _extract_sigma_field_conditions(detection)
 
-        safe_title = title.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
-        safe_desc  = description.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
+        safe_title = _xml_text(title)
+        safe_desc  = _xml_text(description)
 
         lines = ['<group name="local,sigma,">',
                  f'  <rule id="{rule_id}" level="{wazuh_level}">']
@@ -230,16 +248,17 @@ def register_generate(ctx: ToolContext) -> None:
         field_pairs    = [(f, p) for f, p in conditions if f != "full_log"]
 
         if match_patterns:
-            escaped = match_patterns[0].replace("<", "&lt;").replace(">", "&gt;")
-            lines.append(f'    <match>{escaped}</match>')
+            lines.append(f'    <match>{_xml_text(match_patterns[0])}</match>')
         for fname, fpattern in field_pairs[:3]:
-            escaped = fpattern.replace("<", "&lt;").replace(">", "&gt;")
-            lines.append(f'    <field name="{fname}" type="pcre2">{escaped}</field>')
+            lines.append(
+                f'    <field name="{_xml_attr(fname)}" type="pcre2">'
+                f'{_xml_text(fpattern)}</field>'
+            )
 
         if mitre_ids:
             lines.append('    <mitre>')
             for mid in mitre_ids[:5]:
-                lines.append(f'      <id>{mid}</id>')
+                lines.append(f'      <id>{_xml_text(mid)}</id>')
             lines.append('    </mitre>')
 
         lines.append(f'    <description>{safe_title}</description>')

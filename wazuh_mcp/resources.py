@@ -36,6 +36,11 @@ def register(mcp: Any, wz: Any, idx: Any, cfg: Any) -> None:
                 params={"limit": 500, "select": "id,name,status,os.name,lastKeepAlive,group"},
             )
             items = resp.get("data", {}).get("affected_items", [])
+            # ABAC: the Manager API isn't group-scoped, so a restricted session
+            # must not enumerate the whole fleet via this resource. No-op unless
+            # WAZUH_MCP_ALLOWED_GROUPS/AGENTS is configured.
+            from .abac import filter_agents_by_abac
+            items = filter_agents_by_abac(items)
             return json.dumps({
                 "total": len(items),
                 "agents": [
@@ -129,7 +134,8 @@ def register(mcp: Any, wz: Any, idx: Any, cfg: Any) -> None:
                 or (info.get("data") or {}).get("version", "unknown")
             )
         except Exception as exc:
-            checks["manager_api"] = f"error: {str(exc)[:80]}"
+            log.warning("health_resource: manager check failed: %s", exc)
+            checks["manager_api"] = "error: unreachable"
 
         try:
             async with _httpx.AsyncClient(
@@ -142,7 +148,8 @@ def register(mcp: Any, wz: Any, idx: Any, cfg: Any) -> None:
                 checks["indexer"] = body.get("status", "unknown")
                 checks["indexer_nodes"] = body.get("number_of_nodes", 0)
         except Exception as exc:
-            checks["indexer"] = f"error: {str(exc)[:80]}"
+            log.warning("health_resource: indexer check failed: %s", exc)
+            checks["indexer"] = "error: unreachable"
 
         return json.dumps({
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -231,7 +231,7 @@ def register(ctx: ToolContext) -> None:
                     " ctx._source.remove('suppression_reason');"
                     " ctx._source.suppression_expired_at = params.ts"
                 ),
-                "params": {"ts": datetime.datetime.utcnow().isoformat() + "Z"},
+                "params": {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")},
             },
         }
         try:

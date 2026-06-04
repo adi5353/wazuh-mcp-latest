@@ -227,7 +227,7 @@ def register(ctx: ToolContext) -> None:
 
         return {
             "report_type": "weekly_summary",
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "alert_counts": {
                 "this_week": current_count,
                 "prior_week": prior_count,
@@ -388,7 +388,7 @@ def register(ctx: ToolContext) -> None:
             "shift_handover": {
                 "analyst": analyst_name,
                 "shift_duration": shift_duration,
-                "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
                 "attention_items": attention or ["No significant anomalies â€” clean handover."],
             },
             "alert_overview": safe(s),
