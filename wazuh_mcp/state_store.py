@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any  # noqa: F401 – re-exported for kv helpers
@@ -118,7 +119,7 @@ def _monitor_state_path() -> Path:
     return _state_dir() / "monitor_state.json"
 
 
-def save_monitor_state(state: dict) -> None:
+def save_monitor_state(state: "Mapping[str, Any]") -> None:
     p = _monitor_state_path()
     try:
         serializable = {k: v for k, v in state.items() if k != "task"}
