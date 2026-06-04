@@ -27,6 +27,7 @@ import asyncio
 import ipaddress
 import logging
 import os
+from collections.abc import Iterator, MutableMapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import uuid
@@ -114,7 +115,7 @@ def _active_tenant_name() -> str:
     return active_tenant_name()
 
 
-class _TenantMonitorState:
+class _TenantMonitorState(MutableMapping):
     """Per-tenant view over the autonomous-monitor state (H1).
 
     The monitor was a single process-global dict, so in MSSP multi-tenant mode
@@ -125,6 +126,10 @@ class _TenantMonitorState:
     the starting tenant's context at ``create_task`` time, so it keeps writing
     to its own tenant's store. In single-tenant mode there is exactly one store
     ('(default)'), so behaviour is identical to before.
+
+    It is a real ``MutableMapping`` so it drops in wherever the old dict was used
+    (e.g. ``save_monitor_state``); ``get``/``items``/``keys``/``update``/``in``
+    come from the mixin and route through ``_cur`` via the methods below.
     """
     def __init__(self) -> None:
         self._stores: dict[str, dict[str, Any]] = {}
@@ -137,14 +142,11 @@ class _TenantMonitorState:
             self._stores[name] = store
         return store
 
-    def __getitem__(self, key): return self._cur()[key]
-    def __setitem__(self, key, value): self._cur()[key] = value
-    def __contains__(self, key): return key in self._cur()
-    def get(self, key, default=None): return self._cur().get(key, default)
-    def update(self, other): self._cur().update(other)
-    def items(self): return self._cur().items()
-    def keys(self): return self._cur().keys()
-    def values(self): return self._cur().values()
+    def __getitem__(self, key: Any) -> Any: return self._cur()[key]
+    def __setitem__(self, key: Any, value: Any) -> None: self._cur()[key] = value
+    def __delitem__(self, key: Any) -> None: del self._cur()[key]
+    def __iter__(self) -> "Iterator[Any]": return iter(self._cur())
+    def __len__(self) -> int: return len(self._cur())
 
 
 _monitor_state = _TenantMonitorState()
