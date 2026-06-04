@@ -321,6 +321,34 @@ def validation_error(field: str, message: str) -> dict:
     return {"error": f"Validation error on '{field}': {message}"}
 
 
+_CDB_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def validate_cdb_field(value: str, field: str = "value") -> str:
+    """Validate a CDB list key or value.
+
+    CDB list files are newline-delimited ``key:value`` records. A newline (or any
+    control char) in user input would inject *additional* records — and because
+    the add/remove logic matches existing entries with ``startswith(f"{key}:")``,
+    an injected line also evades later removal. Reject control characters so one
+    logical entry can never become several. ``:`` is intentionally allowed: it is
+    legal inside an IPv6 key and inside a value, and a single colon stays on one
+    line (no injection).
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field}: must be a string.")
+    if not value.strip():
+        raise ValueError(f"Invalid {field}: must not be empty.")
+    if len(value) > 256:
+        raise ValueError(f"Invalid {field}: exceeds 256 characters.")
+    if _CDB_CONTROL_RE.search(value):
+        raise ValueError(
+            f"Invalid {field}: control characters (newlines, tabs, NUL) are not "
+            f"allowed — they would inject additional CDB list entries."
+        )
+    return value
+
+
 def safe_validate(fn, *args, **kwargs) -> tuple[Any, dict | None]:
     """
     Call a validator safely; return (result, None) on success or

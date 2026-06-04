@@ -335,6 +335,40 @@ _chain_seq: int = 0
 _chain_last_hmac: str = ""
 _chain_recovered: bool = False
 
+# External high-water anchor (M2). The chain seeds from the log's own tail on
+# restart, so deleting the most-recent N records and restarting would silently
+# reset the high-water mark — tail truncation undetectably. We persist the
+# latest (seq, hmac) to a sidecar file *next to* the audit log (not inside it);
+# on recovery, if the log tail sits *below* the stored anchor the truncation is
+# flagged and the chain resumes from the anchor (so the next record's prev_hmac
+# no longer matches the truncated tail and verify_audit_log_integrity reports
+# the break). Raises the bar from "truncate one file" to "edit two consistently".
+
+
+def _anchor_path() -> "Path":
+    return Path(str(_AUDIT_LOG_PATH) + ".anchor")
+
+
+def _load_chain_anchor() -> tuple[int, str] | None:
+    try:
+        p = _anchor_path()
+        if not p.exists():
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "seq" in data and "hmac" in data:
+            return int(data["seq"]), str(data["hmac"])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("audit_chain_anchor_load_failed error=%s", exc)
+    return None
+
+
+def _save_chain_anchor(seq: int, hmac_hex: str) -> None:
+    try:
+        from .state_store import atomic_write_json
+        atomic_write_json(_anchor_path(), {"seq": seq, "hmac": hmac_hex})
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("audit_chain_anchor_save_failed error=%s", exc)
+
 
 def _get_audit_handler() -> _RotatingFileHandler:
     """Return (or initialise) the module-level rotating file handler.
@@ -432,6 +466,20 @@ def _recover_chain_state_locked() -> None:
     except Exception as exc:  # noqa: BLE001
         _log.error("audit_chain_recovery_failed error=%s", exc)
 
+    # M2: cross-check the log tail against the external high-water anchor. If the
+    # tail is below the anchor, the most-recent records were removed — flag it
+    # and resume from the anchor so the discontinuity is provable, not silently
+    # absorbed by reseeding at the truncated (lower) seq.
+    anchor = _load_chain_anchor()
+    if anchor is not None and anchor[0] > _chain_seq:
+        _log.error(
+            "audit_chain_tampering_suspected: log tail seq=%d is below the stored "
+            "high-water anchor seq=%d — the audit log may have been truncated. "
+            "Resuming the chain from the anchor.",
+            _chain_seq, anchor[0],
+        )
+        _chain_seq, _chain_last_hmac = anchor
+
 
 def _write_record(record: dict) -> None:
     """Sign, hash-chain, and append a JSONL record to the rotating audit log.
@@ -470,6 +518,10 @@ def _write_record(record: dict) -> None:
             if _SIGNING_KEY:
                 _chain_seq += 1
                 _chain_last_hmac = signed["hmac"]
+                # Advance the external high-water anchor (best-effort) so a later
+                # tail-truncation + restart is detectable. Done under the handler
+                # lock to stay consistent with the in-memory chain state.
+                _save_chain_anchor(_chain_seq, _chain_last_hmac)
         finally:
             handler.release()
     except Exception as exc:  # noqa: BLE001

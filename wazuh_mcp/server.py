@@ -125,11 +125,10 @@ idx = WazuhIndexer(cfg)
 # its own tenant client without affecting other concurrent sessions.
 _ctx_wz: contextvars.ContextVar[WazuhClient] = contextvars.ContextVar("_ctx_wz")
 _ctx_idx: contextvars.ContextVar[WazuhIndexer] = contextvars.ContextVar("_ctx_idx")
-# No mutable default: a shared default dict would be visible across every
-# session that never calls .set(). Readers pass their own fallback: .get({}).
-_ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
-    "_ctx_active_tenant"
-)
+# The active-tenant ContextVar lives in identity.py (a low-level module) so tool
+# modules can read it without importing this heavy server module. Re-exported
+# here under the original name for the in-file readers below.
+from .identity import _ctx_active_tenant  # noqa: E402
 
 
 class _ClientProxy:
@@ -1218,8 +1217,11 @@ def main() -> None:
         # When unset, same-host requests and requests without an Origin header
         # (non-browser clients, curl, MCP SDKs) pass through unrestricted.
         _raw_origins = os.getenv("WAZUH_MCP_ALLOWED_ORIGINS", "").strip()
+        # Normalize to lowercase: an Origin is scheme://host[:port] with no path,
+        # and scheme+host are case-insensitive (RFC 3986), so a mixed-case allowed
+        # origin must still match a lowercase request Origin and vice-versa.
         _allowed_origins: set[str] = (
-            {o.strip().rstrip("/") for o in _raw_origins.split(",") if o.strip()}
+            {o.strip().rstrip("/").lower() for o in _raw_origins.split(",") if o.strip()}
             if _raw_origins else set()
         )
 
@@ -1240,7 +1242,7 @@ def main() -> None:
                     return
 
                 headers = dict(scope.get("headers", []))
-                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
+                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/").lower()
 
                 async def _deny(message: str) -> None:
                     await Response(message, status_code=403)(scope, receive, send)
@@ -1344,7 +1346,7 @@ def main() -> None:
                 # query param as a fallback (token=... or api_key=...).
                 _token = (ws.query_params.get("token")
                           or ws.query_params.get("api_key") or "").strip()
-            _origin = ws.headers.get("origin", "").rstrip("/")
+            _origin = ws.headers.get("origin", "").rstrip("/").lower()
             if not _ws_request_authorized(
                 token=_token,
                 origin=_origin,

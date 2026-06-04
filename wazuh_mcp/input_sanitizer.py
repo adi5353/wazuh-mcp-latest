@@ -199,5 +199,13 @@ def sanitize_input_value(value: Any, field: str = "input") -> Any:
                 f"'{field}' dict exceeds maximum of {MAX_DICT_KEYS} keys "
                 f"(got {len(value)})"
             )
-        return {k: sanitize_input_value(v, k) for k, v in value.items()}
+        # Screen keys too, not just values: dict keys flow into sinks like Slack
+        # field titles and ticket bodies, so an unscreened key is the same
+        # injection/oversize surface as a value. String keys go through the same
+        # length+pattern check; non-string keys (rare in tool args) pass through.
+        clean: dict = {}
+        for k, v in value.items():
+            ck = sanitize_input_string(k, field) if isinstance(k, str) else k
+            clean[ck] = sanitize_input_value(v, ck if isinstance(ck, str) else field)
+        return clean
     return value

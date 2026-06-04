@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..rbac import require_responder_or_above, require_admin_or_above
+from ..validators import safe_validate, validate_cdb_field
 
 
 def register(ctx: ToolContext) -> None:
@@ -46,6 +47,12 @@ def register(ctx: ToolContext) -> None:
         blocked = _require_writes()
         if blocked:
             return blocked
+        _, err = safe_validate(validate_cdb_field, key, "key")
+        if err:
+            return err
+        _, err = safe_validate(validate_cdb_field, value, "value")
+        if err:
+            return err
         try:
             current = await wz.request("GET", f"/lists/files/{list_name}?raw=true")
             existing = (current.get("data") or {}).get("affected_items", [""])[0] or ""
@@ -72,6 +79,9 @@ def register(ctx: ToolContext) -> None:
         blocked = _require_writes()
         if blocked:
             return blocked
+        _, err = safe_validate(validate_cdb_field, key, "key")
+        if err:
+            return err
         current = await wz.request("GET", f"/lists/files/{list_name}?raw=true")
         existing = (current.get("data") or {}).get("affected_items", [""])[0] or ""
         filtered = "\n".join(
