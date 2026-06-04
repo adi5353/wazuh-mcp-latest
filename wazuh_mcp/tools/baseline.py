@@ -102,57 +102,59 @@ def _score_label(score: float) -> str:
     return "NORMAL"
 
 
-async def _get_daily_alert_counts(idx, agent_id: str, days: int = 7) -> list[float]:
-    """Return per-day alert count for agent over the last N days."""
+async def _daily_counts_via_histogram(
+    idx, agent_id: str, days: int, *, critical_only: bool = False
+) -> list[float]:
+    """Per-day alert counts for an agent over the last N days in ONE query.
+
+    Uses a single ``date_histogram`` aggregation instead of one search per day
+    (the old loop issued N round-trips per series — ~60 for a 30-day baseline).
+    ``min_doc_count=0`` + ``extended_bounds`` guarantee a bucket per day even
+    with zero alerts. Counts are returned newest-first to preserve the previous
+    contract. Bucket alignment is calendar-day (UTC) rather than rolling 24h —
+    statistically equivalent for the mean/std baseline.
+    """
     now = datetime.now(timezone.utc)
-    counts = []
-    for d in range(days):
-        day_start = (now - timedelta(days=d + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        day_end = (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        query = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"agent.id": agent_id}},
-                        {"range": {"@timestamp": {"gte": day_start, "lt": day_end}}},
-                    ]
+    start = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    must: list[dict] = [
+        {"term": {"agent.id": agent_id}},
+        {"range": {"@timestamp": {"gte": start, "lte": end}}},
+    ]
+    if critical_only:
+        must.append({"range": {"rule.level": {"gte": 12}}})
+    query = {
+        "size": 0,
+        "query": {"bool": {"must": must}},
+        "aggs": {
+            "per_day": {
+                "date_histogram": {
+                    "field": "@timestamp",
+                    "fixed_interval": "1d",
+                    "min_doc_count": 0,
+                    "extended_bounds": {"min": start, "max": end},
                 }
-            },
-        }
-        try:
-            raw = await idx.search(query, index="wazuh-alerts-*")
-            counts.append(float((raw.get("hits") or {}).get("total", {}).get("value", 0)))
-        except Exception:
-            counts.append(0.0)
-    return counts
+            }
+        },
+    }
+    try:
+        raw = await idx.search(query, index="wazuh-alerts-*")
+        buckets = ((raw.get("aggregations") or {}).get("per_day") or {}).get("buckets", [])
+        counts = [float(b.get("doc_count", 0)) for b in buckets]
+        counts.reverse()  # date_histogram is oldest→newest; contract is newest→oldest
+        return counts
+    except Exception:
+        return []
+
+
+async def _get_daily_alert_counts(idx, agent_id: str, days: int = 7) -> list[float]:
+    """Return per-day alert count for agent over the last N days (single query)."""
+    return await _daily_counts_via_histogram(idx, agent_id, days)
 
 
 async def _get_critical_alert_counts(idx, agent_id: str, days: int = 7) -> list[float]:
-    """Per-day count of critical alerts (level >= 12) for agent."""
-    now = datetime.now(timezone.utc)
-    counts = []
-    for d in range(days):
-        day_start = (now - timedelta(days=d + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        day_end = (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        query = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"agent.id": agent_id}},
-                        {"range": {"@timestamp": {"gte": day_start, "lt": day_end}}},
-                        {"range": {"rule.level": {"gte": 12}}},
-                    ]
-                }
-            },
-        }
-        try:
-            raw = await idx.search(query, index="wazuh-alerts-*")
-            counts.append(float((raw.get("hits") or {}).get("total", {}).get("value", 0)))
-        except Exception:
-            counts.append(0.0)
-    return counts
+    """Per-day count of critical alerts (level >= 12) for agent (single query)."""
+    return await _daily_counts_via_histogram(idx, agent_id, days, critical_only=True)
 
 
 def _mean_std(values: list[float]) -> tuple[float, float]:

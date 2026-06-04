@@ -71,7 +71,9 @@ services:
       start_period: 60s
       retries: 5
     ports:
-      - "11434:11434"  # expose for local testing; remove in production
+      # Bind to loopback by default (Ollama has no auth) so the inference port
+      # isn't reachable off-host. Set OLLAMA_HOST_BIND=0.0.0.0 to expose it.
+      - "${OLLAMA_HOST_BIND:-127.0.0.1}:11434:11434"
 
   # Optional: Open WebUI for browser-based chat with local models
   open-webui:

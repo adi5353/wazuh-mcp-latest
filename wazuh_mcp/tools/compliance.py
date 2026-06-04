@@ -240,7 +240,11 @@ def register(ctx: ToolContext) -> None:
             },
             "aggs": {
                 "by_control": {
-                    "terms": {"field": field, "size": 30},
+                    # 30 → 300: real frameworks (PCI-DSS, NIST 800-53) have well
+                    # over 30 controls; the old cap silently hid the quieter ones
+                    # and produced a falsely-clean posture. sum_other_doc_count
+                    # below flags if even 300 is exceeded.
+                    "terms": {"field": field, "size": 300},
                     "aggs": {
                         "top_rules": {"terms": {"field": "rule.id", "size": 3}},
                         "top_agents": {"terms": {"field": "agent.name", "size": 3}},
@@ -249,10 +253,17 @@ def register(ctx: ToolContext) -> None:
             },
         }
         res = await idx.search(body)
+        by_control_agg = res["aggregations"]["by_control"]
+        controls_truncated = by_control_agg.get("sum_other_doc_count", 0) > 0
         return {
             "framework": framework,
             "time_range": time_range,
             "total_alerts_with_control_mapping": res["hits"]["total"]["value"],
+            "controls_truncated": controls_truncated,
+            **({"truncation_warning": (
+                "More mapped controls than the aggregation cap — some controls are "
+                "omitted. Narrow the time_range or raise min_level and re-run."
+            )} if controls_truncated else {}),
             "by_control": [
                 {
                     "control": b["key"],
@@ -260,7 +271,7 @@ def register(ctx: ToolContext) -> None:
                     "top_rules": [r["key"] for r in b["top_rules"]["buckets"]],
                     "top_agents": [a["key"] for a in b["top_agents"]["buckets"]],
                 }
-                for b in res["aggregations"]["by_control"]["buckets"]
+                for b in by_control_agg["buckets"]
             ],
         }
 

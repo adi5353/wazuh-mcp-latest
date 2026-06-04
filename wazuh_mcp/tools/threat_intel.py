@@ -5,6 +5,7 @@ from ..tool_context import ToolContext
 import asyncio
 import logging
 import os
+import re
 
 import httpx
 
@@ -16,6 +17,13 @@ from ..rbac import ROLE
 REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
+
+# IOC type-detection patterns — compiled once at import (were previously
+# recompiled on every bulk_enrich_iocs call).
+_IOC_IP_RE     = re.compile(r'^\d{1,3}(\.\d{1,3}){3}$')
+_IOC_HASH_RE   = re.compile(r'^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$')
+_IOC_URL_RE    = re.compile(r'^https?://')
+_IOC_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$')
 
 # IOC result cache (Fix 1) — prevents repeated external API calls for same indicator
 _IOC_CACHE: dict[str, tuple[dict, float]] = {}
@@ -393,18 +401,12 @@ def register(ctx: ToolContext) -> None:
 
         Requires VIRUSTOTAL_API_KEY in .env. AbuseIPDB used for IPs if key present.
         """
-        import re
         import asyncio as _asyncio
 
         if not iocs:
             return {"error": "iocs list is empty"}
         if len(iocs) > 20:
             return {"error": "Maximum 20 IOCs per call to stay within API rate limits"}
-
-        _IP_RE     = re.compile(r'^\d{1,3}(\.\d{1,3}){3}$')
-        _HASH_RE   = re.compile(r'^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$')
-        _URL_RE    = re.compile(r'^https?://')
-        _DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$')
 
         def _defang(ioc: str) -> str:
             """Normalize defanged IOCs: 1[.]1[.]1[.]1->1.1.1.1, hxxp->http."""
@@ -422,10 +424,10 @@ def register(ctx: ToolContext) -> None:
                 return "ip"
             except (OSError, AttributeError):
                 pass
-            if _IP_RE.match(ioc):     return "ip"
-            if _HASH_RE.match(ioc):   return "hash"
-            if _URL_RE.match(ioc):    return "url"
-            if _DOMAIN_RE.match(ioc): return "domain"
+            if _IOC_IP_RE.match(ioc):     return "ip"
+            if _IOC_HASH_RE.match(ioc):   return "hash"
+            if _IOC_URL_RE.match(ioc):    return "url"
+            if _IOC_DOMAIN_RE.match(ioc): return "domain"
             return "unknown"
 
         # Build coroutine list

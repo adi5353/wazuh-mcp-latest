@@ -4,8 +4,8 @@
 set -euo pipefail
 
 echo "=== pip-audit: scanning for vulnerable packages ==="
-pip-audit -r requirements.txt --format=markdown || {
-    echo "pip-audit found vulnerabilities — review above and update requirements.txt"
+pip-audit -r requirements.lock --format=markdown || {
+    echo "pip-audit found vulnerabilities — review above and update requirements.lock"
     exit 1
 }
 
@@ -18,7 +18,7 @@ while IFS= read -r line; do
     if [[ "$line" != *"=="* ]]; then
         echo "WARNING: '$line' is not pinned to an exact version (use ==)"
     fi
-done < requirements.txt
+done < requirements.lock
 
 echo ""
 echo "All dependency checks complete."
