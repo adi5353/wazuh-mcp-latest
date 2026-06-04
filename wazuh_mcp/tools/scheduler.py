@@ -19,9 +19,19 @@ from typing import Any
 
 from ..rbac import require_analyst_or_above, require_responder_or_above, ROLE
 REQUIRED_ROLE = ROLE.ANALYST
-from ..state_store import _state_dir
+from ..state_store import _state_dir, atomic_write_json
 
 log = logging.getLogger("wazuh-mcp")
+
+
+def _active_tenant_name() -> str:
+    """Resolve the caller's active MSSP tenant, or '(default)' in single-tenant mode.
+
+    Reads the per-task tenant ContextVar from identity.py so it never imports the
+    heavy server module. Single-tenant mode → always '(default)' (isolation no-op).
+    """
+    from ..identity import active_tenant_name
+    return active_tenant_name()
 
 
 def _schedules_file() -> str:
@@ -71,8 +81,9 @@ def _save_schedules() -> None:
             sid: {k: v for k, v in sched.items() if k != "_task"}
             for sid, sched in _SCHEDULES.items()
         }
-        with open(path, "w") as f:
-            json.dump(serializable, f, indent=2)
+        # Atomic write (temp + fsync + os.replace): a crash mid-write must not
+        # truncate the schedules file and wipe every configured schedule.
+        atomic_write_json(path, serializable)
     except Exception as exc:
         log.warning("Failed to save report schedules: %s", exc)
 
@@ -213,6 +224,7 @@ def register(ctx: ToolContext) -> None:
 
         schedule: dict[str, Any] = {
             "schedule_id": schedule_id,
+            "owner_tenant": _active_tenant_name(),
             "name": name,
             "report_type": report_type,
             "description": _VALID_REPORT_TYPES[report_type],
@@ -240,10 +252,12 @@ def register(ctx: ToolContext) -> None:
 
     @mcp.tool()
     async def list_report_schedules() -> dict:
-        """List all configured report schedules with their status and next run time."""
+        """List the calling tenant's report schedules with status and next run time."""
+        _tenant = _active_tenant_name()
         schedules = [
             {k: v for k, v in s.items() if k != "next_run_ts"}
             for s in _SCHEDULES.values()
+            if s.get("owner_tenant", "(default)") == _tenant
         ]
         schedules.sort(key=lambda x: x.get("next_run", ""))
 
@@ -265,10 +279,18 @@ def register(ctx: ToolContext) -> None:
         if err:
             return err
 
-        if schedule_id not in _SCHEDULES:
+        # Scope to the caller's tenant: a schedule owned by another tenant must
+        # be invisible (report "not found" rather than leak its existence) and
+        # undeletable by this caller.
+        _tenant = _active_tenant_name()
+        _own_ids = [
+            sid for sid, s in _SCHEDULES.items()
+            if s.get("owner_tenant", "(default)") == _tenant
+        ]
+        if schedule_id not in _own_ids:
             return {
                 "error": f"Schedule '{schedule_id}' not found.",
-                "existing_ids": list(_SCHEDULES.keys()),
+                "existing_ids": _own_ids,
             }
 
         removed = _SCHEDULES.pop(schedule_id)

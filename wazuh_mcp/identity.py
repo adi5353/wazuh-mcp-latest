@@ -51,6 +51,19 @@ _ctx_identity_key: contextvars.ContextVar[Optional[str]] = contextvars.ContextVa
 
 INJECTION_LOCKOUT_THRESHOLD = 3
 
+# Per-session active MSSP tenant. Defined here (a low-level module) rather than
+# in server.py so tool modules can read the active tenant without importing the
+# heavy server module. No mutable default — readers pass their own fallback via
+# .get({}) — so a shared default dict can't leak across sessions.
+_ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "_ctx_active_tenant"
+)
+
+
+def active_tenant_name() -> str:
+    """Return the caller's active tenant name, or '(default)' in single-tenant mode."""
+    return (_ctx_active_tenant.get({}) or {}).get("name") or "(default)"
+
 # M2: Persistent injection counter across requests — keyed by identity.
 # Uses a process-wide store protected by a lock so concurrent asyncio tasks can
 # each increment atomically without interfering with each other. Bounded by

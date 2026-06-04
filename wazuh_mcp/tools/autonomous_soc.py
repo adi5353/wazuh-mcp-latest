@@ -62,43 +62,92 @@ def _autonomous_ar_allowed(cfg, ip: str | None) -> str | None:
 
 
 # ── Shared state ──────────────────────────────────────────────────────────────
-_monitor_state: dict[str, Any] = {
-    "running": False,
-    "task": None,
-    "started_at": None,
-    "stopped_at": None,
-    "interval_seconds": 60,
-    "severity_threshold": 10,
-    "alerts_processed": 0,
-    "actions_taken": 0,
-    "last_poll": None,
-    "recent_actions": [],
-    "seen_alert_ids": [],   # deduplication (capped to 500)
-    # Auto-ticketing config
-    "auto_ticket": {
-        "enabled": False,
-        "backend": "jira",               # "jira" | "servicenow"
-        "min_level": 13,                 # ticket for this level and above
-        "project_key": "",               # Jira project key
-        "labels": ["autonomous-soc"],
-    },
-    # Pending suppression queue (human approval gate)
-    "pending_suppressions": [],          # list of suppression candidate dicts
-    "approved_suppressions": [],
-    "rejected_suppressions": [],
-    # Scheduled reports config
-    "schedule": {
-        "handover_hours_utc": [],        # e.g. [8, 16, 0] → 3 shifts
-        "handover_channel": "",
-        "digest_day": "monday",          # day for weekly digest
-        "digest_hour_utc": 8,
-        "digest_recipients": [],
-        "last_handover_day": None,       # date string "YYYY-MM-DD HH"
-        "last_digest_week": None,        # ISO week string
-    },
-    # ROI integration
-    "roi_enabled": True,
-}
+def _new_monitor_state() -> dict[str, Any]:
+    """Fresh default monitor state for one tenant."""
+    return {
+        "running": False,
+        "task": None,
+        "started_at": None,
+        "stopped_at": None,
+        "interval_seconds": 60,
+        "severity_threshold": 10,
+        "alerts_processed": 0,
+        "actions_taken": 0,
+        "last_poll": None,
+        "recent_actions": [],
+        "seen_alert_ids": [],   # deduplication (capped to 500)
+        # Auto-ticketing config
+        "auto_ticket": {
+            "enabled": False,
+            "backend": "jira",               # "jira" | "servicenow"
+            "min_level": 13,                 # ticket for this level and above
+            "project_key": "",               # Jira project key
+            "labels": ["autonomous-soc"],
+        },
+        # Pending suppression queue (human approval gate)
+        "pending_suppressions": [],          # list of suppression candidate dicts
+        "approved_suppressions": [],
+        "rejected_suppressions": [],
+        # Scheduled reports config
+        "schedule": {
+            "handover_hours_utc": [],        # e.g. [8, 16, 0] → 3 shifts
+            "handover_channel": "",
+            "digest_day": "monday",          # day for weekly digest
+            "digest_hour_utc": 8,
+            "digest_recipients": [],
+            "last_handover_day": None,       # date string "YYYY-MM-DD HH"
+            "last_digest_week": None,        # ISO week string
+        },
+        # ROI integration
+        "roi_enabled": True,
+    }
+
+
+def _active_tenant_name() -> str:
+    """Resolve the caller's active MSSP tenant, or '(default)' in single-tenant mode.
+
+    Reads the per-task tenant ContextVar from identity.py (a low-level module),
+    so this never imports the heavy server module. In single-tenant mode the
+    ContextVar is empty, so this is always '(default)' and behaviour is unchanged.
+    """
+    from ..identity import active_tenant_name
+    return active_tenant_name()
+
+
+class _TenantMonitorState:
+    """Per-tenant view over the autonomous-monitor state (H1).
+
+    The monitor was a single process-global dict, so in MSSP multi-tenant mode
+    one tenant's start/stop/configure mutated — and status/list tools leaked —
+    another tenant's monitor. This proxy routes every access to the *current
+    tenant's* store (keyed by ``_active_tenant_name()``), isolating monitors,
+    suppression queues, and counters per tenant. The background loop captures
+    the starting tenant's context at ``create_task`` time, so it keeps writing
+    to its own tenant's store. In single-tenant mode there is exactly one store
+    ('(default)'), so behaviour is identical to before.
+    """
+    def __init__(self) -> None:
+        self._stores: dict[str, dict[str, Any]] = {}
+
+    def _cur(self) -> dict[str, Any]:
+        name = _active_tenant_name()
+        store = self._stores.get(name)
+        if store is None:
+            store = _new_monitor_state()
+            self._stores[name] = store
+        return store
+
+    def __getitem__(self, key): return self._cur()[key]
+    def __setitem__(self, key, value): self._cur()[key] = value
+    def __contains__(self, key): return key in self._cur()
+    def get(self, key, default=None): return self._cur().get(key, default)
+    def update(self, other): self._cur().update(other)
+    def items(self): return self._cur().items()
+    def keys(self): return self._cur().keys()
+    def values(self): return self._cur().values()
+
+
+_monitor_state = _TenantMonitorState()
 
 # ── Rule-based triage trees ────────────────────────────────────────────────────
 _TRIAGE_TREES: dict[str, list[tuple[str, dict]]] = {

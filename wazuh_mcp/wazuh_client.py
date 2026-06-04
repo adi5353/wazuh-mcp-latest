@@ -154,7 +154,19 @@ class WazuhClient:
         )
 
     async def aclose(self) -> None:
-        """Release the connection pool. Call on server shutdown."""
+        """Release the connection pool. Call on server shutdown.
+
+        Cancels any in-flight proactive token-refresh task first so it can't
+        outlive the client and touch a closed connection pool (spurious
+        shutdown errors).
+        """
+        task = self._refresh_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         await self._client.aclose()
 
     async def __aenter__(self) -> "WazuhClient":

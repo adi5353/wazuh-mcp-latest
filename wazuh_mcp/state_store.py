@@ -44,6 +44,16 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+def atomic_write_json(path: "str | Path", data: Any) -> None:
+    """Public helper: atomically write JSON-serialisable *data* to *path*.
+
+    Lets other modules (e.g. the report scheduler) persist their own state files
+    crash-safely without reaching into the private ``_atomic_write_text`` or
+    duplicating the temp-file + fsync + os.replace dance.
+    """
+    _atomic_write_text(Path(path), json.dumps(data, indent=2, default=str))
+
+
 def _state_dir() -> Path:
     base = Path(os.getenv("WAZUH_WORKSPACE_DIR", "/app/workspaces"))
     d = base / "state"
