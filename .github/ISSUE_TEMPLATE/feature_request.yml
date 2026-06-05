@@ -1,0 +1,29 @@
+name: ✨ Feature request / new tool
+description: Suggest a new MCP tool, an enhancement, or an integration.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the SOC workflow or gap. Focus on the "why", not the "how".
+      placeholder: "As an analyst I want to … so that …"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed tool or change
+      description: >-
+        If proposing a new tool, suggest a name, the Wazuh API/Indexer data it
+        would use, and the minimum RBAC role (viewer/analyst/responder/admin).
+      placeholder: "New tool `correlate_login_anomalies` (analyst) using the Indexer …"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing tools or workarounds you've tried.
+    validations:
+      required: false
