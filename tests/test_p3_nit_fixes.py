@@ -43,6 +43,30 @@ def test_readme_count_matches_inventory():
     assert result.returncode == 0, f"tool-count check failed: {result.stderr or result.stdout}"
 
 
+def test_readme_count_sites_all_agree():
+    """--check must validate every count site, not just the headline. The badge
+    and Tool Reference prose previously drifted to 240 while the headline read
+    244 because only the headline was guarded."""
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "gen_tool_table", root / "scripts" / "generate_tool_table.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    data = mod.collect()
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    for label, pattern, expected in mod._count_targets(data):
+        found = pattern.search(readme)
+        assert found is not None, f"README {label} count site missing"
+        assert found.group(0) == expected, (
+            f"README {label} is stale: {found.group(0)!r} != {expected!r}"
+        )
+
+
 # ── #12: RBAC helper naming ──────────────────────────────────────────────────
 
 class TestRbacHelperNaming:

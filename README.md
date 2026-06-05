@@ -9,7 +9,7 @@
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
-[![Tools](https://img.shields.io/badge/tools-240-brightgreen)](#tool-reference)
+[![Tools](https://img.shields.io/badge/tools-244-brightgreen)](#tool-reference)
 
 ---
 
@@ -597,7 +597,7 @@ Tools requiring elevated roles return a descriptive error rather than failing si
 
 > Counts are generated, not hand-maintained. Run
 > `python scripts/generate_tool_table.py` to regenerate `docs/TOOL_TABLE.md` and
-> the headline totals (**240 tools across 55 modules**), or
+> the headline totals (**244 tools across 55 modules**), or
 > `python scripts/generate_tool_table.py --check` in CI to fail the build if the
 > README count drifts.
 
