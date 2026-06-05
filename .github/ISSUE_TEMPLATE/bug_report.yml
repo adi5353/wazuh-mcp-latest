@@ -1,0 +1,67 @@
+name: 🐞 Bug report
+description: Report a tool that misbehaves, a crash, or incorrect output.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in as much as you can.
+
+        ⚠️ **This is a security tool. Never paste real credentials, API keys,
+        JWTs, agent keys, or raw alert data containing PII.** Redact logs before
+        posting. Suspected *vulnerabilities* must go through the private process
+        in [SECURITY.md](../security/policy), not a public issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+      placeholder: "Calling `search_alerts` returned … but I expected …"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact tool call(s) / prompt(s) and any relevant config.
+      placeholder: |
+        1. Ask Claude to "…"
+        2. Tool `…` is invoked with `…`
+        3. See error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: wazuh-mcp version
+      description: "Output of `pip show wazuh-mcp` or the git commit / tag you are on."
+      placeholder: "2.4.0 (or commit sha)"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - Claude Desktop (stdio)
+        - Docker / compose (HTTP/SSE)
+        - Open WebUI + Ollama (air-gapped)
+        - Local dev (pip install -e)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: wazuh-version
+    attributes:
+      label: Wazuh version
+      placeholder: "e.g. 4.9.0, 4.12.0, Wazuh Cloud"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (redacted)
+      description: Server logs or the error response. Remove all secrets and PII.
+      render: shell
+    validations:
+      required: false

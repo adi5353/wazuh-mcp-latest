@@ -29,6 +29,10 @@ OUT = ROOT / "docs" / "TOOL_TABLE.md"
 
 # Headline in README, e.g. "**240 tools** across 55 domain modules"
 _HEADLINE = re.compile(r"\*\*(\d+) tools\*\* across (\d+) domain modules")
+# Shields.io badge in README, e.g. ".../badge/tools-240-brightgreen"
+_BADGE = re.compile(r"(badge/tools-)(\d+)(-brightgreen)")
+# Tool Reference intro prose, e.g. "(**240 tools across 55 modules**)"
+_PROSE = re.compile(r"\*\*(\d+) tools across (\d+) modules\*\*")
 # First version heading in README, e.g. "### v2.4 — ..."
 _README_VERSION = re.compile(r"^###\s*v(\d+)\.(\d+)", re.MULTILINE)
 _INIT_VERSION = re.compile(r'__version__\s*=\s*["\'](\d+)\.(\d+)')
@@ -113,6 +117,23 @@ def render_markdown(data: dict) -> str:
     return "\n".join(out)
 
 
+def _count_targets(data: dict) -> list[tuple[str, "re.Pattern[str]", str]]:
+    """README locations that must reflect the live tool/module counts.
+
+    Each entry is ``(label, pattern, expected_replacement)``. ``pattern`` must
+    capture the full span to rewrite; ``expected_replacement`` is the canonical
+    text those counts should produce. Keeping all three count sites in one list
+    means write-mode and ``--check`` stay in lockstep — the badge and the Tool
+    Reference prose previously drifted because only the headline was validated.
+    """
+    t, m = data["total_tools"], data["tool_modules"]
+    return [
+        ("headline", _HEADLINE, f"**{t} tools** across {m} domain modules"),
+        ("tools badge", _BADGE, f"badge/tools-{t}-brightgreen"),
+        ("Tool Reference prose", _PROSE, f"**{t} tools across {m} modules**"),
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
@@ -127,20 +148,18 @@ def main() -> int:
         readme = README.read_text(encoding="utf-8")
         errors: list[str] = []
 
-        # 1. Exact headline must match the live tool/module counts (substring
-        #    matching is too weak — a stale "239" can coincidentally appear).
-        m = _HEADLINE.search(readme)
-        if not m:
-            errors.append(
-                "README headline '**N tools** across M domain modules' not found."
-            )
-        else:
-            r_tools, r_modules = int(m.group(1)), int(m.group(2))
-            if r_tools != data["total_tools"] or r_modules != data["tool_modules"]:
+        # 1. Every count site (headline, badge, prose) must match the live
+        #    counts. Exact-span matching is used because substring matching is
+        #    too weak — a stale "239" can coincidentally appear elsewhere.
+        for label, pattern, expected in _count_targets(data):
+            found = pattern.search(readme)
+            if not found:
+                errors.append(f"README {label} count not found.")
+            elif found.group(0) != expected:
                 errors.append(
-                    f"README headline is stale: says {r_tools} tools / {r_modules} "
-                    f"modules, actual is {data['total_tools']} tools / "
-                    f"{data['tool_modules']} modules. Run generate_tool_table.py."
+                    f"README {label} is stale: says {found.group(0)!r}, expected "
+                    f"{expected!r} ({data['total_tools']} tools / "
+                    f"{data['tool_modules']} modules). Run generate_tool_table.py."
                 )
 
         # 2. README's latest version heading must match __version__ (major.minor).
@@ -156,14 +175,22 @@ def main() -> int:
             for e in errors:
                 print(f"STALE: {e}", file=sys.stderr)
             return 1
-        print(f"OK: README headline ({data['total_tools']} tools / "
+        print(f"OK: README counts ({data['total_tools']} tools / "
               f"{data['tool_modules']} modules) and version are consistent.")
         return 0
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(render_markdown(data), encoding="utf-8")
+
+    # Rewrite all count sites in the README so the badge and Tool Reference
+    # prose can never drift from the headline again.
+    readme = README.read_text(encoding="utf-8")
+    for _label, pattern, expected in _count_targets(data):
+        readme = pattern.sub(lambda _m, e=expected: e, readme, count=1)
+    README.write_text(readme, encoding="utf-8")
+
     print(summary)
-    print(f"wrote {OUT.relative_to(ROOT)}")
+    print(f"wrote {OUT.relative_to(ROOT)} and synced README counts")
     return 0
 
 
