@@ -60,6 +60,8 @@ CONTEXT_MODULES: dict[str, set[str]] = {
         "active_response", "cdb", "suppression",
         "rule_wizard", "rule_wizard_deploy", "rule_wizard_generate",
         "rule_wizard_validate", "rules",
+        "decoder_wizard", "decoder_wizard_generate", "decoder_wizard_validate",
+        "detection_drafter",
     },
     # Compliance posture, reporting, audit trails, evidence export
     "compliance": {

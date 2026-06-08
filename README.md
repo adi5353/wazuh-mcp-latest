@@ -3,13 +3,13 @@
 > **Connect Wazuh SIEM to Claude AI via the Model Context Protocol (MCP), enabling natural-language security operations directly inside Claude Desktop, Open WebUI, and any MCP-compatible client.**
 
 <!-- auto-generated: run scripts/generate_tool_table.py to update -->
-**244 tools** across 55 domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **unified `compliance_framework_summary`**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**unified `enrich_indicator`**, **domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
+**248 tools** across 58 domain modules — alerts, vulnerabilities, FIM, compliance (**PCI-DSS v4.0**, **HIPAA**, GDPR, NIST 800-53, ISO 27001, **NIST CSF 2.0**, **SOC 2 Type II**, **unified `compliance_framework_summary`**, **compliance drift detection**), MITRE ATT&CK, threat hunting, active response, fleet inventory, SCA, CDB lists, rules (**decoder testing**, **rule rollback**), threat intel (**unified `enrich_indicator`**, **domain/URL/bulk IOC enrichment**), incidents, reporting (**HTML/PDF-ready exports, JSON/NDJSON**), notifications (**Slack + Microsoft Teams**), onboarding, cluster health, archive search, alert suppression, network topology, behavioral baselining, UEBA, investigation workspaces, CVE watchlist, detection rule wizard, autonomous SOC monitor, threat feeds, **server metrics**, MSSP multi-tenant, Wazuh Cloud, and more.
 
 [![CI](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml/badge.svg)](https://github.com/adi5353/wazuh-mcp-latest/actions/workflows/ci.yml)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://github.com/modelcontextprotocol/servers)
 [![Wazuh Cloud](https://img.shields.io/badge/Wazuh%20Cloud-supported-green)](#wazuh-cloud-setup)
 [![MSSP](https://img.shields.io/badge/MSSP-multi--tenant-purple)](#mssp-multi-tenant-setup)
-[![Tools](https://img.shields.io/badge/tools-244-brightgreen)](#tool-reference)
+[![Tools](https://img.shields.io/badge/tools-248-brightgreen)](#tool-reference)
 
 ---
 
@@ -597,7 +597,7 @@ Tools requiring elevated roles return a descriptive error rather than failing si
 
 > Counts are generated, not hand-maintained. Run
 > `python scripts/generate_tool_table.py` to regenerate `docs/TOOL_TABLE.md` and
-> the headline totals (**244 tools across 55 modules**), or
+> the headline totals (**248 tools across 58 modules**), or
 > `python scripts/generate_tool_table.py --check` in CI to fail the build if the
 > README count drifts.
 
@@ -756,6 +756,19 @@ AI-assisted tool for creating, validating, and deploying Wazuh XML detection rul
 | `generate_rule_xml` | Generate Wazuh XML rule from a natural language description |
 | `validate_rule_xml` | Parse and validate rule XML before upload |
 | `push_custom_rule` | Push validated rule XML to Manager's custom_rules.xml; auto-saves backup for `rollback_custom_rule` *(admin)* |
+
+### Log-to-Detection Wizard (4 tools)
+
+Paste raw logs → the LLM drafts a Wazuh **decoder** (field extraction) and a matching **rule** in official Wazuh format, then the MCP runs every check that does **not** require deploying or restarting the Manager. These tools are **non-mutating**: they never write to or restart Wazuh — deployment stays manual via `push_custom_decoder` / `push_custom_rule` on a staging manager. Because the candidate is never loaded, firing is **simulated** (Python regex) + validated for context via logtest; each report includes an honesty note and the exact manual staging recipe.
+
+| Tool | Description |
+|---|---|
+| `draft_detection_from_logs` | Entry point. Call with just sample logs to get a logtest baseline + authoring hints (current decoder/fields/parent rule id); call again with authored decoder/rule XML to run the full test pipeline |
+| `generate_decoder_xml` | Assemble official-format decoder XML from an LLM-authored capture regex + ordered field names; validates schema + `<order>`/capture parity and simulates against a sample |
+| `validate_decoder_xml` | Validate decoder XML against the official schema — allow-listed elements, regex `type`/`offset`, `plugin_decoder` names, no grandchild decoders, `<order>`/capture parity |
+| `test_detection_candidate` | Non-mutating pipeline: official-format validation, regex simulation vs samples, logtest baseline + `if_sid`/`decoded_as` parent existence, duplicate-id check, decoder-before-rule dependency, blockers/warnings, and the manual deploy recipe |
+
+> **Format authority:** decoders/rules follow the [official Wazuh ruleset XML syntax](https://documentation.wazuh.com/current/user-manual/ruleset/). Custom rule ids use the documented `100000–120000` range (warned outside it). Point `WAZUH_HOST` at your **staging** manager when running this workflow.
 
 ### Threat Intelligence (7 tools)
 

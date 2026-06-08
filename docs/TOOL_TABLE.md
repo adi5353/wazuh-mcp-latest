@@ -1,6 +1,6 @@
 # Tool Inventory (auto-generated)
 
-**244 tools** across **55 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
+**248 tools** across **58 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
 
@@ -136,6 +136,19 @@
 - `list_cve_watchlist`
 - `mark_patched`
 - `prioritize_cve_risk`
+
+### `tools/decoder_wizard_generate` (1)
+
+- `generate_decoder_xml`
+
+### `tools/decoder_wizard_validate` (1)
+
+- `validate_decoder_xml`
+
+### `tools/detection_drafter` (2)
+
+- `draft_detection_from_logs`
+- `test_detection_candidate`
 
 ### `tools/explain_alert` (2)
 
