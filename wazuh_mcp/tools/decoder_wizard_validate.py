@@ -196,7 +196,7 @@ def _validate_decoder_xml_impl(xml_content: str) -> dict:
             fields.extend(order_fields)
             regex_text = (regex_el.text or "") if regex_el is not None else ""
             groups = _count_capture_groups(regex_text)
-            ok = True
+            ok: "bool | None" = True
             if regex_el is None:
                 blockers.append(
                     f"Decoder '{label}' has <order> but no <regex> — order fields "

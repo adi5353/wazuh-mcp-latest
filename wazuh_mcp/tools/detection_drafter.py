@@ -241,7 +241,7 @@ def register(ctx: ToolContext) -> None:
         warnings: list[str] = []
 
         # ── A. Static schema validation ──────────────────────────────────────
-        decoder_validation = (
+        decoder_validation: dict = (
             _validate_decoder_xml_impl(decoder_xml) if decoder_xml.strip()
             else {"valid": True, "blockers": [], "warnings": [], "fields": [],
                   "decoders_found": 0, "order_parity": []}
@@ -258,7 +258,7 @@ def register(ctx: ToolContext) -> None:
         fidelity = "exact"
         matched_count = 0
         for sample in samples:
-            per = {"sample": sample[:120], "decoder_matches": []}
+            per: dict = {"sample": sample[:120], "decoder_matches": []}
             sample_matched = False
             for d in decoders:
                 if not d["regex"]:
@@ -317,11 +317,11 @@ def register(ctx: ToolContext) -> None:
             )
 
         # ── C/D. Parent existence + duplicate-id (GET /rules) ────────────────
-        parent_check = {"if_sid": rule_validation.get("if_sid", []),
-                        "decoded_as": rule_validation.get("decoded_as", []),
-                        "checks": []}
+        parent_check: dict = {"if_sid": rule_validation.get("if_sid", []),
+                              "decoded_as": rule_validation.get("decoded_as", []),
+                              "checks": []}
         for pid in rule_validation.get("if_sid", []):
-            exists = False
+            exists: "bool | None" = False
             try:
                 resp = await wz.request("GET", f"/rules?rule_ids={pid}")
                 exists = bool((resp.get("data") or {}).get("affected_items"))
@@ -350,6 +350,7 @@ def register(ctx: ToolContext) -> None:
 
         duplicate_id = []
         for rid in rule_validation.get("rule_ids", []):
+            conflict: "bool | None"
             try:
                 resp = await wz.request("GET", f"/rules?rule_ids={rid}")
                 conflict = bool((resp.get("data") or {}).get("affected_items"))
@@ -363,8 +364,8 @@ def register(ctx: ToolContext) -> None:
             duplicate_id.append({"rule_id": rid, "conflict": conflict})
 
         # ── E. Decoder-before-rule dependency direction ──────────────────────
-        dependency = {"rule_needs_decoder": rule_validation.get("uses_fields", False),
-                      "satisfied": True, "missing_fields": []}
+        dependency: dict = {"rule_needs_decoder": rule_validation.get("uses_fields", False),
+                            "satisfied": True, "missing_fields": []}
         if rule_validation.get("uses_fields"):
             produced = set(decoder_validation.get("fields", []))
             # Fields decoders implicitly produce (extracted by live decoders).
