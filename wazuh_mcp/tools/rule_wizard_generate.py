@@ -26,6 +26,18 @@ def _xml_attr(s: str) -> str:
     """
     return _xml_text(s).replace('"', "&quot;")
 
+
+# Official Wazuh "static" decoded fields — reserved slots that must be matched in
+# rules with their DEDICATED element (e.g. <srcip>, <user>), never via the generic
+# <field name="...">. Using <field name="srcip"> makes analysisd refuse to load
+# the ruleset with: "Field 'srcip' is static". Dynamic (arbitrary-name) fields use
+# <field name="...">. Source: official Wazuh decoders <order> + rules XML syntax.
+WAZUH_STATIC_FIELDS: frozenset[str] = frozenset({
+    "srcuser", "dstuser", "user", "srcip", "dstip", "srcport", "dstport",
+    "protocol", "system_name", "id", "url", "action", "status",
+    "data", "extra_data",
+})
+
 # Sigma log source → Wazuh parent rule IDs (best-effort heuristic mapping)
 _SIGMA_LOGSOURCE_TO_PARENT: dict[str, int] = {
     "windows": 60000,
@@ -132,10 +144,17 @@ def register_generate(ctx: ToolContext) -> None:
         if match_pattern:
             conditions += f"    <match>{_xml_text(match_pattern)}</match>\n"
         if field_name and field_pattern:
-            conditions += (
-                f"    <field name=\"{_xml_attr(field_name)}\">"
-                f"{_xml_text(field_pattern)}</field>\n"
-            )
+            # Static decoded fields must use their dedicated element, not <field>
+            # (Wazuh rejects <field name="srcip"> with "Field 'srcip' is static").
+            if field_name in WAZUH_STATIC_FIELDS:
+                conditions += (
+                    f"    <{field_name}>{_xml_text(field_pattern)}</{field_name}>\n"
+                )
+            else:
+                conditions += (
+                    f"    <field name=\"{_xml_attr(field_name)}\">"
+                    f"{_xml_text(field_pattern)}</field>\n"
+                )
 
         mitre_block = ""
         if mitre_id:

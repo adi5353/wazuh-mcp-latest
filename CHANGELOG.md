@@ -8,6 +8,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Detection format fixes — static fields (2026-06-08)
+
+- **Static decoded fields enforced** — Wazuh rejects `<field name="user">` (and
+  the other reserved fields: `srcuser, dstuser, user, srcip, dstip, srcport,
+  dstport, protocol, system_name, id, url, action, status, data, extra_data`)
+  with *"Field 'X' is static"*, failing ruleset load. `_validate_rule_official_impl`
+  now blocks `<field>` on a static field and tells you to use the dedicated
+  element (e.g. `<user>`), and `generate_rule_xml` emits the dedicated element
+  automatically. Source: official Wazuh rules/decoders XML syntax.
+- **Rule element allow-list completed** — the official `<rule>` child-element set
+  (dedicated static-field elements, `same_*`/`different_*` correlation, `time`,
+  `weekday`, `if_level`, `srcgeoip`, etc.) is now recognised, so valid rules using
+  `<user>`/`<url>`/`<data>`/`<status>` are no longer wrongly rejected as invented.
+
 ### Log-to-Detection Wizard (2026-06-08)
 
 New **non-mutating** workflow to draft and test Wazuh decoders + rules from raw
