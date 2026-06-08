@@ -26,17 +26,40 @@ import defusedxml.ElementTree as ET
 from ..rbac import require_analyst_or_above, ROLE
 from ..tool_context import ToolContext
 from .rule_wizard_validate import _validate_rule_xml_impl
+from .rule_wizard_generate import WAZUH_STATIC_FIELDS
 from .decoder_wizard_validate import _validate_decoder_xml_impl, _parse_fragment
 from .decoder_wizard_generate import _simulate_match
 
 REQUIRED_ROLE = ROLE.ANALYST
 
-# ── Official rule schema (do NOT extend with invented elements) ───────────────
+# ── Official rule schema — every valid <rule> child element (do NOT extend with
+# invented elements). Source: official Wazuh rules XML syntax. ────────────────
 _RULE_CHILD_TAGS = {
-    "match", "regex", "field", "srcip", "dstip", "decoded_as", "program_name",
-    "if_sid", "if_group", "if_matched_sid", "description", "group", "options",
-    "mitre", "frequency", "timeframe", "same_srcip", "same_source_ip", "info",
-    "list", "category", "id",
+    # matching
+    "match", "regex", "decoded_as", "category", "field",
+    # dedicated static-field match elements
+    "srcip", "dstip", "srcport", "dstport", "data", "extra_data", "user",
+    "srcuser", "dstuser", "system_name", "program_name", "protocol",
+    "hostname", "id", "url", "location", "action", "status",
+    "srcgeoip", "dstgeoip",
+    # time windows
+    "time", "weekday",
+    # composition / hierarchy
+    "if_sid", "if_group", "if_level", "if_matched_sid", "if_matched_group",
+    # correlation (same_*/different_*)
+    "same_id", "different_id", "same_srcip", "different_srcip",
+    "same_dstip", "different_dstip", "same_srcport", "different_srcport",
+    "same_dstport", "different_dstport", "same_location", "different_location",
+    "same_srcuser", "different_srcuser", "same_user", "different_user",
+    "same_field", "different_field", "same_protocol", "different_protocol",
+    "same_action", "different_action", "same_data", "different_data",
+    "same_extra_data", "different_extra_data", "same_status", "different_status",
+    "same_system_name", "different_system_name", "same_url", "different_url",
+    "same_srcgeoip", "different_srcgeoip", "same_dstgeoip", "different_dstgeoip",
+    "same_source_ip",  # deprecated alias of same_srcip
+    # frequency / metadata / control
+    "frequency", "timeframe", "options", "description", "list", "info",
+    "check_diff", "group", "mitre", "var",
 }
 _RULE_OPTIONS = {"no_full_log", "no_alert", "no_counter", "alert_by_email"}
 _MITRE_ID = _re.compile(r"^T\d{4}(\.\d{3})?$")
@@ -121,7 +144,14 @@ def _validate_rule_official_impl(xml_content: str) -> dict:
                 continue
             if tag == "field":
                 fname = (child.get("name") or "").strip()
-                if fname:
+                if fname in WAZUH_STATIC_FIELDS:
+                    blockers.append(
+                        f"Rule {label} uses <field name=\"{fname}\"> but '{fname}' "
+                        f"is a Wazuh static field — match it with the dedicated "
+                        f"<{fname}> element instead. Using <field> here fails "
+                        f"ruleset load with \"Field '{fname}' is static\"."
+                    )
+                elif fname:
                     field_names.append(fname)
             elif tag == "decoded_as":
                 decoded_as.append((child.text or "").strip())

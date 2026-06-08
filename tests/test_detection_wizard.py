@@ -146,13 +146,14 @@ class TestRuleValidation:
         assert any("invented element" in b for b in r["blockers"])
 
     def test_field_and_decoded_as_tracked(self):
+        # Dynamic (non-static) field name is tracked via <field>.
         xml = self._wrap(
             '<rule id="100050" level="5"><decoded_as>sshd</decoded_as>'
-            '<field name="srcuser">admin</field><description>x</description></rule>'
+            '<field name="data.app.reason">denied</field><description>x</description></rule>'
         )
         r = _validate_rule_official_impl(xml)
         assert r["uses_fields"] is True
-        assert "srcuser" in r["field_names"]
+        assert "data.app.reason" in r["field_names"]
         assert "sshd" in r["decoded_as"]
 
     def test_bad_mitre_id_warns(self):
@@ -163,8 +164,64 @@ class TestRuleValidation:
         r = _validate_rule_official_impl(xml)
         assert any("MITRE" in w for w in r["warnings"])
 
+    def test_static_field_via_field_element_blocked(self):
+        # <field name="user"> must be rejected — Wazuh treats 'user' as static
+        # ("Field 'user' is static" ruleset-load failure).
+        xml = self._wrap(
+            '<rule id="100200" level="5">'
+            '<field name="user">alice</field><description>x</description></rule>'
+        )
+        r = _validate_rule_official_impl(xml)
+        assert r["valid"] is False
+        assert any("is static" in b and "user" in b for b in r["blockers"])
+
+    def test_dedicated_static_elements_allowed(self):
+        # The correct form — dedicated <user>/<url>/<data>/<status> elements —
+        # must NOT be flagged as invented elements.
+        xml = self._wrap(
+            '<rule id="100050" level="5"><user>alice</user><url>/login</url>'
+            '<status>failed</status><data>x</data>'
+            '<description>d</description></rule>'
+        )
+        r = _validate_rule_official_impl(xml)
+        assert r["valid"] is True, r["blockers"]
+
 
 # ── generate_decoder_xml ──────────────────────────────────────────────────────
+
+class TestGenerateRuleStaticFields:
+    def _rule_env(self):
+        identity.set_session_role(ROLE.ANALYST)
+        tools = {}
+        mcp = MagicMock()
+        mcp.tool = lambda: (lambda fn: tools.__setitem__(fn.__name__, fn) or fn)
+        ctx = ToolContext(
+            mcp=mcp, wz=MagicMock(), idx=MagicMock(), cfg=MagicMock(), cap=lambda x: x,
+            require_writes=lambda: None, truncate=lambda s, n=300: s,
+            enrich_mitre_ids=lambda ids: [], geoip_lookup=AsyncMock(return_value={}),
+            incident_recommendations=lambda a: [],
+        )
+        from wazuh_mcp.tools.rule_wizard import register
+        register(ctx)
+        return tools
+
+    def test_static_field_emits_dedicated_element(self):
+        tools = self._rule_env()
+        r = _run(tools["generate_rule_xml"](
+            description="failed login", rule_id=100050,
+            field_name="srcip", field_pattern="10.0.0.0/8",
+        ))
+        assert "<srcip>10.0.0.0/8</srcip>" in r["xml"]
+        assert 'field name="srcip"' not in r["xml"]
+
+    def test_dynamic_field_still_uses_field_element(self):
+        tools = self._rule_env()
+        r = _run(tools["generate_rule_xml"](
+            description="custom", rule_id=100051,
+            field_name="data.myapp.reason", field_pattern="bad_password",
+        ))
+        assert 'field name="data.myapp.reason"' in r["xml"]
+
 
 class TestGenerateDecoder:
     def test_generates_valid_xml_with_parity(self):
