@@ -8,6 +8,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Log-to-Detection Wizard (2026-06-08)
+
+New **non-mutating** workflow to draft and test Wazuh decoders + rules from raw
+logs. The LLM authors the decoder (field extraction) and a matching rule; the MCP
+enforces official Wazuh format and runs every check that does **not** require
+deploying or restarting the Manager.
+
+- **New module `decoder_wizard`** (aggregator over `decoder_wizard_validate` +
+  `decoder_wizard_generate`): `validate_decoder_xml` and `generate_decoder_xml`.
+  Enforces the official decoder schema — allow-listed elements, regex
+  `type`/`offset`, `plugin_decoder` names, no grandchild decoders, and
+  `<order>`/capture-group parity.
+- **New module `detection_drafter`**: `draft_detection_from_logs` (baseline +
+  authoring hints, then full test) and `test_detection_candidate` (static
+  official-format validation, Python regex simulation vs samples, logtest baseline
+  + `if_sid`/`decoded_as` parent existence, duplicate rule-id check, and
+  decoder-before-rule dependency). Returns blockers/warnings, an honesty note, and
+  the manual staging deploy recipe.
+- **Non-mutating guarantee** — none of these tools call `upload_xml_file` or any
+  restart endpoint; they only issue read-only `PUT /logtest` and `GET /rules`.
+  Deployment stays manual (admin) via `push_custom_decoder` / `push_custom_rule`,
+  intended for a **staging** manager. Regression-tested in
+  `tests/test_detection_wizard.py`.
+- **Rule id range** — the new official validator warns outside the documented
+  custom range `100000–120000` and blocks only outside the `100000–199999` system
+  space (the repo's existing lenient validator is unchanged for back-compat).
+- **Count-drift guard hardened** — `scripts/generate_tool_table.py --check` now
+  validates the README headline, the tools badge, and the Tool Reference prose
+  (previously only the headline), and write-mode rewrites all three. Tool surface:
+  248 tools / 58 modules.
+
 ### Version & consistency (2026-05-31)
 
 - **Version identity unified** — `__version__` set to `2.4.0` to match the README
