@@ -10,13 +10,26 @@ on:
 jobs:
   security:
     runs-on: ubuntu-latest
+    env:
+      # Surfaced as an env var so it can be checked in step `if:` guards —
+      # secrets can't be referenced directly in expressions.
+      CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      
-      - uses: anthropics/claude-code-security-review@main
+
+      # Without the secret the action aborts with a non-zero exit and fails the
+      # whole job. Skip gracefully instead, and auto-enable once the secret is
+      # added in Settings → Secrets and variables → Actions.
+      - name: Note missing API key
+        if: ${{ env.CLAUDE_API_KEY == '' }}
+        run: echo "::notice::CLAUDE_API_KEY secret is not set — skipping the AI security review. Add it in repo Settings to enable."
+
+      - name: AI security review
+        if: ${{ env.CLAUDE_API_KEY != '' }}
+        uses: anthropics/claude-code-security-review@main
         with:
           comment-pr: true
-          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          claude-api-key: ${{ env.CLAUDE_API_KEY }}
