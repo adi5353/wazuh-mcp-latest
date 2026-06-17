@@ -16,6 +16,40 @@ from ..rbac import require_responder_or_above, require_admin_or_above
 from ..validators import safe_validate, validate_cdb_field
 
 
+async def _read_cdb_text(wz, list_name: str) -> str:
+    """Return a CDB list's contents as ``key:value`` text, or ``""`` if absent.
+
+    Reads via a *non-raw* GET on purpose: ``?raw=true`` returns ``text/plain``
+    which the JSON HTTP client cannot parse (it raises). The default GET returns
+    a JSON envelope whose ``affected_items`` is a list of single-key
+    ``{key: value}`` dicts, which we rebuild into canonical newline-delimited text.
+    A missing list yields ``""`` rather than raising.
+    """
+    try:
+        resp = await wz.request("GET", f"/lists/files/{list_name}")
+    except Exception:
+        return ""
+    items = (resp.get("data") or {}).get("affected_items") or []
+    lines = []
+    for item in items:
+        if isinstance(item, dict):
+            for k, v in item.items():
+                lines.append(f"{k}:{v}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _raise_on_cdb_error(resp) -> None:
+    """Surface a Manager body-level rejection (it returns HTTP 200 even on error)."""
+    if isinstance(resp, dict) and resp.get("error"):
+        failed = (resp.get("data") or {}).get("failed_items") or []
+        detail = (
+            (failed[0].get("error") or {}).get("message")
+            if failed and isinstance(failed[0], dict)
+            else resp.get("message", "unknown error")
+        )
+        raise RuntimeError(f"Manager rejected CDB write: {detail}")
+
+
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
@@ -30,7 +64,14 @@ def register(ctx: ToolContext) -> None:
     @mcp.tool()
     async def get_cdb_list_contents(list_name: str) -> dict:
         """Get the full key:value contents of a CDB list file."""
-        return await wz.request("GET", f"/lists/files/{list_name}?raw=true")
+        text = await _read_cdb_text(wz, list_name)
+        entries = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            k, _, v = line.partition(":")
+            entries.append({"key": k, "value": v})
+        return {"list": list_name, "count": len(entries), "entries": entries}
 
     @mcp.tool()
     async def add_to_cdb_list(list_name: str, key: str, value: str = "malicious") -> dict:
@@ -53,19 +94,15 @@ def register(ctx: ToolContext) -> None:
         _, err = safe_validate(validate_cdb_field, value, "value")
         if err:
             return err
-        try:
-            current = await wz.request("GET", f"/lists/files/{list_name}?raw=true")
-            existing = (current.get("data") or {}).get("affected_items", [""])[0] or ""
-        except Exception:
-            existing = ""
+        existing = await _read_cdb_text(wz, list_name)
         lines = [ln for ln in existing.splitlines() if ln.strip() and not ln.startswith(f"{key}:")]
         lines.append(f"{key}:{value}")
         new_content = "\n".join(lines) + "\n"
-        result = await wz.request(
-            "PUT", f"/lists/files/{list_name}",
-            content=new_content.encode(),
-            headers={"Content-Type": "application/octet-stream"},
-        )
+        try:
+            result = await wz.upload_xml_file(f"/lists/files/{list_name}", new_content)
+            _raise_on_cdb_error(result)
+        except Exception as exc:
+            return {"error": f"Failed to add to CDB list: {exc}"}
         return {"action": "added", "key": key, "value": value, "list": list_name, "api_result": result}
 
     @mcp.tool()
@@ -82,17 +119,16 @@ def register(ctx: ToolContext) -> None:
         _, err = safe_validate(validate_cdb_field, key, "key")
         if err:
             return err
-        current = await wz.request("GET", f"/lists/files/{list_name}?raw=true")
-        existing = (current.get("data") or {}).get("affected_items", [""])[0] or ""
+        existing = await _read_cdb_text(wz, list_name)
         filtered = "\n".join(
             ln for ln in existing.splitlines()
             if ln.strip() and not ln.startswith(f"{key}:")
         ) + "\n"
-        result = await wz.request(
-            "PUT", f"/lists/files/{list_name}",
-            content=filtered.encode(),
-            headers={"Content-Type": "application/octet-stream"},
-        )
+        try:
+            result = await wz.upload_xml_file(f"/lists/files/{list_name}", filtered)
+            _raise_on_cdb_error(result)
+        except Exception as exc:
+            return {"error": f"Failed to remove from CDB list: {exc}"}
         return {"action": "removed", "key": key, "list": list_name, "api_result": result}
 
     @mcp.tool()
@@ -177,8 +213,7 @@ def register(ctx: ToolContext) -> None:
 
         for list_name in to_export:
             try:
-                resp = await wz.request("GET", f"/lists/files/{list_name}?raw=true")
-                content = (resp.get("data") or {}).get("affected_items", [""])[0] or ""
+                content = await _read_cdb_text(wz, list_name)
                 entries = []
                 for line in content.splitlines():
                     line = line.strip()
@@ -285,11 +320,8 @@ def register(ctx: ToolContext) -> None:
                 for e in entries
             ) + "\n"
             try:
-                await wz.request(
-                    "PUT", f"/lists/files/{list_name}",
-                    content=content.encode(),
-                    headers={"Content-Type": "application/octet-stream"},
-                )
+                resp = await wz.upload_xml_file(f"/lists/files/{list_name}", content)
+                _raise_on_cdb_error(resp)
                 restored.append({"list_name": list_name, "entries_written": len(entries)})
             except Exception as exc:
                 errors.append(f"{list_name}: {exc}")
