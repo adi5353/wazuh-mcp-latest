@@ -294,9 +294,13 @@ class TestCDB:
         identity._ctx_role.set(None)
 
     def test_list_and_get_contents(self):
-        self.wz.request = AsyncMock(return_value={"data": {"affected_items": ["1.2.3.4:bad\n5.6.7.8:c2"]}})
+        # Non-raw GET /lists/files/{name} returns affected_items as {key: value} dicts.
+        self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
+            {"1.2.3.4": "bad"}, {"5.6.7.8": "c2"}]}})
         assert "data" in _run(self.tools["list_cdb_lists"]())
-        assert "data" in _run(self.tools["get_cdb_list_contents"](list_name="malicious-ips"))
+        out = _run(self.tools["get_cdb_list_contents"](list_name="malicious-ips"))
+        assert out["count"] == 2
+        assert {"key": "1.2.3.4", "value": "bad"} in out["entries"]
 
     def test_add_and_remove(self, monkeypatch):
         monkeypatch.setenv("WAZUH_ALLOW_WRITES", "true")
@@ -334,7 +338,8 @@ class TestCDB:
             if path == "/lists?limit=100":
                 return {"data": {"affected_items": [{"filename": "malicious-ips"}]}}
             if "lists/files" in path and method == "GET":
-                return {"data": {"affected_items": ["1.2.3.4:bad\nevil.com:phish\nplainkey"]}}
+                return {"data": {"affected_items": [
+                    {"1.2.3.4": "bad"}, {"evil.com": "phish"}, {"plainkey": ""}]}}
             return {"data": {}}
         self.wz.request = AsyncMock(side_effect=fake_request)
 
@@ -1146,10 +1151,11 @@ class TestCVEWatchlist:
             cve_id="CVE-2024-1234", sla_days=-5))
 
     def test_list_watchlist(self):
+        # Non-raw GET returns affected_items as single-key {cve_id: value} dicts.
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2020-0001", "value": "active|old|7.5|1|2020-01-01T00:00:00Z"},
-            {"key": "CVE-2024-9999", "value": "patched|fixed|9.0|30|2024-01-01T00:00:00Z"},
-            {"key": "not-a-cve", "value": "junk"},
+            {"CVE-2020-0001": "active|old|7.5|1|2020-01-01T00:00:00Z"},
+            {"CVE-2024-9999": "patched|fixed|9.0|30|2024-01-01T00:00:00Z"},
+            {"not-a-cve": "junk"},
         ]}})
         out = _run(self.tools["list_cve_watchlist"]())
         assert out["total"] == 2  # the junk row is skipped
@@ -1159,7 +1165,7 @@ class TestCVEWatchlist:
         async def req(method, path, **kw):
             if method == "GET":
                 return {"data": {"affected_items": [
-                    {"key": "CVE-2024-1234", "value": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
+                    {"CVE-2024-1234": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
             return {}
         self.wz.request = AsyncMock(side_effect=req)
         out = _run(self.tools["mark_patched"](cve_id="CVE-2024-1234", note="patched v2"))
@@ -1168,7 +1174,7 @@ class TestCVEWatchlist:
     def test_get_watchlist_exposure(self):
         async def req(method, path, **kw):
             return {"data": {"affected_items": [
-                {"key": "CVE-2024-1234", "value": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
+                {"CVE-2024-1234": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
         self.wz.request = AsyncMock(side_effect=req)
         self.idx.search = AsyncMock(return_value={
             "hits": {"total": {"value": 4}},
@@ -1178,13 +1184,13 @@ class TestCVEWatchlist:
 
     def test_get_watchlist_exposure_none_active(self):
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2024-1", "value": "patched|n|9|30|2024-01-01T00:00:00Z"}]}})
+            {"CVE-2024-1": "patched|n|9|30|2024-01-01T00:00:00Z"}]}})
         out = _run(self.tools["get_watchlist_exposure"]())
         assert out["exposure"] == []
 
     def test_prioritize_cve_risk(self):
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2024-1234", "value": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}})
+            {"CVE-2024-1234": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}})
         self.idx.search = AsyncMock(return_value={
             "aggregations": {"agents": {"value": 6}}})
         out = _run(self.tools["prioritize_cve_risk"](top_n=5))
@@ -1192,7 +1198,7 @@ class TestCVEWatchlist:
 
     def test_check_sla_breaches(self):
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2020-0001", "value": "active|old|9|1|2020-01-01T00:00:00Z"}]}})
+            {"CVE-2020-0001": "active|old|9|1|2020-01-01T00:00:00Z"}]}})
         out = _run(self.tools["check_sla_breaches"]())
         assert isinstance(out, dict)
 
