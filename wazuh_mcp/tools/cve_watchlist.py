@@ -30,6 +30,37 @@ _CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 _CDB_LIST = "cve-watchlist"
 
 
+# Wazuh CDB lists are "key:value" and split on the FIRST colon, so a value must
+# not contain ':' (it would corrupt the record → Manager error 1800). '|' is our
+# own field delimiter, and newlines end the record — all three are stripped from
+# free-text notes. added_at is stored as a colon-free Unix epoch for the same reason.
+_NOTE_SANITIZE = {ord(c): " " for c in ":|\n\r\t"}
+
+
+def _sanitize_note(note: str) -> str:
+    """Strip characters that would corrupt the CDB key:value|pipe format."""
+    return " ".join((note or "").translate(_NOTE_SANITIZE).split())
+
+
+def _added_dt(added_at: str) -> datetime | None:
+    """Parse a stored added_at into a datetime, accepting epoch or legacy ISO."""
+    if not added_at:
+        return None
+    try:
+        if added_at.isdigit():
+            return datetime.fromtimestamp(int(added_at), tz=timezone.utc)
+        return datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _encode_value(status: str, note: str, cvss_score, sla_days, added_at) -> str:
+    """Build a colon-free CDB value: status|note|cvss|sla_days|epoch."""
+    dt = _added_dt(str(added_at)) if added_at else None
+    epoch = int(dt.timestamp()) if dt else int(datetime.now(timezone.utc).timestamp())
+    return f"{status}|{_sanitize_note(note)}|{cvss_score}|{sla_days}|{epoch}"
+
+
 def _parse_entry(key: str, val: str) -> dict:
     """Parse a CDB watchlist value into structured fields."""
     parts = val.split("|")
@@ -38,6 +69,7 @@ def _parse_entry(key: str, val: str) -> dict:
     cvss      = float(parts[2]) if len(parts) > 2 and parts[2] else 0.0
     sla_days  = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
     added_at  = parts[4] if len(parts) > 4 else ""
+    dt = _added_dt(added_at)
     return {
         "cve_id": key,
         "status": status,
@@ -45,27 +77,66 @@ def _parse_entry(key: str, val: str) -> dict:
         "cvss_score": cvss,
         "sla_days": sla_days,
         "added_at": added_at,
+        "added_at_iso": dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else "",
     }
 
 
 def _sla_status(entry: dict) -> dict:
     """Return SLA deadline + breach info for a watchlist entry."""
     sla_days = entry.get("sla_days", 0)
-    added_at = entry.get("added_at", "")
-    if not sla_days or not added_at:
+    added = _added_dt(entry.get("added_at", ""))
+    if not sla_days or added is None:
         return {"sla_deadline": None, "sla_breached": False, "days_remaining": None}
-    try:
-        added = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
-        deadline = added + timedelta(days=sla_days)
-        now = datetime.now(timezone.utc)
-        days_remaining = (deadline - now).days
-        return {
-            "sla_deadline": deadline.strftime("%Y-%m-%d"),
-            "sla_breached": now > deadline,
-            "days_remaining": days_remaining,
-        }
-    except Exception:
-        return {"sla_deadline": None, "sla_breached": False, "days_remaining": None}
+    deadline = added + timedelta(days=sla_days)
+    now = datetime.now(timezone.utc)
+    days_remaining = (deadline - now).days
+    return {
+        "sla_deadline": deadline.strftime("%Y-%m-%d"),
+        "sla_breached": now > deadline,
+        "days_remaining": days_remaining,
+    }
+
+
+async def _fetch_entries(wz) -> list[dict]:
+    """Read the CDB watchlist into ``{"key", "value"}`` dicts.
+
+    Uses a *non-raw* GET on purpose: with ``?raw=true`` the Manager replies
+    ``text/plain`` (which the JSON HTTP client cannot parse — it raises), whereas
+    the default GET returns a JSON envelope whose ``affected_items`` is a list of
+    single-key ``{cve_id: value}`` dicts. A missing list comes back as an
+    empty/​error envelope, yielding ``[]``; genuine transport errors propagate so
+    callers can surface them, preserving the existing error-reporting contract.
+    """
+    resp = await wz.request("GET", f"/lists/files/{_CDB_LIST}")
+    items = (resp.get("data") or {}).get("affected_items") or []
+    entries: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            for key, value in item.items():
+                entries.append({"key": key, "value": value})
+    return entries
+
+
+async def _write_entries(wz, entries: list[dict]) -> None:
+    """Serialise entries back to CDB ``key:value`` lines and upload the full file.
+
+    Uses ``upload_xml_file`` (octet-stream + ``overwrite=true`` + path validation
+    + retry), the same proven write path used for threat-feed CDB lists. The whole
+    list is rewritten because the Manager file API replaces files wholesale.
+    """
+    content = "".join(f"{e['key']}:{e['value']}\n" for e in entries)
+    resp = await wz.upload_xml_file(f"/lists/files/{_CDB_LIST}", content)
+    # The Manager returns HTTP 200 even when it rejects the file (e.g. bad CDB
+    # format → code 1800), reporting the failure only in the body. Surface it so
+    # callers don't report a false success.
+    if isinstance(resp, dict) and resp.get("error"):
+        failed = (resp.get("data") or {}).get("failed_items") or []
+        detail = (
+            (failed[0].get("error") or {}).get("message")
+            if failed and isinstance(failed[0], dict)
+            else resp.get("message", "unknown error")
+        )
+        raise RuntimeError(f"Manager rejected CDB write: {detail}")
 
 
 def register(ctx: ToolContext) -> None:
@@ -109,14 +180,13 @@ def register(ctx: ToolContext) -> None:
         if sla_days < 0:
             return {"error": "sla_days must be 0 or positive"}
 
-        added_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        value = f"active|{note}|{cvss_score}|{sla_days}|{added_at}"
+        value = _encode_value("active", note, cvss_score, sla_days, None)
         try:
-            await wz.request(
-                "PUT",
-                f"/lists/files/{_CDB_LIST}",
-                json={cve_id: value},
-            )
+            # Merge into the existing list (replacing any prior entry for this
+            # CVE) so other watched CVEs are preserved across the full-file write.
+            entries = [e for e in await _fetch_entries(wz) if e["key"].upper() != cve_id]
+            entries.append({"key": cve_id, "value": value})
+            await _write_entries(wz, entries)
         except Exception as exc:
             return {"error": f"Failed to add CVE to watchlist: {exc}"}
 
@@ -148,8 +218,7 @@ def register(ctx: ToolContext) -> None:
           patched    — remediation confirmed
         """
         try:
-            resp = await wz.request("GET", f"/lists/files/{_CDB_LIST}?raw=true")
-            items = (resp.get("data") or {}).get("affected_items") or []
+            items = await _fetch_entries(wz)
         except Exception as exc:
             return {"error": f"Failed to read watchlist: {exc}"}
 
@@ -200,26 +269,19 @@ def register(ctx: ToolContext) -> None:
             if err:
                 return err
 
-        # Preserve existing CVSS + SLA + added_at fields
+        # Preserve existing CVSS + SLA + added_at fields, then rewrite the full
+        # list with this CVE flipped to 'patched' (other entries untouched).
         try:
-            resp = await wz.request("GET", f"/lists/files/{_CDB_LIST}?raw=true")
-            items = (resp.get("data") or {}).get("affected_items") or []
-            existing_entry = next((e for e in items if e.get("key") == cve_id), None)
-        except Exception:
-            existing_entry = None
-
-        if existing_entry:
-            parsed = _parse_entry(cve_id, existing_entry.get("value", ""))
-            value = f"patched|{note}|{parsed['cvss_score']}|{parsed['sla_days']}|{parsed['added_at']}"
-        else:
-            value = f"patched|{note}|||"
-
-        try:
-            await wz.request(
-                "PUT",
-                f"/lists/files/{_CDB_LIST}",
-                json={cve_id: value},
-            )
+            entries = await _fetch_entries(wz)
+            existing_entry = next((e for e in entries if e["key"].upper() == cve_id), None)
+            if existing_entry:
+                parsed = _parse_entry(cve_id, existing_entry["value"])
+                value = _encode_value("patched", note, parsed["cvss_score"], parsed["sla_days"], parsed["added_at"])
+            else:
+                value = _encode_value("patched", note, "", "", None)
+            merged = [e for e in entries if e["key"].upper() != cve_id]
+            merged.append({"key": cve_id, "value": value})
+            await _write_entries(wz, merged)
         except Exception as exc:
             return {"error": f"Failed to update watchlist: {exc}"}
 
@@ -243,8 +305,7 @@ def register(ctx: ToolContext) -> None:
         """
         # Get active CVEs
         try:
-            resp = await wz.request("GET", f"/lists/files/{_CDB_LIST}?raw=true")
-            items = (resp.get("data") or {}).get("affected_items") or []
+            items = await _fetch_entries(wz)
         except Exception as exc:
             return {"error": f"Failed to read watchlist: {exc}"}
 
@@ -312,8 +373,7 @@ def register(ctx: ToolContext) -> None:
         """
         # Get watchlist
         try:
-            resp = await wz.request("GET", f"/lists/files/{_CDB_LIST}?raw=true")
-            items = (resp.get("data") or {}).get("affected_items") or []
+            items = await _fetch_entries(wz)
         except Exception as exc:
             return {"error": f"Failed to read watchlist: {exc}"}
 
@@ -385,8 +445,7 @@ def register(ctx: ToolContext) -> None:
         a new sla_days to extend the deadline.
         """
         try:
-            resp = await wz.request("GET", f"/lists/files/{_CDB_LIST}?raw=true")
-            items = (resp.get("data") or {}).get("affected_items") or []
+            items = await _fetch_entries(wz)
         except Exception as exc:
             return {"error": f"Failed to read watchlist: {exc}"}
 
