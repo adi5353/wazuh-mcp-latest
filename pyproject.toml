@@ -16,7 +16,7 @@ dependencies = [
     # Compatible-release ranges with upper bounds so a major/breaking release
     # cannot silently enter a production install. See requirements.lock for the
     # fully pinned, reproducible set used in CI and Docker.
-    "mcp>=1.0.0,<2.0.0",
+    "mcp>=1.0.0,<3.0.0",
     "httpx>=0.28.0,<0.29.0",
     "idna>=3.15,<4.0.0",       # CVE-2026-45409 fixed in 3.15
     "python-dotenv>=1.0.0,<2.0.0",
