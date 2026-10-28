@@ -22,6 +22,7 @@ import httpx
 
 from .config import Config
 from .circuit_breaker import opensearch_breaker
+from .read_only import indexer_request_hook
 
 # M4: field-name allow-list enforcement ─────────────────────────────────────
 # When validate_fields=True is passed to search/count, leaf field names inside
@@ -118,6 +119,7 @@ class WazuhIndexer:
         self._ssl: bool | str = cfg.ca_bundle if cfg.ca_bundle else cfg.verify_ssl
         self._client = httpx.AsyncClient(
             verify=self._ssl,
+            event_hooks={"request": [indexer_request_hook]},
             auth=(cfg.indexer_user, cfg.indexer_pass),
             headers={"Content-Type": "application/json"},
             limits=httpx.Limits(

@@ -176,6 +176,9 @@ _tool_mw.install()
 
 def _require_writes() -> dict | None:
     """Return an error dict if writes are disabled, else None."""
+    from .read_only import is_read_only
+    if is_read_only():
+        return {"error": "Server is in READ-ONLY mode (WAZUH_MCP_READ_ONLY). Write tools are disabled."}
     if not cfg.allow_writes:
         return {
             "error": "Write operations are disabled. "

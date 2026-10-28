@@ -93,6 +93,10 @@ class ToolMiddleware:
         registry = self._registry
 
         def capturing_decorator(fn: Any) -> Any:
+            # Read-only mode: write/notify tools are never registered.
+            from ..read_only import tool_hidden
+            if tool_hidden(fn.__name__):
+                return fn
             # Resolve the role once at registration time (not per call) so there
             # is zero per-call overhead and the decision is visible in logs during
             # server startup.

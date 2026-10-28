@@ -26,6 +26,7 @@ import httpx
 
 from .config import Config
 from .circuit_breaker import wazuh_manager_breaker
+from .read_only import manager_request_hook, ReadOnlyViolation, is_read_only
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,7 @@ class WazuhClient:
         # Persistent connection pool — reused across all requests.
         self._client = httpx.AsyncClient(
             verify=self._ssl,
+            event_hooks={"request": [manager_request_hook]},
             limits=httpx.Limits(
                 max_connections=_POOL_MAX_CONNECTIONS,
                 max_keepalive_connections=_POOL_MAX_KEEPALIVE,
@@ -307,6 +309,8 @@ class WazuhClient:
         ``path`` is restricted to the Manager rules/decoders file-API routes to
         prevent traversal or arbitrary-endpoint writes via a crafted path.
         """
+        if is_read_only():
+            raise ReadOnlyViolation(f"read-only mode: upload to {path} blocked")
         _validate_manager_file_path(path)
         if not wazuh_manager_breaker.allow():
             s = wazuh_manager_breaker.status()

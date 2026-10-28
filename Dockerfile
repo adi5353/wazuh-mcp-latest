@@ -21,6 +21,11 @@ RUN python -m compileall -q wazuh_mcp
 # ── Stage 2: runtime — only the venv + source, dropped to a non-root user ─────
 FROM python:3.14-slim AS runtime
 
+# Remove the base image's system pip/setuptools/wheel: the app runs from /opt/venv and
+# never needs them at runtime, and their vendored libs (urllib3, msgpack, ...) are a
+# recurring source of image-scan CVEs.
+RUN /usr/local/bin/python -m pip uninstall -y pip setuptools wheel 2>/dev/null || true
+
 # Non-root user
 RUN groupadd --gid 1001 wazuhmcp \
  && useradd --uid 1001 --gid 1001 --no-create-home --shell /sbin/nologin wazuhmcp
@@ -34,6 +39,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app/wazuh_mcp /app/wazuh_mcp
 COPY --from=builder /app/pyproject.toml /app/pyproject.toml
+
+# Also strip pip from the copied venv (vendored urllib3/msgpack show up in image scans).
+RUN python -m pip uninstall -y pip setuptools wheel 2>/dev/null || true
 
 # Writable runtime directories owned by the app user.
 RUN mkdir -p /app/logs /app/workspaces \
