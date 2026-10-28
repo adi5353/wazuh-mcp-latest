@@ -1,4 +1,4 @@
-# requirements.lock â€” fully pinned runtime + dev dependency closure.
+# requirements.lock — fully pinned runtime + dev dependency closure.
 # Generated from the resolved environment. Regenerate after changing pyproject.toml.
 #   pip install -r requirements.lock
 
