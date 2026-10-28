@@ -40,6 +40,9 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app/wazuh_mcp /app/wazuh_mcp
 COPY --from=builder /app/pyproject.toml /app/pyproject.toml
 
+# Also strip pip from the copied venv (vendored urllib3/msgpack show up in image scans).
+RUN python -m pip uninstall -y pip setuptools wheel 2>/dev/null || true
+
 # Writable runtime directories owned by the app user.
 RUN mkdir -p /app/logs /app/workspaces \
  && chown -R wazuhmcp:wazuhmcp /app/logs /app/workspaces
