@@ -58,7 +58,6 @@ BASELINE_MINUTES: dict[str, float] = {
     "fleet_find_process":             10.0,
     "fleet_find_listening_port":      10.0,
     "fleet_batch_syscollector":       15.0,
-    "get_agent_vulnerabilities_detailed": 8.0,
     # MITRE
     "mitre_coverage_analysis":        30.0,
     "get_mitre_gaps":                  20.0,

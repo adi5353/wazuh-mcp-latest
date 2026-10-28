@@ -7,12 +7,14 @@ Requires ADMIN role.
 from __future__ import annotations
 from ..tool_context import ToolContext
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
@@ -32,8 +34,8 @@ def register(ctx: ToolContext) -> None:
             action_type: Optional filter (e.g. 'security:login', 'agents:delete').
             user: Optional filter by username.
         """
-        from ..rbac import admin_only
-        err = admin_only()
+        from ..rbac import require_admin_or_above
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -71,8 +73,8 @@ def register(ctx: ToolContext) -> None:
         Shows successful and failed authentication attempts.
         Requires ADMIN role.
         """
-        from ..rbac import admin_only
-        err = admin_only()
+        from ..rbac import require_admin_or_above
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -103,8 +105,8 @@ def register(ctx: ToolContext) -> None:
 
         Requires ADMIN role.
         """
-        from ..rbac import admin_only
-        err = admin_only()
+        from ..rbac import require_admin_or_above
+        err = require_admin_or_above()
         if err:
             return err
 

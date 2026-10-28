@@ -7,6 +7,8 @@ import logging
 import os
 
 import httpx
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -15,9 +17,6 @@ _SOAR_TIMEOUT = 15
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
 
     def _jira_url()     -> str: return os.getenv("JIRA_URL", "")
     def _jira_user()    -> str: return os.getenv("JIRA_USER", "")
@@ -65,7 +64,7 @@ def register(ctx: ToolContext) -> None:
             body_lines.append("*Wazuh alert IDs:* " + ", ".join(str(i) for i in alert_ids[:10]))
         body_lines.append(
             f"\n_Created by Wazuh MCP at "
-            f"{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_"
+            f"{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
         )
 
         all_labels = ["wazuh-mcp", f"severity-{severity.lower()}"] + (labels or [])
@@ -150,7 +149,7 @@ def register(ctx: ToolContext) -> None:
             full_desc += "\n\n---\n" + "\n\n".join(extra)
         full_desc += (
             f"\n\n_Source: Wazuh MCP — "
-            f"{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_"
+            f"{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
         )
 
         all_tags = ["wazuh", "wazuh-mcp", f"severity:{severity.lower()}"]

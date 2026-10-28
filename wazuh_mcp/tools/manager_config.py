@@ -4,6 +4,8 @@ Reads ossec.conf sections via the Manager REST API.
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 _COMMON_SECTIONS = [
     "global", "alerts", "logging", "remote", "rootcheck", "syscheck",
@@ -15,8 +17,6 @@ _COMMON_SECTIONS = [
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
@@ -82,9 +82,12 @@ def register(ctx: ToolContext) -> None:
             tag: Optional daemon tag filter (e.g. 'wazuh-analysisd').
             limit: Maximum entries to return (max 500).
         """
-        path = f"/manager/logs?limit={_cap(limit)}&level={level}"
+        # URL-encode user-supplied query values so a crafted level/tag can't
+        # inject extra query parameters into the Manager API request.
+        from urllib.parse import quote
+        path = f"/manager/logs?limit={_cap(limit)}&level={quote(str(level), safe='')}"
         if tag:
-            path += f"&tag={tag}"
+            path += f"&tag={quote(str(tag), safe='')}"
         try:
             result = await wz.request("GET", path)
             return result

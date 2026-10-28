@@ -1,11 +1,14 @@
 """MCP server self-monitoring tools — Prometheus metrics, tool usage stats, slow query detection."""
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
 
 import os
 import time
 import logging
 from collections import defaultdict
+
+REQUIRED_ROLE = ROLE.VIEWER
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -33,9 +36,6 @@ def record_tool_call(tool_name: str, elapsed: float, had_error: bool = False) ->
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
@@ -90,6 +90,13 @@ def register(ctx: ToolContext) -> None:
         except Exception:
             circuit_status = {"error": "circuit breaker unavailable"}
 
+        # Tool-failure breaker — open circuits from repeated identical failures
+        try:
+            from ..tool_failure_breaker import tool_failure_breaker
+            tool_failure_circuits = tool_failure_breaker.open_circuits()
+        except Exception:
+            tool_failure_circuits = []
+
         # Prometheus text format (for /metrics scraping)
         prom_lines = [
             f"# HELP wazuh_mcp_uptime_seconds MCP server uptime",
@@ -111,6 +118,7 @@ def register(ctx: ToolContext) -> None:
             "calls_per_hour":  round(total_calls / uptime_h, 1) if uptime_h > 0 else 0,
             "tool_stats":      tool_stats,
             "circuit_breakers": circuit_status,
+            "tool_failure_circuits": tool_failure_circuits,
             "prometheus_text": "\n".join(prom_lines),
             "note": "prometheus_text can be scraped directly — also available at GET /metrics",
         }

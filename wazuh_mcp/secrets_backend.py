@@ -36,6 +36,23 @@ from typing import Any
 
 log = logging.getLogger("wazuh-mcp")
 
+
+def _redact_secrets(text: str) -> str:
+    """Scrub known secret values out of *text* before it is logged.
+
+    Vault/AWS client errors can echo the supplied credential (e.g. an invalid
+    token in a 403 body). The backend log lines below are written to the server
+    log file regardless of response sanitization, so redact the actual values of
+    the sensitive env vars we control before they reach the log. Non-secret
+    detail (connection refused, 403, wrong address) is preserved for debugging.
+    """
+    out = text
+    for var in ("VAULT_TOKEN", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        val = os.getenv(var)
+        if val and len(val) >= 4 and val in out:
+            out = out.replace(val, "***REDACTED***")
+    return out
+
 # ── Backend cache: loaded once at import time (or per reload in tests) ────────
 
 _backend: str = (os.getenv("WAZUH_SECRET_BACKEND") or "").strip().lower()
@@ -57,8 +74,13 @@ def _load_vault() -> dict[str, str]:
         path = os.environ.get("VAULT_SECRET_PATH", "secret/wazuh-mcp")
         mount = os.environ.get("VAULT_MOUNT_POINT", "secret")
         client = hvac.Client(url=addr, token=token)
+        # ``path`` is relative to ``mount_point``. If the caller included the
+        # mount as a prefix (e.g. "secret/wazuh-mcp" with mount "secret"), strip
+        # exactly that prefix. NB: ``str.lstrip`` strips a *character set*, not a
+        # prefix — "secret/staging" would become "taging" — so use ``removeprefix``.
+        relative_path = path.removeprefix(f"{mount}/")
         resp = client.secrets.kv.v2.read_secret_version(
-            path=path.lstrip(f"{mount}/"),
+            path=relative_path,
             mount_point=mount,
         )
         raw: dict = resp["data"]["data"]
@@ -67,7 +89,8 @@ def _load_vault() -> dict[str, str]:
         log.info("secrets_backend: loaded %d secrets from Vault path '%s'", len(result), path)
         return result
     except Exception as exc:
-        log.warning("secrets_backend: Vault load failed (%s) — falling back to env vars", exc)
+        log.warning("secrets_backend: Vault load failed (%s: %s) — falling back to env vars",
+                    type(exc).__name__, _redact_secrets(str(exc)))
         return {}
 
 
@@ -90,7 +113,8 @@ def _load_aws() -> dict[str, str]:
         log.info("secrets_backend: loaded %d secrets from AWS ('%s')", len(result), secret_name)
         return result
     except Exception as exc:
-        log.warning("secrets_backend: AWS Secrets Manager load failed (%s) — falling back to env vars", exc)
+        log.warning("secrets_backend: AWS Secrets Manager load failed (%s: %s) — falling back to env vars",
+                    type(exc).__name__, _redact_secrets(str(exc)))
         return {}
 
 
@@ -131,4 +155,5 @@ def get_secret(key: str, default: Any = None) -> Any:
 try:
     _ensure_loaded()
 except Exception as exc:  # pragma: no cover
-    log.warning("secrets_backend: startup load failed: %s", exc)
+    log.warning("secrets_backend: startup load failed: %s: %s",
+                type(exc).__name__, _redact_secrets(str(exc)))

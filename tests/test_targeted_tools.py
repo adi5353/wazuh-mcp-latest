@@ -6,6 +6,13 @@ tool is actually exercised.
 """
 from __future__ import annotations
 
+import pytest
+
+# Quarantined from the coverage gate: these exercise code paths against mocked
+# clients to catch crashes/imports, but assert little real behaviour. Run via
+# `pytest -m smoke`; excluded from the gated run by `-m "not smoke"` (pyproject).
+pytestmark = pytest.mark.smoke
+
 import asyncio
 import importlib
 from unittest.mock import AsyncMock, MagicMock
@@ -135,6 +142,47 @@ class TestCorrelation:
         out = _run(self.tools["get_attack_chains"]())
         assert out["chains"] == []
 
+    def test_get_attack_chains_never_exceeds_page_cap(self):
+        # Regression: get_attack_chains used to request size=1000 in one call,
+        # which the indexer's hard cap rejects (it errored on every real run).
+        # It must now page with size<=500 via search_after.
+        seen_sizes: list[int] = []
+
+        async def fake_search(body, *a, **k):
+            seen_sizes.append(body.get("size"))
+            return {"hits": {"hits": []}}
+
+        self.idx.search = fake_search
+        _run(self.tools["get_attack_chains"](min_stages=2))
+        assert seen_sizes and all(s <= 500 for s in seen_sizes)
+
+    def test_get_attack_chains_paginates_with_search_after(self):
+        # Two full pages then exhaustion → three indexer calls, each carrying the
+        # previous page's sort cursor.
+        full_page = [
+            _hit(f"2024-01-01T00:00:{i % 60:02d}Z", 8, "Execution", "T1059")
+            for i in range(500)
+        ]
+        for h in full_page:
+            h["sort"] = [h["_source"]["@timestamp"], h["_id"]]
+        pages = [
+            {"hits": {"hits": full_page}},
+            {"hits": {"hits": full_page}},
+            {"hits": {"hits": []}},
+        ]
+        calls: list = []
+
+        async def fake_search(body, *a, **k):
+            calls.append(body)
+            return pages[len(calls) - 1]
+
+        self.idx.search = fake_search
+        _run(self.tools["get_attack_chains"](min_stages=1))
+        # Capped at _MAX_CORRELATION_ALERTS (default 1000) → exactly two pages.
+        assert len(calls) == 2
+        assert "search_after" in calls[1]
+        assert all(c.get("size", 0) <= 500 for c in calls)
+
     def test_build_clusters_helper_directly(self):
         from wazuh_mcp.tools.correlation import _build_clusters, _build_chains
         hits = [_hit("2024-01-01T00:00:01Z", 13, "Impact", "T1485") for _ in range(11)]
@@ -246,9 +294,13 @@ class TestCDB:
         identity._ctx_role.set(None)
 
     def test_list_and_get_contents(self):
-        self.wz.request = AsyncMock(return_value={"data": {"affected_items": ["1.2.3.4:bad\n5.6.7.8:c2"]}})
+        # Non-raw GET /lists/files/{name} returns affected_items as {key: value} dicts.
+        self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
+            {"1.2.3.4": "bad"}, {"5.6.7.8": "c2"}]}})
         assert "data" in _run(self.tools["list_cdb_lists"]())
-        assert "data" in _run(self.tools["get_cdb_list_contents"](list_name="malicious-ips"))
+        out = _run(self.tools["get_cdb_list_contents"](list_name="malicious-ips"))
+        assert out["count"] == 2
+        assert {"key": "1.2.3.4", "value": "bad"} in out["entries"]
 
     def test_add_and_remove(self, monkeypatch):
         monkeypatch.setenv("WAZUH_ALLOW_WRITES", "true")
@@ -286,7 +338,8 @@ class TestCDB:
             if path == "/lists?limit=100":
                 return {"data": {"affected_items": [{"filename": "malicious-ips"}]}}
             if "lists/files" in path and method == "GET":
-                return {"data": {"affected_items": ["1.2.3.4:bad\nevil.com:phish\nplainkey"]}}
+                return {"data": {"affected_items": [
+                    {"1.2.3.4": "bad"}, {"evil.com": "phish"}, {"plainkey": ""}]}}
             return {"data": {}}
         self.wz.request = AsyncMock(side_effect=fake_request)
 
@@ -1098,10 +1151,11 @@ class TestCVEWatchlist:
             cve_id="CVE-2024-1234", sla_days=-5))
 
     def test_list_watchlist(self):
+        # Non-raw GET returns affected_items as single-key {cve_id: value} dicts.
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2020-0001", "value": "active|old|7.5|1|2020-01-01T00:00:00Z"},
-            {"key": "CVE-2024-9999", "value": "patched|fixed|9.0|30|2024-01-01T00:00:00Z"},
-            {"key": "not-a-cve", "value": "junk"},
+            {"CVE-2020-0001": "active|old|7.5|1|2020-01-01T00:00:00Z"},
+            {"CVE-2024-9999": "patched|fixed|9.0|30|2024-01-01T00:00:00Z"},
+            {"not-a-cve": "junk"},
         ]}})
         out = _run(self.tools["list_cve_watchlist"]())
         assert out["total"] == 2  # the junk row is skipped
@@ -1111,7 +1165,7 @@ class TestCVEWatchlist:
         async def req(method, path, **kw):
             if method == "GET":
                 return {"data": {"affected_items": [
-                    {"key": "CVE-2024-1234", "value": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
+                    {"CVE-2024-1234": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
             return {}
         self.wz.request = AsyncMock(side_effect=req)
         out = _run(self.tools["mark_patched"](cve_id="CVE-2024-1234", note="patched v2"))
@@ -1120,7 +1174,7 @@ class TestCVEWatchlist:
     def test_get_watchlist_exposure(self):
         async def req(method, path, **kw):
             return {"data": {"affected_items": [
-                {"key": "CVE-2024-1234", "value": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
+                {"CVE-2024-1234": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}}
         self.wz.request = AsyncMock(side_effect=req)
         self.idx.search = AsyncMock(return_value={
             "hits": {"total": {"value": 4}},
@@ -1130,13 +1184,13 @@ class TestCVEWatchlist:
 
     def test_get_watchlist_exposure_none_active(self):
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2024-1", "value": "patched|n|9|30|2024-01-01T00:00:00Z"}]}})
+            {"CVE-2024-1": "patched|n|9|30|2024-01-01T00:00:00Z"}]}})
         out = _run(self.tools["get_watchlist_exposure"]())
         assert out["exposure"] == []
 
     def test_prioritize_cve_risk(self):
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2024-1234", "value": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}})
+            {"CVE-2024-1234": "active|n|9.8|30|2024-01-01T00:00:00Z"}]}})
         self.idx.search = AsyncMock(return_value={
             "aggregations": {"agents": {"value": 6}}})
         out = _run(self.tools["prioritize_cve_risk"](top_n=5))
@@ -1144,7 +1198,7 @@ class TestCVEWatchlist:
 
     def test_check_sla_breaches(self):
         self.wz.request = AsyncMock(return_value={"data": {"affected_items": [
-            {"key": "CVE-2020-0001", "value": "active|old|9|1|2020-01-01T00:00:00Z"}]}})
+            {"CVE-2020-0001": "active|old|9|1|2020-01-01T00:00:00Z"}]}})
         out = _run(self.tools["check_sla_breaches"]())
         assert isinstance(out, dict)
 

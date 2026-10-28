@@ -5,12 +5,14 @@ These tools expose Wazuh's rootkit hunter scan results per agent.
 from __future__ import annotations
 from ..tool_context import ToolContext
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.VIEWER
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
@@ -82,8 +84,8 @@ def register(ctx: ToolContext) -> None:
 
         Requires ADMIN role and WAZUH_ALLOW_WRITES=true. dry_run=True by default.
         """
-        from ..rbac import admin_only
-        err = admin_only()
+        from ..rbac import require_admin_or_above
+        err = require_admin_or_above()
         if err:
             return err
 

@@ -13,6 +13,8 @@ import ipaddress
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 log = logging.getLogger("wazuh-mcp")
 
@@ -36,7 +38,6 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
 
     @mcp.tool()

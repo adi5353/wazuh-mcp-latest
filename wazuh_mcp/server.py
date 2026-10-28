@@ -71,13 +71,29 @@ try:
     log = structlog.get_logger("wazuh-mcp")
     _structlog_available = True
 except ImportError:
+    # structlog is a required dependency (see pyproject) and is imported
+    # unconditionally by logging_config, so this branch should never run in a
+    # correctly-installed environment. It remains as a safety net — and it must
+    # NOT be a security downgrade: attach a RedactingFilter so secrets are
+    # scrubbed even without the structlog redaction processor.
+    from .logging_config import RedactingFilter
+
     logging.basicConfig(
         level=logging.INFO,
         stream=sys.stderr,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logging.getLogger().addFilter(RedactingFilter())
     log = logging.getLogger("wazuh-mcp")  # type: ignore[assignment]
     _structlog_available = False
+
+# Clamp chatty third-party loggers regardless of which path configured logging:
+# httpx/httpcore log Authorization headers (VirusTotal/AbuseIPDB keys) at DEBUG.
+try:
+    from .logging_config import quiet_noisy_loggers
+    quiet_noisy_loggers()
+except Exception:  # pragma: no cover — never block startup on log hardening
+    pass
 
 # ── H1: /health auth check — pure function, module-level for testability ──────
 
@@ -109,9 +125,10 @@ idx = WazuhIndexer(cfg)
 # its own tenant client without affecting other concurrent sessions.
 _ctx_wz: contextvars.ContextVar[WazuhClient] = contextvars.ContextVar("_ctx_wz")
 _ctx_idx: contextvars.ContextVar[WazuhIndexer] = contextvars.ContextVar("_ctx_idx")
-_ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
-    "_ctx_active_tenant", default={}
-)
+# The active-tenant ContextVar lives in identity.py (a low-level module) so tool
+# modules can read it without importing this heavy server module. Re-exported
+# here under the original name for the in-file readers below.
+from .identity import _ctx_active_tenant  # noqa: E402
 
 
 class _ClientProxy:
@@ -219,8 +236,29 @@ from . import tools as _tools_pkg  # noqa: E402
 
 _DEFERRED = {"notifications"}   # registered after all others; reads ctx.shared
 
+from . import tool_contexts as _tool_contexts  # noqa: E402
+
+# Deployment-level tool scoping (P2#6): operators can pin the advertised tool
+# surface via WAZUH_MCP_ENABLED_MODULES / WAZUH_MCP_DISABLED_MODULES without
+# renaming anything. Warn (don't fail) on typo'd names so a misspelled entry
+# can't silently scope the wrong set.
+_all_tool_modules = {
+    _m for _i, _m, _p in pkgutil.iter_modules(_tools_pkg.__path__) if _m != "__init__"
+}
+_unknown_scoping = _tool_contexts.unknown_scoping_names(_all_tool_modules)
+if _unknown_scoping:
+    log.warning(
+        "WAZUH_MCP_ENABLED/DISABLED_MODULES contains unknown names (ignored): %s. "
+        "Use a tools/*.py module name or a context-group name (%s).",
+        sorted(_unknown_scoping), sorted(_tool_contexts.CONTEXT_MODULES),
+    )
+
 for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
     if _modname == "__init__" or _modname in _DEFERRED:
+        continue
+    # Static deployment scoping — skip modules excluded by env allowlist/denylist.
+    if not _tool_contexts.module_registration_allowed(_modname):
+        log.info("Skipping tool module '%s' — excluded by WAZUH_MCP_ENABLED/DISABLED_MODULES", _modname)
         continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if not hasattr(_mod, "register"):
@@ -237,18 +275,27 @@ for _importer, _modname, _ispkg in pkgutil.iter_modules(_tools_pkg.__path__):
         )
         continue
     try:
+        _tool_contexts.set_registering_module(_modname)
         _mod.register(_ctx)
     except Exception as _e:
         log.error("Failed to register tool module %s: %s", _modname, _e)
+    finally:
+        _tool_contexts.set_registering_module(None)
 
 # Register deferred modules (those that depend on ctx.shared populated above)
 for _modname in _DEFERRED:
+    if not _tool_contexts.module_registration_allowed(_modname):
+        log.info("Skipping tool module '%s' — excluded by WAZUH_MCP_ENABLED/DISABLED_MODULES", _modname)
+        continue
     _mod = importlib.import_module(f".tools.{_modname}", package="wazuh_mcp")
     if hasattr(_mod, "register"):
         try:
+            _tool_contexts.set_registering_module(_modname)
             _mod.register(_ctx)
         except Exception as _e:
             log.error("Failed to register deferred tool module %s: %s", _modname, _e)
+        finally:
+            _tool_contexts.set_registering_module(None)
 
 # ── MCP Resources ─────────────────────────────────────────────────────────────
 from . import resources as _resources_module  # noqa: E402
@@ -375,7 +422,14 @@ async def list_tenants() -> dict:
 
     Returns tenant names and manager hosts from WAZUH_INSTANCES config.
     Only available when WAZUH_INSTANCES is configured.
+
+    Requires ADMIN role — the tenant list discloses every customer's manager
+    host and is an MSSP-operator capability.
     """
+    from .rbac import require_role, ROLE
+    err = require_role(ROLE.ADMIN)
+    if err:
+        return err
     if not cfg.tenants:
         return {
             "mssp_mode": False,
@@ -402,7 +456,15 @@ async def switch_tenant(tenant_name: str) -> dict:
 
     Args:
         tenant_name: The name of the tenant as defined in WAZUH_INSTANCES.
+
+    Requires ADMIN role — switching tenants crosses a data-isolation boundary
+    (subsequent queries hit a different customer's Manager/Indexer), so it must
+    not be reachable by a default VIEWER session.
     """
+    from .rbac import require_role, ROLE
+    err = require_role(ROLE.ADMIN)
+    if err:
+        return err
     if not cfg.tenants:
         return {
             "error": "MSSP multi-tenant mode is not configured. "
@@ -434,10 +496,24 @@ async def switch_tenant(tenant_name: str) -> dict:
     new_wz = _WC(tenant_cfg)
     new_idx = _WI(tenant_cfg)
 
+    # Capture the clients currently bound to THIS session so their connection
+    # pools can be released after the swap. Without this, a session that hops
+    # tenants leaks one httpx pool per switch until the process exits. Never
+    # close the shared module-level defaults (wz/idx) — other sessions use them.
+    _prev_wz = _ctx_wz.get(None)
+    _prev_idx = _ctx_idx.get(None)
+
     # Bind the new clients to this session's asyncio task context only.
     # Other sessions continue using their own (possibly different) clients.
     _wz_proxy.replace(new_wz)
     _idx_proxy.replace(new_idx)
+
+    for _prev in (_prev_wz, _prev_idx):
+        if _prev is not None and _prev is not wz and _prev is not idx:
+            try:
+                await _prev.aclose()
+            except Exception as _close_err:  # never fail the switch on cleanup
+                log.warning("Failed to close previous tenant client: %s", _close_err)
     _ctx_active_tenant.set({"name": tenant.name, "manager_host": tenant.manager_host})
 
     log.info("MSSP tenant switched to '%s' (%s)", tenant.name, tenant.manager_host)
@@ -447,49 +523,6 @@ async def switch_tenant(tenant_name: str) -> dict:
         "manager_host": tenant.manager_host,
         "message": f"All subsequent tool calls in this session now target tenant '{tenant.name}'.",
     }
-
-
-# ============================================================================
-# Anomaly comparison + reporting — see tools/reporting.py
-# ============================================================================
-
-
-# ============================================================================
-# Incident response — see tools/incidents.py
-# ============================================================================
-
-
-# ============================================================================
-# Archive log search — see tools/archive.py
-# ============================================================================
-
-
-# ============================================================================
-# Cluster health — see tools/cluster.py
-# ============================================================================
-
-
-
-
-# ============================================================================
-# Incident management — see tools/incidents.py
-# ============================================================================
-
-
-# ============================================================================
-# Reporting — see tools/reporting.py
-# ============================================================================
-
-# ============================================================================
-# Alert suppression lifecycle — see tools/suppression.py
-# ============================================================================
-
-# Suppression — see tools/suppression.py
-
-# Notifications — see tools/notifications.py
-# Onboarding — see tools/onboarding.py
-
-# Push report delivery — see tools/notifications.py
 
 
 # ============================================================================
@@ -642,6 +675,38 @@ def _check_pii_scrub_config() -> None:
     )
 
 
+def _check_rbac_key_config(transport: str, api_key: str) -> None:
+    """Warn when per-role RBAC keys can never authenticate (HTTP mode).
+
+    In HTTP transport, ``APIKeyMiddleware`` rejects any request whose bearer
+    token is not exactly ``WAZUH_MCP_API_KEY`` (constant-time compare). Per-role
+    keys from ``WAZUH_MCP_KEY_MAP`` are only consulted *after* that gate, by the
+    audit middleware. So if a single ``WAZUH_MCP_API_KEY`` is set AND it is not
+    itself one of the key-map entries, every per-role key is rejected at the door
+    and multi-role RBAC silently collapses to whatever the single key maps to
+    (or to the default role). This is a foot-gun: operators reasonably expect
+    setting both to be "defence in depth", when in fact it disables the map.
+
+    The two supported HTTP auth modes are mutually exclusive:
+      • Single shared key  → set WAZUH_MCP_API_KEY, leave WAZUH_MCP_KEY_MAP unset.
+      • Per-role keys (RBAC) → set WAZUH_MCP_KEY_MAP, leave WAZUH_MCP_API_KEY unset
+        (each role key is then both the auth credential and the role selector).
+    """
+    if transport != "http" or not api_key:
+        return
+    from .identity import _KEY_MAP
+    if not _KEY_MAP:
+        return
+    if api_key not in _KEY_MAP:
+        log.warning(
+            "WAZUH_MCP_API_KEY and WAZUH_MCP_KEY_MAP are both set, but the single "
+            "key is not one of the key-map entries. In HTTP mode the API-key gate "
+            "rejects every per-role key, so multi-role RBAC is effectively "
+            "DISABLED. Use ONE mode: either a single WAZUH_MCP_API_KEY, or "
+            "WAZUH_MCP_KEY_MAP alone (each role key is its own credential)."
+        )
+
+
 def _origin_request_allowed(
     origin: str,
     *,
@@ -666,6 +731,40 @@ def _origin_request_allowed(
     return True
 
 
+def _ws_request_authorized(
+    *,
+    token: str,
+    origin: str,
+    api_key: str,
+    is_loopback: bool,
+    allowed_origins: set,
+) -> bool:
+    """Auth decision for the /ws/alerts WebSocket (Critical: unauthenticated
+    alert exfiltration). WebSocket scopes bypass the HTTP middleware stack
+    (APIKey/Origin/RateLimit/Audit all early-return on non-http scope), so this
+    re-applies the same checks the socket would otherwise skip:
+
+      * When an API key is configured it MUST be presented (constant-time
+        compare); browsers can't set WS headers, so the caller may pass it as a
+        ``token``/``api_key`` query param instead of an Authorization header.
+      * Origin is validated with the exact same rules as HTTP requests.
+
+    Pure function — unit-testable without a live socket.
+    """
+    if api_key:
+        if not token or not _hmac_module.compare_digest(token, api_key):
+            return False
+        has_auth = True
+    else:
+        has_auth = False
+    return _origin_request_allowed(
+        origin,
+        is_loopback=is_loopback,
+        has_auth=has_auth,
+        allowed_origins=allowed_origins,
+    )
+
+
 def main() -> None:
     import signal
 
@@ -675,6 +774,7 @@ def main() -> None:
     api_key = os.getenv("WAZUH_MCP_API_KEY", "")
 
     _check_bind_security(transport, host, api_key)
+    _check_rbac_key_config(transport, api_key)
     _check_pii_scrub_config()
 
     log.info(
@@ -794,8 +894,10 @@ def main() -> None:
             # API or the locally-maintained _TOOL_REGISTRY as a last resort.
             tools_list = []
             try:
-                # Preferred: public API (MCP SDK >= 1.2)
-                tool_iter = mcp.get_tools() if callable(getattr(mcp, "get_tools", None)) else None
+                # Preferred: public API (MCP SDK >= 1.2). Access via getattr so the
+                # call type-checks across SDK versions that lack the method.
+                _get_tools = getattr(mcp, "get_tools", None)
+                tool_iter = _get_tools() if callable(_get_tools) else None
                 if tool_iter is None:
                     # Fall back to private attr (MCP SDK < 1.2) under try/except
                     _raw = mcp._tools  # type: ignore[attr-defined]
@@ -843,6 +945,9 @@ def main() -> None:
 
         # ── Gap 10: Graceful SIGTERM shutdown ──────────────────────────────
         _uvicorn_server: list = []  # populated after server starts
+        # Hold strong references to shutdown tasks: create_task() only keeps a
+        # weak ref, so without this the GC can cancel cleanup mid-flight.
+        _shutdown_tasks: set = set()
 
         def _sigterm_handler(signum, frame):  # type: ignore[no-untyped-def]
             log.info(
@@ -854,11 +959,22 @@ def main() -> None:
                 _uvicorn_server[0].should_exit = True
             # Release HTTP connection pools
             from .tools.threat_intel import close_shared_ti_clients
+            from .tools.notifications import close_soar_client
+            from .tools.servicenow import close_snow_client
+            from .geo import close_geo_client
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(_wz_proxy._client.aclose())
-                loop.create_task(_idx_proxy._client.aclose())
-                loop.create_task(close_shared_ti_clients())
+                for _coro in (
+                    _wz_proxy._client.aclose(),
+                    _idx_proxy._client.aclose(),
+                    close_shared_ti_clients(),
+                    close_soar_client(),
+                    close_snow_client(),
+                    close_geo_client(),
+                ):
+                    _task = loop.create_task(_coro)
+                    _shutdown_tasks.add(_task)
+                    _task.add_done_callback(_shutdown_tasks.discard)
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
 
@@ -1023,6 +1139,21 @@ def main() -> None:
                     if auth_raw else "anonymous"
                 )
 
+                # ── Bind an injection-lockout identity for EVERY caller (M1) ──
+                # The persistent injection counter keys off this. Anonymous
+                # callers previously had no key, so the per-task counter reset
+                # each request and the lockout never tripped — spread attempts
+                # across requests and you bypassed it. Key authenticated callers
+                # by their bearer and anonymous callers by client IP so attempts
+                # accumulate. (Pure-ASGI middleware → same task → ContextVar
+                # propagates to the tool handler.)
+                from .identity import set_identity_key as _set_inj_identity
+                if auth_raw:
+                    _set_inj_identity(auth_raw)
+                else:
+                    _client = scope.get("client")
+                    _set_inj_identity("ip:" + (_client[0] if _client else "unknown"))
+
                 # ── Bind session role from the AUTHENTICATED bearer token (Issue 3) ──
                 # Role is derived from the verified key here, before tool dispatch,
                 # so it can never be set by a tool argument. Runs in the same task
@@ -1089,8 +1220,11 @@ def main() -> None:
         # When unset, same-host requests and requests without an Origin header
         # (non-browser clients, curl, MCP SDKs) pass through unrestricted.
         _raw_origins = os.getenv("WAZUH_MCP_ALLOWED_ORIGINS", "").strip()
+        # Normalize to lowercase: an Origin is scheme://host[:port] with no path,
+        # and scheme+host are case-insensitive (RFC 3986), so a mixed-case allowed
+        # origin must still match a lowercase request Origin and vice-versa.
         _allowed_origins: set[str] = (
-            {o.strip().rstrip("/") for o in _raw_origins.split(",") if o.strip()}
+            {o.strip().rstrip("/").lower() for o in _raw_origins.split(",") if o.strip()}
             if _raw_origins else set()
         )
 
@@ -1111,7 +1245,7 @@ def main() -> None:
                     return
 
                 headers = dict(scope.get("headers", []))
-                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/")
+                origin = headers.get(b"origin", b"").decode("utf-8", errors="replace").rstrip("/").lower()
 
                 async def _deny(message: str) -> None:
                     await Response(message, status_code=403)(scope, receive, send)
@@ -1189,13 +1323,45 @@ def main() -> None:
             yield
             _pc.stop()
             _cleanup_task.cancel()
-            log.info("Background AlertPrecomputer and approval cleanup stopped")
+            # Release shared HTTP connection pools on graceful shutdown.
+            from .tools.threat_intel import close_shared_ti_clients
+            from .tools.notifications import close_soar_client
+            from .tools.servicenow import close_snow_client
+            for _closer in (close_shared_ti_clients, close_soar_client, close_snow_client):
+                try:
+                    await _closer()
+                except Exception:
+                    pass
+            log.info("Background AlertPrecomputer and approval cleanup stopped; HTTP pools released")
 
         from .ws_alerts import ws_alerts_handler
         from starlette.routing import WebSocketRoute
         from starlette.websockets import WebSocket as _WS
 
         async def _ws_alerts_endpoint(ws: _WS) -> None:
+            # WebSocket scopes bypass every HTTP middleware (API-key, origin,
+            # rate-limit, audit), so authenticate here BEFORE accepting — else
+            # anyone reaching the port could stream live alerts unauthenticated.
+            _auth_header = ws.headers.get("authorization", "")
+            _token = _auth_header.removeprefix("Bearer ").strip()
+            if not _token:
+                # Browsers can't set headers on a WebSocket; accept the key as a
+                # query param as a fallback (token=... or api_key=...).
+                _token = (ws.query_params.get("token")
+                          or ws.query_params.get("api_key") or "").strip()
+            _origin = ws.headers.get("origin", "").rstrip("/").lower()
+            if not _ws_request_authorized(
+                token=_token,
+                origin=_origin,
+                api_key=api_key,
+                is_loopback=_is_loopback_host(host),
+                allowed_origins=_allowed_origins,
+            ):
+                # 1008 = policy violation. Closing before accept() yields an
+                # HTTP 403 on the handshake.
+                await ws.close(code=1008)
+                log.warning("WS /ws/alerts: rejected unauthorized connection (origin=%s)", _origin or "(none)")
+                return
             await ws_alerts_handler(ws, idx=idx, cfg=cfg)
 
         app = Starlette(

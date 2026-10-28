@@ -3,6 +3,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import os
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 
 def register(ctx: ToolContext) -> None:

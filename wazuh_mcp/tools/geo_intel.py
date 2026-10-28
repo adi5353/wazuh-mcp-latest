@@ -17,6 +17,10 @@ import os
 
 import httpx
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 log = logging.getLogger("wazuh-mcp")
 
 # Known cloud/datacenter ASN prefixes (major providers)
@@ -118,9 +122,6 @@ def _is_private(ip: str) -> bool:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
 
     @mcp.tool()
     async def enrich_ip_extended(ip: str) -> dict:

@@ -23,12 +23,59 @@ def _redact_sensitive(
         if _SENSITIVE_KEYS.search(key):
             event_dict[key] = "[REDACTED]"
         elif isinstance(event_dict[key], str) and len(event_dict[key]) > 6:
-            event_dict[key] = re.sub(
-                r"(Bearer|Basic)\s+[A-Za-z0-9+/=._\-]{8,}",
-                r"\1 [REDACTED]",
-                event_dict[key],
-            )
+            event_dict[key] = redact_text(event_dict[key])
     return event_dict
+
+
+# ── Plain-text redaction (used by the stdlib-logging fallback) ─────────────────
+# The structlog pipeline above redacts structured event dicts. When structlog is
+# unavailable and we fall back to stdlib logging, messages are plain strings, so
+# we need a text-level scrubber. Patterns cover both `Bearer <tok>` / `Basic
+# <tok>` auth headers and `key=value` / `key: value` secret assignments.
+_SECRET_TEXT_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(Bearer|Basic)\s+[A-Za-z0-9+/=._\-]{8,}", re.IGNORECASE), r"\1 [REDACTED]"),
+    (re.compile(
+        r"(?i)(password|passwd|token|api[_-]?key|apikey|secret|authorization|credential)"
+        r"(\"?\s*[:=]\s*\"?)([^\s\"',}]+)"
+    ), r"\1\2[REDACTED]"),
+]
+
+
+def redact_text(text: str) -> str:
+    """Scrub auth tokens and key=value secrets from an arbitrary log string."""
+    for pattern, repl in _SECRET_TEXT_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+class RedactingFilter(logging.Filter):
+    """stdlib logging filter that scrubs secrets from every emitted record.
+
+    Attached to the root logger in the fallback path so the redaction guarantee
+    does NOT depend on structlog being importable. Collapses args into the
+    rendered message first (so positional/`%s` secrets are caught too).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            record.msg = redact_text(record.getMessage())
+            record.args = ()
+        except Exception:
+            # Never let redaction failure drop a log line entirely.
+            pass
+        return True
+
+
+def quiet_noisy_loggers() -> None:
+    """Clamp chatty third-party loggers that can leak secrets at DEBUG level.
+
+    httpx/httpcore log full request lines — including the ``Authorization``
+    header carrying VirusTotal/AbuseIPDB API keys — at DEBUG. Pin them to
+    WARNING regardless of the app log level so enabling DEBUG on our own code
+    can never spill third-party credentials to stderr.
+    """
+    for name in ("httpx", "httpcore", "hpack", "urllib3"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def bind_request_context(tool_name: str, identity_hash: str) -> None:
@@ -76,6 +123,7 @@ def configure_logging(log_level: str = "INFO"):
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
+    quiet_noisy_loggers()
 
 
 logger = structlog.get_logger("wazuh_mcp")

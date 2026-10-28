@@ -21,6 +21,11 @@ _INDEX_PAT_RE  = re.compile(r"^[a-zA-Z0-9_\-\*\.]+$")   # safe index pattern
 
 _DANGEROUS_CHARS = re.compile(r"[;\|&`$<>()\{\}]")       # shell / query injection chars
 
+# Wazuh fan-out keywords: as ``agents_list`` these target EVERY agent at once.
+# A single-agent validator must never let these through, or a confused caller
+# could turn one parameter into a fleet-wide restart / active-response.
+_RESERVED_AGENT_IDS = {"all", "*"}
+
 
 # ── Public validators — raise ValueError on bad input ─────────────────────────
 
@@ -36,8 +41,19 @@ def validate_time_range(value: str, field: str = "time_range") -> str:
 
 
 def validate_agent_id(value: str, field: str = "agent_id") -> str:
-    """Validate Wazuh agent ID (alphanumeric, dashes, underscores, max 64 chars)."""
+    """Validate a *single* Wazuh agent ID (alphanumeric, dashes, underscores, max 64 chars).
+
+    Rejects the Wazuh fan-out keywords ('all', '*') and any multi-agent list so a
+    single-agent parameter can never be silently turned into a fleet-wide
+    operation (e.g. ``agents_list=all`` firing active-response on every agent).
+    The character allowlist already excludes commas and spaces.
+    """
     value = value.strip()
+    if value.lower() in _RESERVED_AGENT_IDS:
+        raise ValueError(
+            f"Invalid {field} '{value}'. Fleet-wide targets ('all', '*') are not "
+            f"permitted here — specify a single agent ID."
+        )
     if not _AGENT_ID_RE.match(value):
         raise ValueError(
             f"Invalid {field} '{value}'. Must be alphanumeric with optional - or _ (max 64 chars)."
@@ -303,6 +319,34 @@ def validate_ar_command(command: str) -> str | None:
 def validation_error(field: str, message: str) -> dict:
     """Return a standardised error dict for MCP tool responses."""
     return {"error": f"Validation error on '{field}': {message}"}
+
+
+_CDB_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def validate_cdb_field(value: str, field: str = "value") -> str:
+    """Validate a CDB list key or value.
+
+    CDB list files are newline-delimited ``key:value`` records. A newline (or any
+    control char) in user input would inject *additional* records — and because
+    the add/remove logic matches existing entries with ``startswith(f"{key}:")``,
+    an injected line also evades later removal. Reject control characters so one
+    logical entry can never become several. ``:`` is intentionally allowed: it is
+    legal inside an IPv6 key and inside a value, and a single colon stays on one
+    line (no injection).
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field}: must be a string.")
+    if not value.strip():
+        raise ValueError(f"Invalid {field}: must not be empty.")
+    if len(value) > 256:
+        raise ValueError(f"Invalid {field}: exceeds 256 characters.")
+    if _CDB_CONTROL_RE.search(value):
+        raise ValueError(
+            f"Invalid {field}: control characters (newlines, tabs, NUL) are not "
+            f"allowed — they would inject additional CDB list entries."
+        )
+    return value
 
 
 def safe_validate(fn, *args, **kwargs) -> tuple[Any, dict | None]:

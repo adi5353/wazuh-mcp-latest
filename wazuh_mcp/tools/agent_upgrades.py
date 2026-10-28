@@ -1,13 +1,14 @@
 """Agent upgrade management tools — trigger, track, and roll back agent upgrades."""
 from __future__ import annotations
 from ..tool_context import ToolContext
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.RESPONDER
 
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
@@ -46,8 +47,8 @@ def register(ctx: ToolContext) -> None:
         Requires RESPONDER role and WAZUH_ALLOW_WRITES=true.
         Always dry_run=True by default — set dry_run=False to execute.
         """
-        from ..rbac import responder_only
-        err = responder_only()
+        from ..rbac import require_responder_or_above
+        err = require_responder_or_above()
         if err:
             return err
 
@@ -102,8 +103,8 @@ def register(ctx: ToolContext) -> None:
 
         Requires ADMIN role and WAZUH_ALLOW_WRITES=true.
         """
-        from ..rbac import admin_only
-        err = admin_only()
+        from ..rbac import require_admin_or_above
+        err = require_admin_or_above()
         if err:
             return err
 

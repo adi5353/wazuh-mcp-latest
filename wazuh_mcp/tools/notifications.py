@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 from typing import Any
 
+import contextlib
 import datetime
 import logging
 import os
@@ -11,17 +12,54 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import httpx
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.ANALYST
 
 log = logging.getLogger("wazuh-mcp")
 
 _SOAR_TIMEOUT = 15
 
+# Shared, pooled httpx client for SOAR/webhook posts (Slack, Teams). Creating a
+# fresh AsyncClient per call pays a new TLS handshake every time; a reused client
+# keeps connections warm. Closed on shutdown via close_soar_client().
+_SOAR_CLIENT: "httpx.AsyncClient | None" = None
+
+
+def _get_soar_client() -> httpx.AsyncClient:
+    global _SOAR_CLIENT
+    if _SOAR_CLIENT is None or _SOAR_CLIENT.is_closed:
+        _SOAR_CLIENT = httpx.AsyncClient(
+            timeout=_SOAR_TIMEOUT,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _SOAR_CLIENT
+
+
+def _soar_client():
+    """Yield the shared SOAR client without closing it on block exit."""
+    return contextlib.nullcontext(_get_soar_client())
+
+
+async def close_soar_client() -> None:
+    """Close the shared SOAR client on server shutdown."""
+    global _SOAR_CLIENT
+    if _SOAR_CLIENT and not _SOAR_CLIENT.is_closed:
+        try:
+            await _SOAR_CLIENT.aclose()
+        except Exception:
+            pass
+    _SOAR_CLIENT = None
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz  = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
+
+    from .. import tool_contexts as _tc
+    # Slack/Teams sender pairs register as backward-compatible aliases of the
+    # consolidated send_alert()/send_weekly_summary() tools (platform=...).
+    # Suppressed when WAZUH_MCP_LEGACY_ALIASES=false to shrink the surface.
+    _alias_tool = _tc.alias_tool(mcp)
+
     generate_shift_handover: Any = ctx.shared.get("generate_shift_handover")
     generate_weekly_summary: Any = ctx.shared.get("generate_weekly_summary")
     generate_compliance_report: Any = ctx.shared.get("generate_compliance_report")
@@ -41,7 +79,7 @@ def register(ctx: ToolContext) -> None:
     async def _post_slack_blocks(channel: str, blocks: list, fallback: str) -> dict:
         if _SLACK_WEBHOOK:
             try:
-                async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                async with _soar_client() as client:
                     r = await client.post(
                         _SLACK_WEBHOOK,
                         json={"blocks": blocks, "text": fallback},
@@ -53,7 +91,7 @@ def register(ctx: ToolContext) -> None:
 
         if _SLACK_BOT_TOKEN:
             try:
-                async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                async with _soar_client() as client:
                     r = await client.post(
                         "https://slack.com/api/chat.postMessage",
                         json={"channel": channel, "blocks": blocks, "text": fallback},
@@ -71,7 +109,7 @@ def register(ctx: ToolContext) -> None:
 
         return {"error": "Slack not configured. Add SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN to .env."}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_alert_to_slack(
         message: str,
         title: str | None = None,
@@ -113,7 +151,7 @@ def register(ctx: ToolContext) -> None:
 
         if _SLACK_WEBHOOK:
             try:
-                async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+                async with _soar_client() as client:
                     r = await client.post(_SLACK_WEBHOOK, json={"attachments": [attachment]})
                 r.raise_for_status()
                 log.info("Slack message sent via webhook severity=%s", severity)
@@ -122,7 +160,7 @@ def register(ctx: ToolContext) -> None:
                 return {"error": f"Slack webhook failed: {e}"}
 
         try:
-            async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+            async with _soar_client() as client:
                 r = await client.post(
                     "https://slack.com/api/chat.postMessage",
                     json={"channel": target_channel, "attachments": [attachment]},
@@ -158,7 +196,7 @@ def register(ctx: ToolContext) -> None:
             analyst_name=analyst_name,
         )
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         target = channel or _SLACK_SOC_CHANNEL
 
         overview = report.get("alert_overview") or {}
@@ -213,7 +251,7 @@ def register(ctx: ToolContext) -> None:
         result = await _post_slack_blocks(target, blocks, f"Wazuh Shift Handover — {ts_str}")
         return {**result, "channel": target, "analyst": analyst_name, "shift_duration": shift_duration}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_weekly_summary_to_slack(
         week_offset: int = 0,
         channel: str | None = None,
@@ -228,7 +266,7 @@ def register(ctx: ToolContext) -> None:
 
         report = await generate_weekly_summary(week_offset=week_offset)
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         label  = "This week" if week_offset == 0 else "Last week"
         target = channel or _SLACK_MGMT_CHANNEL
 
@@ -298,15 +336,15 @@ def register(ctx: ToolContext) -> None:
         if not _SLACK_WEBHOOK and not _SLACK_BOT_TOKEN:
             return {"error": "Slack not configured. Add SLACK_WEBHOOK_URL to .env."}
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         target = channel or _SLACK_SOC_CHANNEL
 
         if severity_level >= 12:
-            tier = "CRITICAL"; color = "#ff0000"
+            tier = "CRITICAL"
         elif severity_level >= 9:
-            tier = "HIGH";     color = "#ff6600"
+            tier = "HIGH"
         else:
-            tier = "MEDIUM";   color = "#ffaa00"
+            tier = "MEDIUM"
 
         blocks: list[dict] = [
             {
@@ -378,7 +416,7 @@ def register(ctx: ToolContext) -> None:
         if "error" in report:
             return report
 
-        ts_str  = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        ts_str  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         subject = f"[Wazuh SOC] {framework.upper()} Compliance Report — {ts_str}"
 
         controls     = report.get("controls", [])
@@ -477,7 +515,7 @@ def register(ctx: ToolContext) -> None:
         if not _TEAMS_WEBHOOK:
             return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
         try:
-            async with httpx.AsyncClient(timeout=_SOAR_TIMEOUT) as client:
+            async with _soar_client() as client:
                 r = await client.post(
                     _TEAMS_WEBHOOK,
                     json=card,
@@ -488,7 +526,7 @@ def register(ctx: ToolContext) -> None:
         except Exception as e:
             return {"error": f"Teams webhook failed: {e}"}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_alert_to_teams(
         message: str,
         title: str | None = None,
@@ -575,7 +613,7 @@ def register(ctx: ToolContext) -> None:
         if not _TEAMS_WEBHOOK:
             return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
 
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         if severity_level >= 12:
             tier = "CRITICAL"; color = "attention"
         elif severity_level >= 9:
@@ -627,7 +665,7 @@ def register(ctx: ToolContext) -> None:
         result = await _post_teams_card(card)
         return {**result, "severity_tier": tier, "alert_id": alert_id}
 
-    @mcp.tool()
+    @_alias_tool()
     async def send_weekly_summary_to_teams(
         week_offset: int = 0,
     ) -> dict:
@@ -640,7 +678,7 @@ def register(ctx: ToolContext) -> None:
             return {"error": "Teams not configured. Add TEAMS_WEBHOOK_URL to .env."}
 
         report = await generate_weekly_summary(week_offset=week_offset)
-        ts_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        ts_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         label = "This week" if week_offset == 0 else "Last week"
 
         counts = report.get("alert_counts") or {}
@@ -695,3 +733,56 @@ def register(ctx: ToolContext) -> None:
 
         result = await _post_teams_card(card)
         return {**result, "week_offset": week_offset, "label": label}
+
+    # ── Unified chat senders (consolidation) ──────────────────────────────────
+    # One tool per message kind with a platform= selector, dispatching to the
+    # Slack/Teams implementations above. The per-platform tools remain as
+    # backward-compatible aliases unless WAZUH_MCP_LEGACY_ALIASES=false.
+    @mcp.tool()
+    async def send_alert(
+        platform: str,
+        message: str,
+        title: str | None = None,
+        severity: str = "info",
+        fields: dict | None = None,
+        ticket_url: str | None = None,
+        channel: str | None = None,
+    ) -> dict:
+        """Push a formatted alert to Slack or Microsoft Teams.
+
+        platform: slack | teams
+        severity: info | warning | critical
+        channel:  Slack-only channel override (ignored for Teams).
+        Requires the matching webhook/token env var for the chosen platform.
+        """
+        p = (platform or "").strip().lower()
+        if p == "slack":
+            return await send_alert_to_slack(
+                message=message, title=title, severity=severity,
+                channel=channel, fields=fields, ticket_url=ticket_url,
+            )
+        if p == "teams":
+            return await send_alert_to_teams(
+                message=message, title=title, severity=severity,
+                fields=fields, ticket_url=ticket_url,
+            )
+        return {"error": f"Unknown platform '{platform}'", "supported": ["slack", "teams"]}
+
+    @mcp.tool()
+    async def send_weekly_summary(
+        platform: str,
+        week_offset: int = 0,
+        channel: str | None = None,
+    ) -> dict:
+        """Generate the weekly security summary and push it to Slack or Teams.
+
+        platform:    slack | teams
+        week_offset: 0 = current week, 1 = last week.
+        channel:     Slack-only channel override (ignored for Teams).
+        """
+        p = (platform or "").strip().lower()
+        if p == "slack":
+            return await send_weekly_summary_to_slack(week_offset=week_offset, channel=channel)
+        if p == "teams":
+            return await send_weekly_summary_to_teams(week_offset=week_offset)
+        return {"error": f"Unknown platform '{platform}'", "supported": ["slack", "teams"]}

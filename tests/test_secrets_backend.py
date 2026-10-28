@@ -165,6 +165,43 @@ class TestAWSBackend:
         assert result == "env_fallback"
 
 
+class TestSecretRedactionInLogs:
+    def test_vault_error_echoing_token_is_redacted(self, caplog):
+        import importlib, logging
+        secret_token = "s.SuperSecretVaultToken12345"
+        mock_client = MagicMock()
+        # Simulate a backend error whose message echoes the supplied token.
+        mock_client.secrets.kv.v2.read_secret_version.side_effect = Exception(
+            f"403 permission denied for token {secret_token}"
+        )
+        _inject_hvac(mock_client)
+        with patch.dict(os.environ, {
+            "WAZUH_SECRET_BACKEND": "vault",
+            "VAULT_ADDR": "http://vault:8200",
+            "VAULT_TOKEN": secret_token,
+            "VAULT_SECRET_PATH": "secret/wazuh-mcp",
+            "WAZUH_PASS": "env_fallback_pass",
+        }):
+            import wazuh_mcp.secrets_backend as sb
+            importlib.reload(sb)
+            with caplog.at_level(logging.WARNING, logger="wazuh-mcp"):
+                # _ensure_loaded already ran on reload; force a fresh load path.
+                sb._loaded = False
+                sb._backend = ""
+                assert sb.get_secret("WAZUH_PASS") == "env_fallback_pass"
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert secret_token not in joined
+        assert "***REDACTED***" in joined
+        # Non-secret diagnostic context is preserved.
+        assert "403 permission denied" in joined
+
+    def test_redact_helper_is_noop_without_secret(self):
+        import wazuh_mcp.secrets_backend as sb
+        with patch.dict(os.environ, {k: v for k, v in os.environ.items()
+                                     if k != "VAULT_TOKEN"}, clear=True):
+            assert sb._redact_secrets("connection refused") == "connection refused"
+
+
 class TestUnknownBackend:
     def test_unknown_backend_falls_back_to_env(self):
         with patch.dict(os.environ, {

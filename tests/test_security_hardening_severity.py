@@ -237,9 +237,13 @@ class TestM2PersistentInjectionCounter:
         identity.set_identity_key("persistent-key")
         key = identity._ctx_identity_key.get()
 
-        # Seed the persistent counter to threshold - 1
+        # Seed the persistent counter to threshold - 1.
+        # _persistent_injection_counts is a BoundedTTLStore — use .set(), not
+        # dict item assignment (mirrors _increment_persistent's own usage).
         with identity._persistent_injection_lock:
-            identity._persistent_injection_counts[key] = identity.INJECTION_LOCKOUT_THRESHOLD - 1
+            identity._persistent_injection_counts.set(
+                key, identity.INJECTION_LOCKOUT_THRESHOLD - 1
+            )
 
         # One more attempt should trigger lockout
         identity._ctx_injection_count.set(0)  # task counter is fresh

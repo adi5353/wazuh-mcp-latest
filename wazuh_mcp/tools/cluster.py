@@ -1,15 +1,16 @@
 """Cluster health tools — Wazuh cluster status and event queue monitoring."""
 from __future__ import annotations
 from ..tool_context import ToolContext
-
+from ..rbac import ROLE
 import httpx
 from typing import Any
+
+REQUIRED_ROLE = ROLE.VIEWER
 
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
-    idx = ctx.idx
     cfg = ctx.cfg
 
     @mcp.tool()

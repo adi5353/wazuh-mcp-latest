@@ -148,15 +148,17 @@ class TestWazuhClientRetry:
         assert not _is_retryable(ValueError("bad value"))
 
     def test_retry_sleep_delay_increases(self):
-        """Delay should grow with each attempt (exponential backoff)."""
-        import asyncio as _asyncio
-        from wazuh_mcp.wazuh_client import _RETRY_BASE, _RETRY_CAP
+        """Delay should grow with each attempt (exponential backoff).
 
-        # Verify the formula: min(BASE * 2**attempt, CAP) + jitter
+        Retry policy now lives in the shared wazuh_mcp.http_policy module.
+        """
+        from wazuh_mcp.http_policy import RETRY_BASE, RETRY_CAP, backoff_delay
+
+        # Verify the formula: min(BASE * 2**attempt, CAP) + jitter (0..1)
         for attempt in range(3):
-            base_delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP)
-            assert base_delay >= _RETRY_BASE * (2 ** attempt) or base_delay == _RETRY_CAP
-            assert base_delay <= _RETRY_CAP
+            base_delay = min(RETRY_BASE * (2 ** attempt), RETRY_CAP)
+            delay = backoff_delay(attempt)
+            assert base_delay <= delay <= RETRY_CAP + 1.0
 
 
 # ── Gap 13: Pydantic response validation ─────────────────────────────────────

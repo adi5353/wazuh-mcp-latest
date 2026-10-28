@@ -4,6 +4,8 @@ from ..tool_context import ToolContext
 
 from ..helpers import trim_alert, time_window
 from ..validators import safe_validate, validate_time_range
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 CRITICAL_PATHS = [
     "/etc/passwd", "/etc/shadow", "/etc/sudoers", "/etc/ssh/sshd_config",
@@ -18,7 +20,6 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
 
     @mcp.tool()

@@ -4,6 +4,8 @@ from ..tool_context import ToolContext
 
 import asyncio
 import os
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 _FLEET_BATCH_SIZE = int(os.getenv("WAZUH_MCP_FLEET_BATCH_SIZE", "10"))
 

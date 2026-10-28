@@ -1,13 +1,8 @@
 # Tool Inventory (auto-generated)
 
-**239 tools** across **54 domain modules** in `wazuh_mcp/tools/`, plus **16 MCP prompts**.
+**248 tools** across **58 domain modules** in `wazuh_mcp/tools/`, plus **0 MCP prompts**.
 
 > Regenerate with `python scripts/generate_tool_table.py`. Do not edit by hand.
-
-### `rbac` (2)
-
-- `run_active_response`
-- `run_active_response`
 
 ### `server` (5)
 
@@ -110,10 +105,11 @@
 - `check_event_queue_health`
 - `get_cluster_health`
 
-### `tools/compliance` (9)
+### `tools/compliance` (10)
 
 - `compliance_control_details`
 - `compliance_drift`
+- `compliance_framework_summary`
 - `compliance_summary`
 - `generate_compliance_report`
 - `hipaa_compliance_summary`
@@ -140,6 +136,19 @@
 - `list_cve_watchlist`
 - `mark_patched`
 - `prioritize_cve_risk`
+
+### `tools/decoder_wizard_generate` (1)
+
+- `generate_decoder_xml`
+
+### `tools/decoder_wizard_validate` (1)
+
+- `validate_decoder_xml`
+
+### `tools/detection_drafter` (2)
+
+- `draft_detection_from_logs`
+- `test_detection_candidate`
 
 ### `tools/explain_alert` (2)
 
@@ -237,14 +246,16 @@
 - `get_network_topology`
 - `map_subnet_exposure`
 
-### `tools/notifications` (8)
+### `tools/notifications` (10)
 
 - `email_compliance_report`
+- `send_alert`
 - `send_alert_to_slack`
 - `send_alert_to_teams`
 - `send_critical_alert_notify`
 - `send_critical_alert_to_teams`
 - `send_shift_handover_to_slack`
+- `send_weekly_summary`
 - `send_weekly_summary_to_slack`
 - `send_weekly_summary_to_teams`
 
@@ -301,6 +312,12 @@
 - `clear_rootcheck_results`
 - `get_agent_rootcheck_results`
 - `get_rootcheck_last_scan`
+
+### `tools/routing` (3)
+
+- `enter_operational_context`
+- `exit_operational_context`
+- `list_operational_contexts`
 
 ### `tools/rule_wizard_deploy` (3)
 
@@ -375,12 +392,13 @@
 - `hunt_lateral_movement`
 - `hunt_persistence_mechanisms`
 
-### `tools/threat_intel` (9)
+### `tools/threat_intel` (10)
 
 - `bulk_enrich_iocs`
 - `enrich_domain`
 - `enrich_email`
 - `enrich_file_hash`
+- `enrich_indicator`
 - `enrich_ip`
 - `enrich_ip_geo`
 - `enrich_url`

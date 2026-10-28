@@ -5,14 +5,15 @@ Handles: push_custom_rule, push_custom_decoder, sigma_bulk_import
 from __future__ import annotations
 from ..tool_context import ToolContext
 
-from ..rbac import admin_only
+from ..rbac import require_admin_or_above, ROLE
+REQUIRED_ROLE = ROLE.ADMIN
 
 
 def register_deploy(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
 
-    from .rule_wizard_generate import _sigma_to_wazuh_level, _extract_sigma_field_conditions, _SIGMA_LOGSOURCE_TO_PARENT, _SIGMA_MITRE_LEVELS
+    from .rule_wizard_generate import _sigma_to_wazuh_level, _extract_sigma_field_conditions, _SIGMA_LOGSOURCE_TO_PARENT, _SIGMA_MITRE_LEVELS, _xml_text, _xml_attr
     from .rule_wizard_validate import _validate_rule_xml_impl
 
     @mcp.tool()
@@ -31,7 +32,7 @@ def register_deploy(ctx: ToolContext) -> None:
         dry_run=True (default): validate only, do not push.
         Requires role: admin. Requires WAZUH_ALLOW_WRITES=true.
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -122,7 +123,7 @@ def register_deploy(ctx: ToolContext) -> None:
               <order>user, action</order>
             </decoder>
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -257,7 +258,7 @@ def register_deploy(ctx: ToolContext) -> None:
                         wazuh_level = max(wazuh_level, _SIGMA_MITRE_LEVELS.get(tactic, 0))
 
                 conditions = _extract_sigma_field_conditions(detection)
-                safe_title = title.replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
+                safe_title = _xml_text(title)
 
                 lines = ['<group name="local,sigma,">',
                          f'  <rule id="{rule_id}" level="{wazuh_level}">']
@@ -268,16 +269,17 @@ def register_deploy(ctx: ToolContext) -> None:
                 field_pairs = [(f, p) for f, p in conditions if f != "full_log"]
 
                 if match_pats:
-                    escaped = match_pats[0].replace("<", "&lt;").replace(">", "&gt;")
-                    lines.append(f'    <match>{escaped}</match>')
+                    lines.append(f'    <match>{_xml_text(match_pats[0])}</match>')
                 for fname, fpat in field_pairs[:3]:
-                    escaped = fpat.replace("<", "&lt;").replace(">", "&gt;")
-                    lines.append(f'    <field name="{fname}" type="pcre2">{escaped}</field>')
+                    lines.append(
+                        f'    <field name="{_xml_attr(fname)}" type="pcre2">'
+                        f'{_xml_text(fpat)}</field>'
+                    )
 
                 if mitre_ids:
                     lines.append('    <mitre>')
                     for mid in mitre_ids[:5]:
-                        lines.append(f'      <id>{mid}</id>')
+                        lines.append(f'      <id>{_xml_text(mid)}</id>')
                     lines.append('    </mitre>')
 
                 lines.append(f'    <description>{safe_title}</description>')
@@ -296,7 +298,7 @@ def register_deploy(ctx: ToolContext) -> None:
                 pushed = False
                 push_error = None
                 if push_all and not dry_run:
-                    err = admin_only()
+                    err = require_admin_or_above()
                     if err:
                         push_error = "Insufficient role for push"
                     else:

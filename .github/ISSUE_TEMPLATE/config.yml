@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability (private)
+    url: https://github.com/adi5353/wazuh-mcp-latest/security/policy
+    about: >-
+      Do NOT open a public issue for security vulnerabilities. Follow the
+      private disclosure process in SECURITY.md instead.
+  - name: 💬 Question or usage help
+    url: https://github.com/adi5353/wazuh-mcp-latest/discussions
+    about: Ask setup, configuration, or "how do I…" questions here.

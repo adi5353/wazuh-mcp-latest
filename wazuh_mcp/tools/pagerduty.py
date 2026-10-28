@@ -10,15 +10,16 @@ from ..tool_context import ToolContext
 
 import os
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 _EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
 _SEVERITY_MAP = {"critical": "critical", "high": "error", "medium": "warning", "low": "info"}
 
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 

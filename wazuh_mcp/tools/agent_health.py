@@ -18,8 +18,10 @@ Score bands:
 """
 from __future__ import annotations
 from ..tool_context import ToolContext
-
+from ..rbac import ROLE
 import asyncio
+
+REQUIRED_ROLE = ROLE.VIEWER
 
 
 def register(ctx: ToolContext) -> None:

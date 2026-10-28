@@ -9,10 +9,13 @@ import httpx
 
 from ..helpers import trim_alert, time_window
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
     cfg = ctx.cfg
     _cap = ctx.cap
@@ -211,7 +214,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "incident": {
                 "title": title,
-                "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
                 "analyst": analyst,
                 "severity": sev,
                 "alert_count": len(alerts),
@@ -267,7 +270,7 @@ def register(ctx: ToolContext) -> None:
             "doc": {
                 "analyst_tag": tag,
                 "analyst_note": note,
-                "analyst_updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "analyst_updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             }
         }
         try:
@@ -577,7 +580,7 @@ def register(ctx: ToolContext) -> None:
                 ),
                 "params": {
                     "reason": reason,
-                    "ts": datetime.datetime.utcnow().isoformat() + "Z",
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
                 },
             },
         }

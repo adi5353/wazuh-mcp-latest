@@ -9,6 +9,10 @@ from ..tool_context import ToolContext
 import csv
 import io
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def _to_csv(rows: list[dict], fieldnames: list[str] | None = None) -> str:
     if not rows:
@@ -27,7 +31,6 @@ def _to_csv(rows: list[dict], fieldnames: list[str] | None = None) -> str:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
     cfg = ctx.cfg
     _cap = ctx.cap
@@ -417,7 +420,7 @@ def register(ctx: ToolContext) -> None:
         </style>
         """
 
-        ts_str = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        ts_str = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         if report_type == "compliance":
             from ..validators import validate_framework, validate_time_range

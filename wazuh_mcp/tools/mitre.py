@@ -12,7 +12,6 @@ def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
     wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
 
     @mcp.tool()
     async def mitre_coverage_analysis() -> dict:

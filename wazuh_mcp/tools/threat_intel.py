@@ -5,13 +5,25 @@ from ..tool_context import ToolContext
 import asyncio
 import logging
 import os
+import re
 
 import httpx
 
 from ..circuit_breaker import breaker
 import time
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 log = logging.getLogger("wazuh-mcp")
+
+# IOC type-detection patterns — compiled once at import (were previously
+# recompiled on every bulk_enrich_iocs call).
+_IOC_IP_RE     = re.compile(r'^\d{1,3}(\.\d{1,3}){3}$')
+_IOC_HASH_RE   = re.compile(r'^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$')
+_IOC_URL_RE    = re.compile(r'^https?://')
+_IOC_DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$')
 
 # IOC result cache (Fix 1) — prevents repeated external API calls for same indicator
 _IOC_CACHE: dict[str, tuple[dict, float]] = {}
@@ -158,14 +170,19 @@ async def _abuse_get(ip: str) -> dict | None:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
     cfg = ctx.cfg
     _geoip_lookup = ctx.geoip_lookup
 
+    from .. import tool_contexts as _tc
+    # Register the single-indicator reputation enrichers as backward-compatible
+    # aliases of the consolidated enrich_indicator() tool (see below). Suppressed
+    # when WAZUH_MCP_LEGACY_ALIASES=false to shrink the advertised surface.
+    _alias_tool = _tc.alias_tool(mcp)
+
     from ..validators import safe_validate, validate_ip_address, validate_ip_list
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_ip(ip: str) -> dict:
         """Enrich a source IP with VirusTotal + AbuseIPDB reputation data.
 
@@ -222,7 +239,7 @@ def register(ctx: ToolContext) -> None:
         )
         return result
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_file_hash(hash_value: str) -> dict:
         """Check a file hash (MD5, SHA1, or SHA256) against VirusTotal.
 
@@ -268,7 +285,7 @@ def register(ctx: ToolContext) -> None:
             },
         }
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_domain(domain: str) -> dict:
         """Check a domain name against VirusTotal for reputation and threat data.
 
@@ -277,8 +294,10 @@ def register(ctx: ToolContext) -> None:
         Requires VIRUSTOTAL_API_KEY in .env.
         """
         import re
-        # Basic domain validation — no URLs, just hostname
-        domain = domain.strip().lstrip("https://").lstrip("http://").split("/")[0]
+        # Basic domain validation — strip any scheme + path, keep the hostname.
+        # NB: use a prefix regex, not str.lstrip("https://"), which strips a
+        # *character set* and would mangle hosts like "stackoverflow.com".
+        domain = re.sub(r"^https?://", "", domain.strip(), flags=re.IGNORECASE).split("/")[0]
         if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$', domain):
             return {"error": f"'{domain}' does not look like a valid domain name."}
 
@@ -316,7 +335,7 @@ def register(ctx: ToolContext) -> None:
             ),
         }
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_url(url: str) -> dict:
         """Check a URL against VirusTotal for reputation and phishing/malware signals.
 
@@ -382,18 +401,12 @@ def register(ctx: ToolContext) -> None:
 
         Requires VIRUSTOTAL_API_KEY in .env. AbuseIPDB used for IPs if key present.
         """
-        import re
         import asyncio as _asyncio
 
         if not iocs:
             return {"error": "iocs list is empty"}
         if len(iocs) > 20:
             return {"error": "Maximum 20 IOCs per call to stay within API rate limits"}
-
-        _IP_RE     = re.compile(r'^\d{1,3}(\.\d{1,3}){3}$')
-        _HASH_RE   = re.compile(r'^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$')
-        _URL_RE    = re.compile(r'^https?://')
-        _DOMAIN_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$')
 
         def _defang(ioc: str) -> str:
             """Normalize defanged IOCs: 1[.]1[.]1[.]1->1.1.1.1, hxxp->http."""
@@ -411,10 +424,10 @@ def register(ctx: ToolContext) -> None:
                 return "ip"
             except (OSError, AttributeError):
                 pass
-            if _IP_RE.match(ioc):     return "ip"
-            if _HASH_RE.match(ioc):   return "hash"
-            if _URL_RE.match(ioc):    return "url"
-            if _DOMAIN_RE.match(ioc): return "domain"
+            if _IOC_IP_RE.match(ioc):     return "ip"
+            if _IOC_HASH_RE.match(ioc):   return "hash"
+            if _IOC_URL_RE.match(ioc):    return "url"
+            if _IOC_DOMAIN_RE.match(ioc): return "domain"
             return "unknown"
 
         # Build coroutine list
@@ -505,7 +518,7 @@ def register(ctx: ToolContext) -> None:
         results = await asyncio.gather(*tasks, return_exceptions=False)
         return {"results": list(results)}
 
-    @mcp.tool()
+    @_alias_tool()
     async def enrich_email(email: str) -> dict:
         """Enrich an email address with breach and deliverability intelligence.
 
@@ -561,7 +574,6 @@ def register(ctx: ToolContext) -> None:
         # ── Hunter.io domain/email verification (optional) ─────────────────────
         hunter_key = os.getenv("HUNTER_API_KEY")
         if hunter_key and "@" in email:
-            domain = email.split("@", 1)[1]
             try:
                 async with httpx.AsyncClient(timeout=15,
                                              base_url="https://api.hunter.io") as c:
@@ -594,6 +606,36 @@ def register(ctx: ToolContext) -> None:
             result["risk_level"] = "LOW"
 
         return result
+
+    # ── Unified single-indicator enrichment (consolidation) ───────────────────
+    # One parameterized entry point for the per-type reputation enrichers above.
+    # The dedicated enrich_<type> tools remain as backward-compatible aliases
+    # unless WAZUH_MCP_LEGACY_ALIASES=false. (Batch/geo enrichers — enrich_ip_geo,
+    # enrich_ip_extended, enrich_cve_epss — have different signatures and stay
+    # separate.)
+    _INDICATOR_ENRICHERS = {
+        "ip": enrich_ip,
+        "file_hash": enrich_file_hash,
+        "domain": enrich_domain,
+        "url": enrich_url,
+        "email": enrich_email,
+    }
+
+    @mcp.tool()
+    async def enrich_indicator(indicator_type: str, value: str) -> dict:
+        """Enrich a single threat indicator with reputation/breach intelligence.
+
+        indicator_type: ip | file_hash | domain | url | email
+        value:          the indicator to look up (an IP, hash, domain, URL, or email)
+        Returns the same report the dedicated enrich_<type> tool would.
+        """
+        fn = _INDICATOR_ENRICHERS.get((indicator_type or "").strip().lower())
+        if fn is None:
+            return {
+                "error": f"Unknown indicator_type '{indicator_type}'",
+                "supported": sorted(_INDICATOR_ENRICHERS),
+            }
+        return await fn(value)
 
     @mcp.tool()
     async def ioc_to_alert_match(

@@ -90,6 +90,44 @@ def test_issue03_role_binding_is_from_identity(monkeypatch):
         identity._ctx_role.set(None)
 
 
+# ── RBAC/API-key conflict startup guard ───────────────────────────────────────
+
+def test_rbac_key_conflict_warns_when_single_key_not_in_map(monkeypatch, caplog):
+    """Single WAZUH_MCP_API_KEY + a KEY_MAP it isn't part of → loud warning."""
+    import logging
+    import wazuh_mcp.server as server
+    from wazuh_mcp.rbac import ROLE
+
+    monkeypatch.setattr(
+        "wazuh_mcp.identity._KEY_MAP",
+        {"key1": ROLE.VIEWER, "key2": ROLE.ADMIN},
+        raising=False,
+    )
+    with caplog.at_level(logging.WARNING):
+        server._check_rbac_key_config("http", "a-different-single-key")
+    assert any("RBAC" in r.message and "DISABLED" in r.message for r in caplog.records)
+
+
+def test_rbac_key_conflict_silent_for_supported_configs(monkeypatch, caplog):
+    """No warning for the two supported modes: single key only, or map only."""
+    import logging
+    import wazuh_mcp.server as server
+    from wazuh_mcp.rbac import ROLE
+
+    # Single-key mode: no key map at all.
+    monkeypatch.setattr("wazuh_mcp.identity._KEY_MAP", {}, raising=False)
+    with caplog.at_level(logging.WARNING):
+        server._check_rbac_key_config("http", "single-key")
+    # Map-only mode: no single key.
+    monkeypatch.setattr(
+        "wazuh_mcp.identity._KEY_MAP", {"key1": ROLE.ADMIN}, raising=False
+    )
+    server._check_rbac_key_config("http", "")
+    # stdio is unaffected regardless.
+    server._check_rbac_key_config("stdio", "single-key")
+    assert not any("RBAC" in r.message for r in caplog.records)
+
+
 # ── Issue 4: fail-closed default role ─────────────────────────────────────────
 
 def test_issue04_unknown_role_falls_back_to_viewer(monkeypatch):

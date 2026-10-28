@@ -6,8 +6,10 @@ Retry policy (Gap 12):
   Does NOT retry 4xx client errors (except 429 Too Many Requests).
 
 Connection pooling:
-  A single httpx.AsyncClient is shared across all requests (20 max connections,
-  10 keepalive). Call aclose() / use as async context manager on server shutdown.
+  A single httpx.AsyncClient is shared across all requests (100 max connections,
+  40 keepalive by default — override via WAZUH_HTTP_POOL_SIZE and
+  WAZUH_HTTP_MAX_KEEPALIVE). Call aclose() / use as async context manager on
+  server shutdown.
 """
 from __future__ import annotations
 import asyncio
@@ -51,10 +53,8 @@ class _SecretStr:
 # Wazuh JWT tokens default to 900 seconds; refresh ~100s early for safety.
 TOKEN_TTL_SECONDS = 800
 
-# ── Retry configuration ────────────────────────────────────────────────────────
-_MAX_RETRIES  = 3
-_RETRY_BASE   = 1.0   # seconds — first delay before jitter
-_RETRY_CAP    = 10.0  # seconds — maximum delay before jitter
+# ── Retry configuration (shared policy — see wazuh_mcp/http_policy.py) ─────────
+from .http_policy import MAX_RETRIES as _MAX_RETRIES, is_retryable as _is_retryable, is_retryable_for_method as _is_retryable_for_method, retry_sleep as _retry_sleep_shared
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
 # Defaults raised to 100/40 to prevent pool saturation under real SOC load
@@ -127,22 +127,9 @@ def _validate_manager_file_path(path: str) -> None:
         )
 
 
-def _is_retryable(exc: Exception) -> bool:
-    """Return True if the exception warrants a retry."""
-    if isinstance(exc, httpx.RequestError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return status >= 500 or status == 429
-    return False
-
-
 async def _retry_sleep(attempt: int) -> None:
-    """Exponential backoff with ±1s uniform jitter."""
-    delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP) + random.uniform(0, 1)
-    log.warning("Wazuh Manager: transient error on attempt %d/%d — retrying in %.1fs",
-                attempt + 1, _MAX_RETRIES, delay)
-    await asyncio.sleep(delay)
+    """Exponential backoff with ±1s uniform jitter (shared policy)."""
+    await _retry_sleep_shared(attempt, label="Wazuh Manager")
 
 
 _TOKEN_PROACTIVE_REFRESH_WINDOW = 100  # seconds before expiry to trigger background refresh
@@ -169,7 +156,19 @@ class WazuhClient:
         )
 
     async def aclose(self) -> None:
-        """Release the connection pool. Call on server shutdown."""
+        """Release the connection pool. Call on server shutdown.
+
+        Cancels any in-flight proactive token-refresh task first so it can't
+        outlive the client and touch a closed connection pool (spurious
+        shutdown errors).
+        """
+        task = self._refresh_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         await self._client.aclose()
 
     async def __aenter__(self) -> "WazuhClient":
@@ -241,7 +240,10 @@ class WazuhClient:
             try:
                 return await self._request_once(method, path, **kwargs)
             except Exception as exc:
-                if not _is_retryable(exc) or attempt == _MAX_RETRIES:
+                # Idempotency-aware: a non-idempotent write (PUT active-response,
+                # agent restart) is only retried when the connection never
+                # reached the Manager, so a timed-out request can't fire twice.
+                if not _is_retryable_for_method(exc, method) or attempt == _MAX_RETRIES:
                     raise
                 last_exc = exc
                 await _retry_sleep(attempt)

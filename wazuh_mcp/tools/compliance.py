@@ -6,6 +6,10 @@ import datetime
 
 from ..helpers import trim_alert, time_window
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 COMPLIANCE_FIELDS = {
     "pci_dss": "rule.pci_dss",
     "hipaa": "rule.hipaa",
@@ -83,12 +87,130 @@ for _ctrl in _ISO27001_CONTROLS:
         _GROUP_TO_ISO.setdefault(_grp, []).append(_ctrl["id"])
 
 
+# ── Shared scoring engine for rule-group-based framework summaries ────────────
+# iso27001 / nist_csf2 / soc2 / pci_dss / hipaa all (a) run the same
+# rule.groups aggregation (optionally alongside a native compliance field),
+# (b) sum total/critical/agents across each control's matched groups, and
+# (c) derive a FAILING/WARNING/OK status. Only the control definitions, output
+# key names, and posture formula differ — those stay in each tool. This kills
+# ~5 copies of the identical query body + bucket-parsing loop.
+
+def _status(total: int, critical: int) -> str:
+    """FAILING if any critical alert, WARNING if noisy, else OK (shared rule)."""
+    return "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+
+
+def _parse_group_buckets(res: dict, agg_name: str) -> dict[str, dict]:
+    """Parse a terms-aggregation into {key: {total, critical, agents}}."""
+    buckets = res.get("aggregations", {}).get(agg_name, {}).get("buckets", [])
+    return {
+        b["key"]: {
+            "total": b["doc_count"],
+            "critical": b["critical"]["doc_count"],
+            "agents": [a["key"] for a in b["top_agents"]["buckets"]],
+        }
+        for b in buckets
+    }
+
+
+async def _run_group_aggregation(
+    idx, time_range: str, min_level: int,
+    *, group_size: int = 300, native_field: str | None = None,
+) -> tuple[int, dict[str, dict], dict[str, dict]]:
+    """Run the shared posture aggregation.
+
+    Returns (total_hits, group_counts, native_counts). ``native_counts`` is
+    empty unless ``native_field`` (e.g. ``rule.pci_dss``) is supplied.
+    """
+    def _bucket_aggs() -> dict:
+        return {
+            "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
+            "top_agents": {"terms": {"field": "agent.name", "size": 3}},
+        }
+
+    aggs: dict = {
+        "by_group": {
+            "terms": {"field": "rule.groups", "size": group_size},
+            "aggs": _bucket_aggs(),
+        }
+    }
+    if native_field:
+        aggs["by_native"] = {
+            "terms": {"field": native_field, "size": 100},
+            "aggs": _bucket_aggs(),
+        }
+    body = {
+        "size": 0,
+        "query": {
+            "bool": {
+                "filter": [
+                    time_window(f"now-{time_range}"),
+                    {"range": {"rule.level": {"gte": min_level}}},
+                ]
+            }
+        },
+        "aggs": aggs,
+    }
+    res = await idx.search(body)
+    total_hits = res.get("hits", {}).get("total", {}).get("value", 0)
+    group_counts = _parse_group_buckets(res, "by_group")
+    native_counts = _parse_group_buckets(res, "by_native") if native_field else {}
+    return total_hits, group_counts, native_counts
+
+
+def _score_groups(rule_groups, group_counts: dict[str, dict]):
+    """Sum total/critical/agents across the rule groups matched in the aggregation.
+
+    Returns (total, critical, agents_set, matched_groups).
+    """
+    total = critical = 0
+    agents: set = set()
+    matched: list = []
+    for grp in rule_groups:
+        gc = group_counts.get(grp)
+        if gc is not None:
+            total += gc["total"]
+            critical += gc["critical"]
+            agents.update(gc["agents"])
+            matched.append(grp)
+    return total, critical, agents, matched
+
+
+def _score_native(native_counts: dict[str, dict], predicate):
+    """Sum total/critical/agents over native-field controls matching *predicate*.
+
+    Returns (total, critical, agents_set, matched_keys).
+    """
+    total = critical = 0
+    agents: set = set()
+    matched: list = []
+    for key, c in native_counts.items():
+        if predicate(key):
+            total += c["total"]
+            critical += c["critical"]
+            agents.update(c["agents"])
+            matched.append(key)
+    return total, critical, agents, matched
+
+
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
+
+    from .. import tool_contexts as _tc
+
+    def _summary_tool(*a, **k):
+        """Decorator for the per-framework summaries.
+
+        Registers them as MCP tools only when legacy aliases are enabled
+        (the default). When WAZUH_MCP_LEGACY_ALIASES=false they are still
+        defined and callable via ``compliance_framework_summary`` — they just
+        aren't advertised individually, shrinking the tool surface.
+        """
+        if _tc.legacy_aliases_enabled():
+            return mcp.tool(*a, **k)
+        return lambda fn: fn
 
     @mcp.tool()
     async def compliance_summary(
@@ -118,7 +240,11 @@ def register(ctx: ToolContext) -> None:
             },
             "aggs": {
                 "by_control": {
-                    "terms": {"field": field, "size": 30},
+                    # 30 → 300: real frameworks (PCI-DSS, NIST 800-53) have well
+                    # over 30 controls; the old cap silently hid the quieter ones
+                    # and produced a falsely-clean posture. sum_other_doc_count
+                    # below flags if even 300 is exceeded.
+                    "terms": {"field": field, "size": 300},
                     "aggs": {
                         "top_rules": {"terms": {"field": "rule.id", "size": 3}},
                         "top_agents": {"terms": {"field": "agent.name", "size": 3}},
@@ -127,10 +253,17 @@ def register(ctx: ToolContext) -> None:
             },
         }
         res = await idx.search(body)
+        by_control_agg = res["aggregations"]["by_control"]
+        controls_truncated = by_control_agg.get("sum_other_doc_count", 0) > 0
         return {
             "framework": framework,
             "time_range": time_range,
             "total_alerts_with_control_mapping": res["hits"]["total"]["value"],
+            "controls_truncated": controls_truncated,
+            **({"truncation_warning": (
+                "More mapped controls than the aggregation cap — some controls are "
+                "omitted. Narrow the time_range or raise min_level and re-run."
+            )} if controls_truncated else {}),
             "by_control": [
                 {
                     "control": b["key"],
@@ -138,7 +271,7 @@ def register(ctx: ToolContext) -> None:
                     "top_rules": [r["key"] for r in b["top_rules"]["buckets"]],
                     "top_agents": [a["key"] for a in b["top_agents"]["buckets"]],
                 }
-                for b in res["aggregations"]["by_control"]["buckets"]
+                for b in by_control_agg["buckets"]
             ],
         }
 
@@ -233,14 +366,14 @@ def register(ctx: ToolContext) -> None:
             "report_type": "compliance_report",
             "framework": framework,
             "time_window": time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "total_alerts": total,
             "controls_with_alerts": len(controls),
             "failing_controls_count": len(failing),
             "controls": controls,
         }
 
-    @mcp.tool()
+    @_summary_tool()
     async def iso27001_compliance_summary(time_range: str = "30d", min_level: int = 5) -> dict:
         """Generate an ISO 27001:2022 Annex A compliance posture report.
 
@@ -251,52 +384,16 @@ def register(ctx: ToolContext) -> None:
         Returns: per-control status (OK / WARNING / FAILING), alert counts,
         top agents, and NIST 800-53 equivalents for cross-framework context.
         """
-        body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "filter": [
-                        time_window(f"now-{time_range}"),
-                        {"range": {"rule.level": {"gte": min_level}}},
-                    ]
-                }
-            },
-            "aggs": {
-                "by_group": {
-                    "terms": {"field": "rule.groups", "size": 200},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                }
-            },
-        }
-        res = await idx.search(body)
-        group_counts: dict[str, dict] = {}
-        for b in res["aggregations"]["by_group"]["buckets"]:
-            group_counts[b["key"]] = {
-                "total": b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "top_agents": [a["key"] for a in b["top_agents"]["buckets"]],
-            }
+        _, group_counts, _ = await _run_group_aggregation(
+            idx, time_range, min_level, group_size=200,
+        )
 
         control_results = []
         for ctrl in _ISO27001_CONTROLS:
-            total = 0
-            critical = 0
-            agents: set = set()
-            matched_groups: list = []
-            for grp in ctrl["rule_groups"]:
-                if grp in group_counts:
-                    total   += group_counts[grp]["total"]
-                    critical += group_counts[grp]["critical"]
-                    agents.update(group_counts[grp]["top_agents"])
-                    matched_groups.append(grp)
-            status = (
-                "FAILING" if critical > 0
-                else "WARNING" if total > 10
-                else "OK"
+            total, critical, agents, matched_groups = _score_groups(
+                ctrl["rule_groups"], group_counts
             )
+            status = _status(total, critical)
             control_results.append({
                 "control_id": ctrl["id"],
                 "title": ctrl["title"],
@@ -316,7 +413,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type": "iso27001_2022_annex_a",
             "time_range": time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_controls_assessed": len(control_results),
                 "failing": len(failing),
@@ -338,7 +435,7 @@ def register(ctx: ToolContext) -> None:
             ),
         }
 
-    @mcp.tool()
+    @_summary_tool()
     async def nist_csf2_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -407,48 +504,12 @@ def register(ctx: ToolContext) -> None:
             },
         ]
 
-        body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "filter": [
-                        time_window(f"now-{time_range}"),
-                        {"range": {"rule.level": {"gte": min_level}}},
-                    ]
-                }
-            },
-            "aggs": {
-                "by_group": {
-                    "terms": {"field": "rule.groups", "size": 300},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                }
-            },
-        }
-        res = await idx.search(body)
-        group_counts: dict[str, dict] = {
-            b["key"]: {
-                "total":    b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "agents":   [a["key"] for a in b["top_agents"]["buckets"]],
-            }
-            for b in res["aggregations"]["by_group"]["buckets"]
-        }
+        _, group_counts, _ = await _run_group_aggregation(idx, time_range, min_level)
 
         function_results = []
         for fn in CSF2_FUNCTIONS:
-            total = critical = 0
-            agents: set = set()
-            matched: list = []
-            for grp in fn["rule_groups"]:
-                if grp in group_counts:
-                    total    += group_counts[grp]["total"]
-                    critical += group_counts[grp]["critical"]
-                    agents.update(group_counts[grp]["agents"])
-                    matched.append(grp)
-            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            total, critical, agents, matched = _score_groups(fn["rule_groups"], group_counts)
+            status = _status(total, critical)
             function_results.append({
                 "function_id":   fn["id"],
                 "function_name": fn["name"],
@@ -469,7 +530,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type": "nist_csf_2.0",
             "time_range":  time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_functions":    len(function_results),
                 "failing":  len(failing),
@@ -491,7 +552,7 @@ def register(ctx: ToolContext) -> None:
             ),
         }
 
-    @mcp.tool()
+    @_summary_tool()
     async def soc2_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -554,48 +615,12 @@ def register(ctx: ToolContext) -> None:
             },
         ]
 
-        body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "filter": [
-                        time_window(f"now-{time_range}"),
-                        {"range": {"rule.level": {"gte": min_level}}},
-                    ]
-                }
-            },
-            "aggs": {
-                "by_group": {
-                    "terms": {"field": "rule.groups", "size": 300},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                }
-            },
-        }
-        res = await idx.search(body)
-        group_counts: dict[str, dict] = {
-            b["key"]: {
-                "total":    b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "agents":   [a["key"] for a in b["top_agents"]["buckets"]],
-            }
-            for b in res["aggregations"]["by_group"]["buckets"]
-        }
+        _, group_counts, _ = await _run_group_aggregation(idx, time_range, min_level)
 
         criterion_results = []
         for crit in SOC2_CRITERIA:
-            total = critical = 0
-            agents: set = set()
-            matched: list = []
-            for grp in crit["rule_groups"]:
-                if grp in group_counts:
-                    total    += group_counts[grp]["total"]
-                    critical += group_counts[grp]["critical"]
-                    agents.update(group_counts[grp]["agents"])
-                    matched.append(grp)
-            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            total, critical, agents, matched = _score_groups(crit["rule_groups"], group_counts)
+            status = _status(total, critical)
             criterion_results.append({
                 "criterion_id":   crit["id"],
                 "criterion_name": crit["name"],
@@ -616,7 +641,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type":  "soc2_type_ii",
             "time_range":   time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_criteria": len(criterion_results),
                 "failing": len(failing),
@@ -639,7 +664,7 @@ def register(ctx: ToolContext) -> None:
 
     # ── PCI-DSS dedicated summary ─────────────────────────────────────────────
 
-    @mcp.tool()
+    @_summary_tool()
     async def pci_dss_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -680,73 +705,23 @@ def register(ctx: ToolContext) -> None:
         ]
 
         # Query native pci_dss field + rule groups simultaneously
-        body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "filter": [
-                        time_window(f"now-{time_range}"),
-                        {"range": {"rule.level": {"gte": min_level}}},
-                    ]
-                }
-            },
-            "aggs": {
-                "by_pci_control": {
-                    "terms": {"field": "rule.pci_dss", "size": 100},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                },
-                "by_group": {
-                    "terms": {"field": "rule.groups", "size": 300},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                },
-            },
-        }
-        res = await idx.search(body)
-
-        pci_control_counts: dict[str, dict] = {
-            b["key"]: {
-                "total": b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
-            }
-            for b in res["aggregations"]["by_pci_control"]["buckets"]
-        }
-        group_counts: dict[str, dict] = {
-            b["key"]: {
-                "total": b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
-            }
-            for b in res["aggregations"]["by_group"]["buckets"]
-        }
+        _, group_counts, pci_control_counts = await _run_group_aggregation(
+            idx, time_range, min_level, native_field="rule.pci_dss",
+        )
 
         req_results = []
         for req in PCI_REQUIREMENTS:
             req_id = req["id"]
-            # Merge native PCI field hits (controls starting with req_id.)
-            total = critical = 0
-            agents: set = set()
-            native_controls = [
-                k for k in pci_control_counts if k.startswith(f"{req_id}.")
-            ]
-            for ctrl in native_controls:
-                total    += pci_control_counts[ctrl]["total"]
-                critical += pci_control_counts[ctrl]["critical"]
-                agents.update(pci_control_counts[ctrl]["agents"])
-            # Add rule-group heuristic counts
-            for grp in req["rule_groups"]:
-                if grp in group_counts:
-                    total    += group_counts[grp]["total"]
-                    critical += group_counts[grp]["critical"]
-                    agents.update(group_counts[grp]["agents"])
+            # Native PCI field hits (controls starting with "req_id.") + group heuristics.
+            n_total, n_crit, n_agents, native_controls = _score_native(
+                pci_control_counts, lambda k, p=f"{req_id}.": k.startswith(p)
+            )
+            g_total, g_crit, g_agents, _ = _score_groups(req["rule_groups"], group_counts)
+            total = n_total + g_total
+            critical = n_crit + g_crit
+            agents = n_agents | g_agents
 
-            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            status = _status(total, critical)
             req_results.append({
                 "requirement": req_id,
                 "title": req["title"],
@@ -771,7 +746,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type":  "pci_dss_v4.0",
             "time_range":   time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_requirements": len(req_results),
                 "failing": len(failing),
@@ -794,7 +769,7 @@ def register(ctx: ToolContext) -> None:
 
     # ── HIPAA dedicated summary ───────────────────────────────────────────────
 
-    @mcp.tool()
+    @_summary_tool()
     async def hipaa_compliance_summary(
         time_range: str = "30d",
         min_level: int = 5,
@@ -840,70 +815,22 @@ def register(ctx: ToolContext) -> None:
             },
         ]
 
-        body = {
-            "size": 0,
-            "query": {
-                "bool": {
-                    "filter": [
-                        time_window(f"now-{time_range}"),
-                        {"range": {"rule.level": {"gte": min_level}}},
-                    ]
-                }
-            },
-            "aggs": {
-                "by_hipaa_control": {
-                    "terms": {"field": "rule.hipaa", "size": 100},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                },
-                "by_group": {
-                    "terms": {"field": "rule.groups", "size": 300},
-                    "aggs": {
-                        "critical": {"filter": {"range": {"rule.level": {"gte": 12}}}},
-                        "top_agents": {"terms": {"field": "agent.name", "size": 3}},
-                    },
-                },
-            },
-        }
-        res = await idx.search(body)
-
-        hipaa_control_counts: dict[str, dict] = {
-            b["key"]: {
-                "total": b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
-            }
-            for b in res["aggregations"]["by_hipaa_control"]["buckets"]
-        }
-        group_counts: dict[str, dict] = {
-            b["key"]: {
-                "total": b["doc_count"],
-                "critical": b["critical"]["doc_count"],
-                "agents": [a["key"] for a in b["top_agents"]["buckets"]],
-            }
-            for b in res["aggregations"]["by_group"]["buckets"]
-        }
+        _, group_counts, hipaa_control_counts = await _run_group_aggregation(
+            idx, time_range, min_level, native_field="rule.hipaa",
+        )
 
         safeguard_results = []
         for sg in HIPAA_SAFEGUARDS:
-            total = critical = 0
-            agents: set = set()
-            native_hits = [
-                ctrl for ctrl in sg["controls"] if ctrl in hipaa_control_counts
-            ]
-            for ctrl in native_hits:
-                total    += hipaa_control_counts[ctrl]["total"]
-                critical += hipaa_control_counts[ctrl]["critical"]
-                agents.update(hipaa_control_counts[ctrl]["agents"])
-            for grp in sg["rule_groups"]:
-                if grp in group_counts:
-                    total    += group_counts[grp]["total"]
-                    critical += group_counts[grp]["critical"]
-                    agents.update(group_counts[grp]["agents"])
+            controls = set(sg["controls"])
+            n_total, n_crit, n_agents, native_hits = _score_native(
+                hipaa_control_counts, lambda k, c=controls: k in c
+            )
+            g_total, g_crit, g_agents, _ = _score_groups(sg["rule_groups"], group_counts)
+            total = n_total + g_total
+            critical = n_crit + g_crit
+            agents = n_agents | g_agents
 
-            status = "FAILING" if critical > 0 else "WARNING" if total > 10 else "OK"
+            status = _status(total, critical)
             safeguard_results.append({
                 "safeguard_id":   sg["id"],
                 "category":       sg["category"],
@@ -928,7 +855,7 @@ def register(ctx: ToolContext) -> None:
         return {
             "report_type":  "hipaa_security_rule",
             "time_range":   time_range,
-            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "total_safeguards": len(safeguard_results),
                 "failing": len(failing),
@@ -948,6 +875,38 @@ def register(ctx: ToolContext) -> None:
                 "HIPAA Breach Notification Rule events require manual review."
             ),
         }
+
+    # ── Unified framework summary (consolidation) ─────────────────────────────
+    # Single parameterized entry point for the five rule-group framework
+    # summaries above. The per-framework tools remain registered as backward-
+    # compatible aliases (unless WAZUH_MCP_LEGACY_ALIASES=false), so this adds a
+    # cleaner surface without removing anything.
+    _FRAMEWORK_SUMMARIES = {
+        "iso27001": iso27001_compliance_summary,
+        "nist_csf2": nist_csf2_compliance_summary,
+        "soc2": soc2_compliance_summary,
+        "pci_dss": pci_dss_compliance_summary,
+        "hipaa": hipaa_compliance_summary,
+    }
+
+    @mcp.tool()
+    async def compliance_framework_summary(
+        framework: str = "pci_dss", time_range: str = "30d", min_level: int = 5
+    ) -> dict:
+        """Generate a compliance posture report for a named framework.
+
+        framework: iso27001 | nist_csf2 | soc2 | pci_dss | hipaa
+        One entry point for the per-framework summaries. Returns the same
+        report the dedicated tool would (per-control/function/criterion status,
+        alert counts, top agents, posture).
+        """
+        fn = _FRAMEWORK_SUMMARIES.get(framework)
+        if fn is None:
+            return {
+                "error": f"Unknown framework '{framework}'",
+                "supported": sorted(_FRAMEWORK_SUMMARIES),
+            }
+        return await fn(time_range=time_range, min_level=min_level)
 
     # ── Compliance drift detection ────────────────────────────────────────────
 
@@ -1009,7 +968,7 @@ def register(ctx: ToolContext) -> None:
         existing_baseline = _load_kv(baseline_key)
 
         if save_baseline or existing_baseline is None:
-            saved_at = datetime.datetime.utcnow().isoformat() + "Z"
+            saved_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             _save_kv(baseline_key, {
                 "snapshot": current_snapshot,
                 "saved_at": saved_at,
@@ -1082,7 +1041,7 @@ def register(ctx: ToolContext) -> None:
             "framework": framework,
             "drift_status": overall_drift,
             "baseline_saved_at": baseline_data["saved_at"],
-            "compared_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "compared_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             "summary": {
                 "worsened_controls":  len(worsened),
                 "improved_controls":  len(improved),

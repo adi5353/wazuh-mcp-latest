@@ -3,6 +3,13 @@ body-size and security-header middleware, the alert pre-computer, the triage
 engine, MITRE enrichment, payload helpers, and the TTL cache."""
 from __future__ import annotations
 
+import pytest
+
+# Quarantined from the coverage gate: these exercise code paths against mocked
+# clients to catch crashes/imports, but assert little real behaviour. Run via
+# `pytest -m smoke`; excluded from the gated run by `-m "not smoke"` (pyproject).
+pytestmark = pytest.mark.smoke
+
 import asyncio
 
 import pytest
@@ -426,23 +433,22 @@ class _GeoResp:
 
 class TestGeoIP:
     def _patch(self, monkeypatch, responses):
-        """responses: callable(url) -> _GeoResp."""
+        """responses: callable(url) -> _GeoResp.
+
+        geo.py now uses a shared, lazily-created client via _get_geo_client()
+        plus a per-IP cache. Patch the client accessor directly and reset the
+        cache so each test starts clean and shares no state with its neighbours.
+        """
         import wazuh_mcp.geo as geo
 
         class _Client:
-            def __init__(self, *a, **k):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *a):
-                return False
+            is_closed = False
 
             async def get(self, url, **k):
                 return responses(url)
 
-        monkeypatch.setattr(geo.httpx, "AsyncClient", lambda *a, **k: _Client())
+        monkeypatch.setattr(geo, "_get_geo_client", lambda: _Client())
+        geo._geo_cache.clear()
         return geo
 
     @pytest.mark.asyncio

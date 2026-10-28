@@ -7,6 +7,10 @@ from ..tool_context import ToolContext
 
 import defusedxml.ElementTree as ET
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def _validate_rule_xml_impl(xml_content: str) -> dict:
     """Pure validation logic — callable from other modules without an MCP context."""

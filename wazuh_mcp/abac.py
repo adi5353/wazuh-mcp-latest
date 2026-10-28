@@ -154,6 +154,32 @@ def filter_agents_by_abac(agents: list[dict]) -> list[dict]:
     return result
 
 
+def filter_manager_agents(resp: dict) -> dict:
+    """Scope a Wazuh Manager ``/agents``-style response by ABAC group/agent rules.
+
+    The Manager API has no ABAC layer (unlike the indexer's ``_apply_abac_scope``),
+    so agent-enumeration tools/resources that call it directly would otherwise
+    leak the whole fleet to a group-restricted session. This filters
+    ``data.affected_items`` through :func:`filter_agents_by_abac`, fixes up
+    ``total_affected_items`` to the visible count, and tags ``abac_filtered``
+    when anything was removed. No-op (unchanged response) when ABAC is not
+    configured, so single-tenant deployments see identical output.
+    """
+    if not abac_enabled() or not isinstance(resp, dict):
+        return resp
+    data = resp.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("affected_items"), list):
+        return resp
+    items = data["affected_items"]
+    visible = filter_agents_by_abac(items)
+    if len(visible) == len(items):
+        return resp
+    new_data = {**data, "affected_items": visible}
+    if "total_affected_items" in new_data:
+        new_data["total_affected_items"] = len(visible)
+    return {**resp, "data": new_data, "abac_filtered": True}
+
+
 def abac_status() -> dict:
     """Return the current ABAC configuration — useful for debugging."""
     return {

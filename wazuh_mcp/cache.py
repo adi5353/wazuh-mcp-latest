@@ -18,7 +18,14 @@ from typing import Any, Callable
 
 _TTL: int = int(os.getenv("WAZUH_MCP_CACHE_TTL_SECONDS", "60"))
 
+# Hard cap on cached entries. The cache key includes every kwarg (time ranges,
+# agent IDs, free-text queries), so high-cardinality SOC traffic generates near
+# unique keys forever — without a cap the dict grows until OOM. On overflow we
+# purge expired entries first, then evict oldest-inserted (FIFO) keys.
+_MAX_ENTRIES: int = int(os.getenv("WAZUH_MCP_CACHE_MAX_ENTRIES", "2000"))
+
 # _store: cache_key → (expire_monotonic, result, fn_name)
+# Insertion order is preserved (Python 3.7+ dict) and used for FIFO eviction.
 _store: dict[str, tuple[float, Any, str]] = {}
 
 # Hit/miss counters for observability
@@ -46,8 +53,25 @@ def _get(key: str) -> tuple[bool, Any]:
     return True, value
 
 
+def _evict_if_full() -> None:
+    """Keep _store under _MAX_ENTRIES: drop expired entries first, then evict the
+    oldest-inserted keys (FIFO) until back under the cap."""
+    if len(_store) < _MAX_ENTRIES:
+        return
+    now = time.monotonic()
+    for k in [k for k, (exp, _, _fn) in _store.items() if exp <= now]:
+        del _store[k]
+    # Still over the cap (all entries live) — evict oldest-inserted first.
+    while len(_store) >= _MAX_ENTRIES:
+        oldest = next(iter(_store))
+        del _store[oldest]
+
+
 def _put(key: str, fn_name: str, value: Any) -> None:
     if _TTL > 0:
+        _evict_if_full()
+        # Refresh insertion order on overwrite so a re-cached key counts as recent.
+        _store.pop(key, None)
         _store[key] = (time.monotonic() + _TTL, value, fn_name)
 
 

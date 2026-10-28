@@ -4,6 +4,13 @@ These tests use mocked contexts to exercise code paths without needing live infr
 """
 from __future__ import annotations
 
+import pytest
+
+# Quarantined from the coverage gate: these exercise code paths against mocked
+# clients to catch crashes/imports, but assert little real behaviour. Run via
+# `pytest -m smoke`; excluded from the gated run by `-m "not smoke"` (pyproject).
+pytestmark = pytest.mark.smoke
+
 import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -495,10 +502,10 @@ class TestRBACModule:
     def test_convenience_aliases(self):
         from wazuh_mcp import rbac
         with patch.dict(os.environ, {"WAZUH_MCP_USER_ROLE": "viewer"}):
-            assert rbac.analyst_only() is not None  # viewer < analyst
-            assert rbac.responder_only() is not None
-            assert rbac.admin_only() is not None
-            assert rbac.viewer_only() is None  # viewer >= viewer
+            assert rbac.require_analyst_or_above() is not None  # viewer < analyst
+            assert rbac.require_responder_or_above() is not None
+            assert rbac.require_admin_or_above() is not None
+            assert rbac.require_viewer_or_above() is None  # viewer >= viewer
 
 
 # ── circuit_breaker.py ────────────────────────────────────────────────────────
@@ -547,6 +554,41 @@ class TestIdentity:
         with patch.dict(os.environ, {"WAZUH_MCP_KEY_MAP": "viewer:key1"}):
             key_map = _parse_key_map()
         assert key_map.get("unknown-key") is None
+
+    def test_resolve_role_for_key_constant_time_match(self):
+        """Constant-time lookup still returns the correct role for a valid key."""
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        with patch.object(
+            identity, "_KEY_MAP",
+            {"key_abc": ROLE.VIEWER, "key_def": ROLE.ANALYST, "key_xyz": ROLE.ADMIN},
+        ):
+            assert identity.resolve_role_for_key("key_def") == ROLE.ANALYST
+            assert identity.resolve_role_for_key("key_xyz") == ROLE.ADMIN
+            assert identity.resolve_role_for_key("key_abc") == ROLE.VIEWER
+
+    def test_resolve_role_for_key_constant_time_unknown(self):
+        """Unknown key resolves to None, not an exception."""
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        with patch.object(identity, "_KEY_MAP", {"key_abc": ROLE.ANALYST}):
+            assert identity.resolve_role_for_key("not-a-real-key") is None
+
+    def test_resolve_role_for_key_empty_map(self):
+        """Empty key map resolves any key to None without error."""
+        from wazuh_mcp import identity
+        with patch.object(identity, "_KEY_MAP", {}):
+            assert identity.resolve_role_for_key("anything") is None
+
+    def test_resolve_role_for_key_non_ascii_no_crash(self):
+        """A non-ASCII candidate key must not raise (would be a TypeError oracle
+        with str-based compare_digest); it simply resolves to None."""
+        from wazuh_mcp import identity
+        from wazuh_mcp.rbac import ROLE
+        with patch.object(identity, "_KEY_MAP", {"key_abc": ROLE.ANALYST}):
+            # Unicode + lone surrogate — both must be handled gracefully.
+            assert identity.resolve_role_for_key("kéy_with_ünïcode") is None
+            assert identity.resolve_role_for_key("\ud800") is None
 
     def test_record_injection_attempt(self):
         from wazuh_mcp import identity

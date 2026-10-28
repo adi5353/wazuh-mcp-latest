@@ -13,6 +13,10 @@ from ..tool_context import ToolContext
 import os
 import base64
 
+from ..rbac import ROLE
+
+REQUIRED_ROLE = ROLE.ANALYST
+
 
 def _headers() -> tuple[dict | None, str | None]:
     token = os.getenv("AZURE_DEVOPS_TOKEN", "")
@@ -33,9 +37,6 @@ def _base_url() -> str:
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 

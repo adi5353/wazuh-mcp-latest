@@ -8,7 +8,8 @@ import os
 
 import httpx
 
-from ..rbac import responder_only
+from ..rbac import require_responder_or_above, ROLE
+REQUIRED_ROLE = ROLE.RESPONDER
 from ..validators import safe_validate, validate_time_range, validate_rule_id
 
 log = logging.getLogger("wazuh-mcp")
@@ -16,7 +17,6 @@ log = logging.getLogger("wazuh-mcp")
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
     idx = ctx.idx
     cfg = ctx.cfg
     _require_writes = ctx.require_writes
@@ -170,7 +170,7 @@ def register(ctx: ToolContext) -> None:
         dry_run=False: removes analyst_tag and suppression_reason fields.
         Requires WAZUH_ALLOW_WRITES=true. Requires role: responder or above.
         """
-        err = responder_only()
+        err = require_responder_or_above()
         if err:
             return err
         _, verr = safe_validate(validate_rule_id, rule_id)
@@ -231,7 +231,7 @@ def register(ctx: ToolContext) -> None:
                     " ctx._source.remove('suppression_reason');"
                     " ctx._source.suppression_expired_at = params.ts"
                 ),
-                "params": {"ts": datetime.datetime.utcnow().isoformat() + "Z"},
+                "params": {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")},
             },
         }
         try:

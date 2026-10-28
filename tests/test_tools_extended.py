@@ -64,7 +64,7 @@ class TestAgentUpgrades:
         assert result["agents"][0]["agent_id"] == "001"
 
     def test_trigger_dry_run_default(self):
-        with patch("wazuh_mcp.rbac.responder_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_responder_or_above", return_value=None), \
              patch("wazuh_mcp.server._require_writes", return_value=None):
             result = _run(self.tools["trigger_agent_upgrade"](agent_ids=["001"]))
         assert result["dry_run"] is True
@@ -79,7 +79,7 @@ class TestAgentUpgrades:
         assert "error" in result
 
     def test_rollback_dry_run_default(self):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None), \
              patch("wazuh_mcp.server._require_writes", return_value=None):
             result = _run(self.tools["rollback_agent_upgrade"](agent_id="001"))
         assert result["dry_run"] is True
@@ -144,20 +144,20 @@ class TestManagerAudit:
         })
 
     def test_search_audit_log_returns_entries(self):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None):
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None):
             result = _run(self.tools["search_manager_audit_log"]())
         assert result["total"] == 1
         assert result["entries"][0]["user"] == "admin"
 
     def test_search_audit_log_with_filters(self):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None):
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None):
             _run(self.tools["search_manager_audit_log"](action_type="security:login", user="admin"))
         call_path = self.wz.request.call_args[0][1]
         assert "action=security:login" in call_path
         assert "user=admin" in call_path
 
     def test_get_manager_login_history(self):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None):
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None):
             result = _run(self.tools["get_manager_login_history"]())
         assert "logins" in result
 
@@ -165,7 +165,7 @@ class TestManagerAudit:
         self.wz.request = AsyncMock(return_value={
             "data": {"affected_items": [{"id": 1, "username": "admin", "allow_run_as": True, "roles": []}]}
         })
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None):
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None):
             result = _run(self.tools["list_manager_api_users"]())
         assert result["total"] == 1
         assert result["users"][0]["username"] == "admin"
@@ -202,7 +202,7 @@ class TestRootcheck:
         self.wz.request.assert_called_once_with("GET", "/rootcheck/001/last_scan")
 
     def test_clear_rootcheck_dry_run_default(self):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None), \
              patch("wazuh_mcp.server._require_writes", return_value=None):
             result = _run(self.tools["clear_rootcheck_results"](agent_id="001"))
         assert result["dry_run"] is True
@@ -526,13 +526,13 @@ class TestAuditMgmt:
         self.tools, _, _, _ = _make_env("wazuh_mcp.tools.audit_mgmt")
 
     def test_get_stats_missing_file(self, tmp_path):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None), \
              patch.dict(os.environ, {"WAZUH_AUDIT_LOG": str(tmp_path / "nonexistent.jsonl")}):
             result = _run(self.tools["get_audit_log_stats"]())
         assert "error" in result
 
     def test_search_audit_log_missing_file(self, tmp_path):
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None), \
              patch.dict(os.environ, {"WAZUH_AUDIT_LOG": str(tmp_path / "nonexistent.jsonl")}):
             result = _run(self.tools["search_audit_log"]())
         assert "error" in result
@@ -540,7 +540,7 @@ class TestAuditMgmt:
     def test_verify_integrity_no_signing_key(self, tmp_path):
         log = tmp_path / "audit.jsonl"
         log.write_text('{"ts":"2026","tool":"test"}\n')
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None), \
              patch.dict(os.environ, {
                  "WAZUH_AUDIT_LOG": str(log),
                  "WAZUH_AUDIT_LOG_SIGNING_KEY": ""
@@ -556,7 +556,7 @@ class TestAuditMgmt:
             {"ts": "2026-01-02T00:00:00Z", "tool": "list_agents"},
         ]
         log.write_text("\n".join(json.dumps(r) for r in records) + "\n")
-        with patch("wazuh_mcp.rbac.admin_only", return_value=None), \
+        with patch("wazuh_mcp.rbac.require_admin_or_above", return_value=None), \
              patch.dict(os.environ, {"WAZUH_AUDIT_LOG": str(log)}):
             result = _run(self.tools["get_audit_log_stats"]())
         assert result["total_records"] == 2

@@ -60,12 +60,44 @@ def _validate_query_fields(body: dict) -> None:
         except ValueError as exc:
             raise ValueError(f"Query field validation failed: {exc}") from exc
 
+
+def _abac_wrap_query(inner_query: dict) -> dict:
+    """Return *inner_query* wrapped so ABAC group/agent filters are mandatory.
+
+    Returns the query unchanged when ABAC is not configured (zero behaviour
+    change for single-tenant deployments). When ABAC is active, the caller's
+    query is moved under ``bool.must`` and the ABAC clauses are added as
+    non-scoring ``bool.filter`` entries — documents outside the session's
+    allowed groups/agents can never match, regardless of the original shape.
+    """
+    from .abac import abac_enabled, abac_filter_clause
+    if not abac_enabled():
+        return inner_query
+    clauses = abac_filter_clause()
+    if not clauses:
+        return inner_query
+    return {"bool": {"must": [inner_query], "filter": clauses}}
+
+
+def _apply_abac_scope(body: dict) -> dict:
+    """Wrap *body*'s query so ABAC group/agent filters are mandatory (C2).
+
+    Single chokepoint for ``search()``; see :func:`_abac_wrap_query`.
+    """
+    from .abac import abac_enabled
+    if not abac_enabled():
+        return body
+    inner_query = body.get("query", {"match_all": {}})
+    wrapped = _abac_wrap_query(inner_query)
+    if wrapped is inner_query:
+        return body
+    return {**body, "query": wrapped}
+
+
 log = logging.getLogger(__name__)
 
-# ── Retry configuration (same policy as WazuhClient) ─────────────────────────
-_MAX_RETRIES = 3
-_RETRY_BASE  = 1.0   # seconds — first delay before jitter
-_RETRY_CAP   = 10.0  # seconds — maximum delay before jitter
+# ── Retry configuration (shared policy — see wazuh_mcp/http_policy.py) ─────────
+from .http_policy import MAX_RETRIES as _MAX_RETRIES, is_retryable as _is_retryable, retry_sleep as _retry_sleep_shared
 
 # ── Connection pool limits (override via env vars) ────────────────────────────
 # Defaults raised to 100/40 to prevent pool saturation under real SOC load
@@ -74,24 +106,9 @@ _POOL_MAX_CONNECTIONS: int = int(os.getenv("WAZUH_INDEXER_POOL_SIZE",    "100"))
 _POOL_MAX_KEEPALIVE:   int = int(os.getenv("WAZUH_INDEXER_MAX_KEEPALIVE",  "40"))
 
 
-def _is_retryable(exc: Exception) -> bool:
-    """Return True when the exception warrants a retry."""
-    if isinstance(exc, httpx.RequestError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return status >= 500 or status == 429
-    return False
-
-
 async def _retry_sleep(attempt: int) -> None:
-    """Exponential backoff with ±1s uniform jitter."""
-    delay = min(_RETRY_BASE * (2 ** attempt), _RETRY_CAP) + random.uniform(0, 1)
-    log.warning(
-        "Wazuh Indexer: transient error on attempt %d/%d — retrying in %.1fs",
-        attempt + 1, _MAX_RETRIES, delay,
-    )
-    await asyncio.sleep(delay)
+    """Exponential backoff with ±1s uniform jitter (shared policy)."""
+    await _retry_sleep_shared(attempt, label="Wazuh Indexer")
 
 
 class WazuhIndexer:
@@ -136,6 +153,11 @@ class WazuhIndexer:
         # M4: reject user-controlled fields not in the allow-list
         if validate_fields:
             _validate_query_fields(body)
+        # C2: enforce ABAC tenant/group scoping centrally on EVERY query. This is
+        # the single chokepoint that makes WAZUH_MCP_ALLOWED_GROUPS/AGENTS actually
+        # restrict results — individual tools must not be relied on to remember it.
+        # No-op (and zero behaviour change) unless ABAC is configured.
+        body = _apply_abac_scope(body)
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(
@@ -148,7 +170,7 @@ class WazuhIndexer:
         _key = _idx + ":" + _json.dumps(body, sort_keys=True, separators=(",", ":"))
         if _key in self._inflight:
             return await asyncio.shield(self._inflight[_key])
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._inflight[_key] = fut
         try:
@@ -166,24 +188,33 @@ class WazuhIndexer:
         """Internal search with retry logic (no circuit breaker — called by search())."""
         # Enforce server-side pagination cap: never request more than 500 docs in one call.
         # Callers should use search_after / page_token for large result sets.
+        #
+        # This is an explicit raise, NOT an `assert`: assertions are stripped under
+        # `python -O` / PYTHONOPTIMIZE, which would silently change the contract.
+        # We fail loudly rather than silently truncating, because silent truncation
+        # in a SIEM (e.g. dropping alerts from a correlation window) hides data and
+        # can mask an attack chain. Callers must page with search_after instead.
         _MAX_PAGE_SIZE = 500
         if "size" in body:
-            assert body["size"] <= _MAX_PAGE_SIZE, (
-                f"Indexer size={body['size']} exceeds hard cap of {_MAX_PAGE_SIZE}. "
-                "Use pagination (search_after) for large result sets."
-            )
+            if body["size"] > _MAX_PAGE_SIZE:
+                raise ValueError(
+                    f"Indexer size={body['size']} exceeds hard cap of {_MAX_PAGE_SIZE}. "
+                    "Use pagination (search_after / page_token) for large result sets."
+                )
             body = {**body, "size": min(body["size"], _MAX_PAGE_SIZE)}
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_search"
         last_exc: Exception = RuntimeError("No attempts made")
-        for attempt in range(_MAX_RETRIES):
+        # _MAX_RETRIES + 1 total attempts (matches WazuhClient + the shared
+        # backoff schedule: 3 sleeps of ~1s/2s/4s between 4 attempts).
+        for attempt in range(_MAX_RETRIES + 1):
             try:
                 r = await self._client.post(url, json=body)
                 r.raise_for_status()
                 return r.json()
             except Exception as exc:
                 last_exc = exc
-                if _is_retryable(exc) and attempt < _MAX_RETRIES - 1:
+                if _is_retryable(exc) and attempt < _MAX_RETRIES:
                     await _retry_sleep(attempt)
                     continue
                 raise
@@ -201,6 +232,11 @@ class WazuhIndexer:
         # M4: reject user-controlled fields not in the allow-list
         if validate_fields:
             _validate_query_fields({"query": query})
+        # C2: enforce ABAC scoping on counts too. search() already wraps its
+        # body; count() previously skipped this, letting count-based tools
+        # (frequency enrichment, compliance counts) reflect document volumes
+        # from groups outside the caller's scope. No-op unless ABAC configured.
+        query = _abac_wrap_query(query)
         if not opensearch_breaker.allow():
             s = opensearch_breaker.status()
             raise RuntimeError(
@@ -220,14 +256,15 @@ class WazuhIndexer:
         idx = index or self.cfg.alerts_index
         url = f"{self.cfg.indexer_host}/{idx}/_count"
         last_exc: Exception = RuntimeError("No attempts made")
-        for attempt in range(_MAX_RETRIES):
+        # _MAX_RETRIES + 1 total attempts (matches WazuhClient + _search_impl).
+        for attempt in range(_MAX_RETRIES + 1):
             try:
                 r = await self._client.post(url, json={"query": query})
                 r.raise_for_status()
                 return r.json()["count"]
             except Exception as exc:
                 last_exc = exc
-                if _is_retryable(exc) and attempt < _MAX_RETRIES - 1:
+                if _is_retryable(exc) and attempt < _MAX_RETRIES:
                     await _retry_sleep(attempt)
                     continue
                 raise

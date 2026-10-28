@@ -24,15 +24,18 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import asyncio
+import ipaddress
 import logging
 import os
+from collections.abc import Iterator, MutableMapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import uuid
 
 import httpx
 
-from ..rbac import admin_only, analyst_or_above
+from ..rbac import require_admin_or_above, require_analyst_or_above, ROLE
+REQUIRED_ROLE = ROLE.RESPONDER
 from ..state_store import save_monitor_state, load_monitor_state, clear_monitor_state
 
 log = logging.getLogger("wazuh-mcp")
@@ -60,43 +63,93 @@ def _autonomous_ar_allowed(cfg, ip: str | None) -> str | None:
 
 
 # ── Shared state ──────────────────────────────────────────────────────────────
-_monitor_state: dict[str, Any] = {
-    "running": False,
-    "task": None,
-    "started_at": None,
-    "stopped_at": None,
-    "interval_seconds": 60,
-    "severity_threshold": 10,
-    "alerts_processed": 0,
-    "actions_taken": 0,
-    "last_poll": None,
-    "recent_actions": [],
-    "seen_alert_ids": [],   # deduplication (capped to 500)
-    # Auto-ticketing config
-    "auto_ticket": {
-        "enabled": False,
-        "backend": "jira",               # "jira" | "servicenow"
-        "min_level": 13,                 # ticket for this level and above
-        "project_key": "",               # Jira project key
-        "labels": ["autonomous-soc"],
-    },
-    # Pending suppression queue (human approval gate)
-    "pending_suppressions": [],          # list of suppression candidate dicts
-    "approved_suppressions": [],
-    "rejected_suppressions": [],
-    # Scheduled reports config
-    "schedule": {
-        "handover_hours_utc": [],        # e.g. [8, 16, 0] → 3 shifts
-        "handover_channel": "",
-        "digest_day": "monday",          # day for weekly digest
-        "digest_hour_utc": 8,
-        "digest_recipients": [],
-        "last_handover_day": None,       # date string "YYYY-MM-DD HH"
-        "last_digest_week": None,        # ISO week string
-    },
-    # ROI integration
-    "roi_enabled": True,
-}
+def _new_monitor_state() -> dict[str, Any]:
+    """Fresh default monitor state for one tenant."""
+    return {
+        "running": False,
+        "task": None,
+        "started_at": None,
+        "stopped_at": None,
+        "interval_seconds": 60,
+        "severity_threshold": 10,
+        "alerts_processed": 0,
+        "actions_taken": 0,
+        "last_poll": None,
+        "recent_actions": [],
+        "seen_alert_ids": [],   # deduplication (capped to 500)
+        # Auto-ticketing config
+        "auto_ticket": {
+            "enabled": False,
+            "backend": "jira",               # "jira" | "servicenow"
+            "min_level": 13,                 # ticket for this level and above
+            "project_key": "",               # Jira project key
+            "labels": ["autonomous-soc"],
+        },
+        # Pending suppression queue (human approval gate)
+        "pending_suppressions": [],          # list of suppression candidate dicts
+        "approved_suppressions": [],
+        "rejected_suppressions": [],
+        # Scheduled reports config
+        "schedule": {
+            "handover_hours_utc": [],        # e.g. [8, 16, 0] → 3 shifts
+            "handover_channel": "",
+            "digest_day": "monday",          # day for weekly digest
+            "digest_hour_utc": 8,
+            "digest_recipients": [],
+            "last_handover_day": None,       # date string "YYYY-MM-DD HH"
+            "last_digest_week": None,        # ISO week string
+        },
+        # ROI integration
+        "roi_enabled": True,
+    }
+
+
+def _active_tenant_name() -> str:
+    """Resolve the caller's active MSSP tenant, or '(default)' in single-tenant mode.
+
+    Reads the per-task tenant ContextVar from identity.py (a low-level module),
+    so this never imports the heavy server module. In single-tenant mode the
+    ContextVar is empty, so this is always '(default)' and behaviour is unchanged.
+    """
+    from ..identity import active_tenant_name
+    return active_tenant_name()
+
+
+class _TenantMonitorState(MutableMapping):
+    """Per-tenant view over the autonomous-monitor state (H1).
+
+    The monitor was a single process-global dict, so in MSSP multi-tenant mode
+    one tenant's start/stop/configure mutated — and status/list tools leaked —
+    another tenant's monitor. This proxy routes every access to the *current
+    tenant's* store (keyed by ``_active_tenant_name()``), isolating monitors,
+    suppression queues, and counters per tenant. The background loop captures
+    the starting tenant's context at ``create_task`` time, so it keeps writing
+    to its own tenant's store. In single-tenant mode there is exactly one store
+    ('(default)'), so behaviour is identical to before.
+
+    It is a real ``MutableMapping`` so it drops in wherever the old dict was used
+    (e.g. ``save_monitor_state``); ``get``/``items``/``keys``/``update``/``in``
+    come from the mixin and route through ``_cur`` via the methods below.
+    """
+    def __init__(self) -> None:
+        self._stores: dict[str, dict[str, Any]] = {}
+
+    def _cur(self) -> dict[str, Any]:
+        name = _active_tenant_name()
+        store = self._stores.get(name)
+        if store is None:
+            store = _new_monitor_state()
+            self._stores[name] = store
+        return store
+
+    def __getitem__(self, key: Any) -> Any: return self._cur()[key]
+    def __setitem__(self, key: Any, value: Any) -> None: self._cur()[key] = value
+    def __delitem__(self, key: Any) -> None: del self._cur()[key]
+    def __iter__(self) -> "Iterator[Any]": return iter(self._cur())
+    def __len__(self) -> int: return len(self._cur())
+
+
+_monitor_state = _TenantMonitorState()
 
 # ── Rule-based triage trees ────────────────────────────────────────────────────
 _TRIAGE_TREES: dict[str, list[tuple[str, dict]]] = {
@@ -324,7 +377,7 @@ async def _maybe_send_scheduled_reports(cfg, tool_registry: dict) -> None:
         fn_summary = tool_registry.get("generate_weekly_summary")
         if fn_summary and recipients:
             try:
-                report = await asyncio.wait_for(fn_summary(), timeout=30)
+                await asyncio.wait_for(fn_summary(), timeout=30)
                 # Also push to Slack if configured
                 fn_slack = tool_registry.get("send_weekly_summary_to_slack")
                 if fn_slack:
@@ -372,11 +425,24 @@ async def _enrich_and_notify(alert: dict, wz, idx, cfg,
 
     # 2. GeoIP enrichment
     ip_risk = None
+    # Only enrich routable, public IPs. Private/loopback/invalid addresses are
+    # never sent to the third-party geo service — leaking internal IPs to an
+    # external endpoint would contradict the server's own PII-egress policy.
+    _is_public_ip = False
     if srcip:
         try:
+            _parsed_ip = ipaddress.ip_address(srcip)
+            _is_public_ip = not (_parsed_ip.is_private or _parsed_ip.is_loopback
+                                 or _parsed_ip.is_link_local or _parsed_ip.is_multicast
+                                 or _parsed_ip.is_reserved or _parsed_ip.is_unspecified)
+        except ValueError:
+            _is_public_ip = False
+    if _is_public_ip:
+        try:
             async with httpx.AsyncClient(timeout=10) as c:
+                # HTTPS only — never leak the source IP in cleartext (matches geo.py).
                 r = await c.get(
-                    f"http://ip-api.com/json/{srcip}",
+                    f"https://ip-api.com/json/{srcip}",
                     params={"fields": "country,isp,hosting,proxy,tor"},
                 )
                 if r.status_code == 200:
@@ -575,7 +641,7 @@ def register(ctx: ToolContext) -> None:
         Configure auto-ticketing with configure_auto_ticketing().
         Configure scheduled reports with configure_scheduled_reports().
         """
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -626,7 +692,7 @@ def register(ctx: ToolContext) -> None:
     @mcp.tool()
     async def stop_autonomous_monitor() -> dict:
         """Stop the autonomous SOC monitoring loop. Requires role: admin."""
-        err = admin_only()
+        err = require_admin_or_above()
         if err:
             return err
 
@@ -725,7 +791,7 @@ def register(ctx: ToolContext) -> None:
         rules are queued here rather than auto-suppressed. An analyst reviews and
         calls approve_suppression() or reject_suppression() for each.
         """
-        err = analyst_or_above()
+        err = require_analyst_or_above()
         if err:
             return err
 
@@ -755,7 +821,7 @@ def register(ctx: ToolContext) -> None:
             suppression_id: The 'id' field from list_pending_suppressions().
             note:           Optional analyst note explaining the decision.
         """
-        err = analyst_or_above()
+        err = require_analyst_or_above()
         if err:
             return err
 
@@ -796,7 +862,7 @@ def register(ctx: ToolContext) -> None:
             suppression_id: The 'id' field from list_pending_suppressions().
             note:           Optional analyst note explaining the decision.
         """
-        err = analyst_or_above()
+        err = require_analyst_or_above()
         if err:
             return err
 

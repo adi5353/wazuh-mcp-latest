@@ -25,6 +25,7 @@ the event is logged. Counter resets on each new session (ContextVar default).
 from __future__ import annotations
 
 import contextvars
+import hmac
 import logging
 import os
 import threading
@@ -50,10 +51,29 @@ _ctx_identity_key: contextvars.ContextVar[Optional[str]] = contextvars.ContextVa
 
 INJECTION_LOCKOUT_THRESHOLD = 3
 
+# Per-session active MSSP tenant. Defined here (a low-level module) rather than
+# in server.py so tool modules can read the active tenant without importing the
+# heavy server module. No mutable default — readers pass their own fallback via
+# .get({}) — so a shared default dict can't leak across sessions.
+_ctx_active_tenant: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "_ctx_active_tenant"
+)
+
+
+def active_tenant_name() -> str:
+    """Return the caller's active tenant name, or '(default)' in single-tenant mode."""
+    return (_ctx_active_tenant.get({}) or {}).get("name") or "(default)"
+
 # M2: Persistent injection counter across requests — keyed by identity.
-# Uses a process-wide dict protected by a lock so concurrent asyncio tasks can
-# each increment atomically without interfering with each other.
-_persistent_injection_counts: dict[str, int] = {}
+# Uses a process-wide store protected by a lock so concurrent asyncio tasks can
+# each increment atomically without interfering with each other. Bounded by
+# size + idle-TTL so the counter map can't grow without limit across callers.
+from .bounded_state import BoundedTTLStore
+
+_persistent_injection_counts: BoundedTTLStore[int] = BoundedTTLStore(
+    max_entries=int(os.getenv("WAZUH_MCP_MAX_TRACKED_IDENTITIES", "10000")),
+    ttl_seconds=float(os.getenv("WAZUH_MCP_IDENTITY_TTL_SECONDS", "86400")),
+)
 _persistent_injection_lock = threading.Lock()
 
 
@@ -64,24 +84,35 @@ def set_identity_key(key: str) -> None:
     _ctx_identity_key.set(hashlib.sha256(key.encode()).hexdigest()[:16])
 
 
+def get_identity_key() -> str:
+    """Return the current task's identity key (hashed API key), or 'anonymous'.
+
+    Used to key per-caller state such as the tool-failure circuit breaker so one
+    caller's retry loop cannot trip another caller's tools.
+    """
+    return _ctx_identity_key.get() or "anonymous"
+
+
 def get_persistent_injection_count(identity: str) -> int:
     """Return the cross-request injection count for *identity*."""
     with _persistent_injection_lock:
-        return _persistent_injection_counts.get(identity, 0)
+        return _persistent_injection_counts.get(identity) or 0
 
 
 def _increment_persistent(identity: str) -> int:
     """Atomically increment and return the new count for *identity*."""
     with _persistent_injection_lock:
-        new = _persistent_injection_counts.get(identity, 0) + 1
-        _persistent_injection_counts[identity] = new
+        new = (_persistent_injection_counts.get(identity) or 0) + 1
+        _persistent_injection_counts.set(identity, new)
         return new
 
 
 def reset_persistent_injection_count(identity: str) -> None:
     """Reset the persistent counter (e.g. after an admin override)."""
     with _persistent_injection_lock:
-        _persistent_injection_counts.pop(identity, None)
+        # BoundedTTLStore.pop takes a single key and is a no-op if absent
+        # (it does dict.pop(key, None) internally) — no default arg here.
+        _persistent_injection_counts.pop(identity)
 
 
 # ── Key map (parsed once at import) ──────────────────────────────────────────
@@ -109,8 +140,27 @@ _KEY_MAP: dict[str, ROLE] = _parse_key_map()
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def resolve_role_for_key(api_key: str) -> Optional[ROLE]:
-    """Return the role for a given API key, or None if unknown."""
-    return _KEY_MAP.get(api_key)
+    """Return the role for a given API key, or None if unknown.
+
+    Uses a constant-time scan over the key map instead of ``dict.get`` so the
+    response time does not leak whether a guessed key is a valid prefix. When
+    ``WAZUH_MCP_KEY_MAP`` is the only auth gate (no single ``WAZUH_MCP_API_KEY``
+    in front), this lookup *is* the authentication decision, so a plain dict
+    lookup would expose a timing oracle for key discovery.
+
+    Every entry is compared with :func:`hmac.compare_digest` and the loop never
+    short-circuits — the same work is done regardless of match position. Returns
+    the matched role, or ``None`` if no key matches.
+    """
+    # Encode to bytes: compare_digest on str rejects non-ASCII with TypeError,
+    # which a hostile caller could exploit as a separate oracle. Bytes comparison
+    # accepts any input and stays constant-time.
+    candidate = api_key.encode("utf-8", "surrogatepass")
+    matched: Optional[ROLE] = None
+    for known_key, role in _KEY_MAP.items():
+        if hmac.compare_digest(candidate, known_key.encode("utf-8", "surrogatepass")):
+            matched = role
+    return matched
 
 
 def set_session_role(role: ROLE) -> None:

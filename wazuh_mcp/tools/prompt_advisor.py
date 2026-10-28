@@ -9,6 +9,8 @@ from __future__ import annotations
 from ..tool_context import ToolContext
 
 import json
+from ..rbac import ROLE
+REQUIRED_ROLE = ROLE.VIEWER
 
 # ── Exact system prompt from the n8n PoC document (WAI00001) ─────────────────
 # Reproduced verbatim from the Confluence export. Used as the AI Agent
@@ -110,9 +112,6 @@ _GROQ_TPM_LIMIT = 12_000        # Groq llama-3.3-70b free-tier limit
 
 def register(ctx: ToolContext) -> None:
     mcp = ctx.mcp
-    wz = ctx.wz
-    idx = ctx.idx
-    cfg = ctx.cfg
     _cap = ctx.cap
     _truncate = ctx.truncate
 
