@@ -31,6 +31,8 @@ Include in your report:
 - Per-session RBAC via `WAZUH_MCP_KEY_MAP` (multi-user deployments)
 
 ### Authorization
+Read-only mode is the default (`WAZUH_MCP_READ_ONLY=true`): a transport-level guard blocks all non-read requests to the Manager and Indexer and hides write/notify tools. See [docs/READ_ONLY_MODE.md](docs/READ_ONLY_MODE.md).
+
 Four-tier RBAC: `viewer` < `analyst` < `responder` < `admin`. Every tool declares its minimum required role and rejects calls from lower-tier sessions.
 
 ### Input validation

@@ -38,6 +38,10 @@ class ToolMiddleware:
         registry = self._registry
 
         def capturing_decorator(fn: Any) -> Any:
+            # Read-only mode: write/notify tools are never registered.
+            from ..read_only import tool_hidden
+            if tool_hidden(fn.__name__):
+                return fn
             @functools.wraps(fn)
             async def wrapped(*fn_args: Any, **fn_kwargs: Any) -> Any:
                 from ..input_sanitizer import sanitize_input_value

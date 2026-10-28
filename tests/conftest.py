@@ -11,6 +11,8 @@ def mock_env(monkeypatch):
     monkeypatch.setenv("WAZUH_INDEXER_PASS", "test-password-not-real")
     monkeypatch.setenv("WAZUH_VERIFY_SSL", "false")
     monkeypatch.setenv("WAZUH_ALLOW_WRITES", "false")
+    # Legacy tests exercise write paths; read-only has its own tests (test_read_only.py).
+    monkeypatch.setenv("WAZUH_MCP_READ_ONLY", "false")
 
 
 @pytest.fixture(autouse=True)

@@ -8,6 +8,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Read-only mode (default on)
+
+- `WAZUH_MCP_READ_ONLY` (default `true`): server-wide read-only enforcement.
+  - HTTP-layer guard on the Manager and Indexer clients; only reads, JWT login,
+    `PUT /logtest` and indexer `_search`/`_count`-style POSTs are permitted.
+  - Write, notification and ticketing tools are not registered (`read_only.WRITE_TOOLS`).
+  - `upload_xml_file` and `_require_writes()` refuse in read-only mode.
+  - `GET /agents/{id}/key` is blocked (returns enrolment secrets).
+- `docs/READ_ONLY_MODE.md`, `tests/test_read_only.py`.
+
+### Changed
+
+- `compose.yaml` publishes port 8000 on `127.0.0.1` only.
+- `env.example` documents `WAZUH_MCP_READ_ONLY` and uses a read-only indexer user.
+- Test fixtures set `WAZUH_MCP_READ_ONLY=false` so legacy write-path tests still run.
+
+**Upgrade note:** write tools are now hidden by default. Set
+`WAZUH_MCP_READ_ONLY=false` to restore previous behaviour.
+
 ### Code-Review Response (2026-05-30)
 
 Addressed actionable findings from an external architecture/security review.

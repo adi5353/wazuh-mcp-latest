@@ -112,9 +112,18 @@ Infrastructure hardening and performance improvements. No breaking changes.
 
 ---
 
+## Read-Only Mode (default)
+
+The server starts **read-only** (`WAZUH_MCP_READ_ONLY=true`): non-read requests to the
+Wazuh Manager and Indexer are blocked at the HTTP layer, and all tools that write or
+send notifications are not registered. Pair it with a least-privilege Wazuh API user
+and indexer role. Details, allowed requests and a sample role:
+[docs/READ_ONLY_MODE.md](docs/READ_ONLY_MODE.md).
+
 ## Table of Contents
 
 - [What's New](#whats-new)
+- [Read-Only Mode](#read-only-mode-default)
 - [5-Minute Quickstart](#5-minute-quickstart)
 - [Wazuh Cloud Setup](#wazuh-cloud-setup)
 - [MSSP Multi-Tenant Setup](#mssp-multi-tenant-setup)
