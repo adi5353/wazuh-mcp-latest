@@ -21,6 +21,11 @@ RUN python -m compileall -q wazuh_mcp
 # ── Stage 2: runtime — only the venv + source, dropped to a non-root user ─────
 FROM python:3.14-slim AS runtime
 
+# Remove the base image's system pip/setuptools/wheel: the app runs from /opt/venv and
+# never needs them at runtime, and their vendored libs (urllib3, msgpack, ...) are a
+# recurring source of image-scan CVEs.
+RUN /usr/local/bin/python -m pip uninstall -y pip setuptools wheel 2>/dev/null || true
+
 # Non-root user
 RUN groupadd --gid 1001 wazuhmcp \
  && useradd --uid 1001 --gid 1001 --no-create-home --shell /sbin/nologin wazuhmcp
